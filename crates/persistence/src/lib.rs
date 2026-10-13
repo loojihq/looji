@@ -1,7 +1,9 @@
 //! SQLite storage: where the database lives, how it is opened, and how its schema evolves.
 
 mod migrations;
+mod repositories;
 mod schema;
+mod store;
 
 use std::{
     fs,
@@ -10,6 +12,7 @@ use std::{
 
 pub use migrations::{Migration, migrate};
 pub use rusqlite::Connection;
+pub use store::SqliteStore;
 use thiserror::Error;
 
 use migrations::migrate_with_hook;
@@ -74,15 +77,27 @@ pub fn open_database_with_migrations(path: &Path, migrations: &[Migration]) -> R
     }
 
     let mut connection = Connection::open(path).map_err(|source| Error::Open { source })?;
-
-    // Set outside any transaction, where SQLite would ignore or reject them.
-    connection.pragma_update(None, "foreign_keys", true)?;
-    connection.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-
+    configure(&connection)?;
     migrate_with_hook(&mut connection, migrations, |pending| {
         back_up_before_upgrade(path, pending)
     })?;
     Ok(connection)
+}
+
+/// An in-memory database with the app's schema. For tests; nothing is saved to disk.
+pub fn open_in_memory() -> Result<Connection> {
+    let mut connection = Connection::open_in_memory().map_err(|source| Error::Open { source })?;
+    configure(&connection)?;
+    migrate_with_hook(&mut connection, schema::MIGRATIONS, |_| Ok(()))?;
+    Ok(connection)
+}
+
+/// Connection settings. Set outside any transaction, where SQLite would ignore or reject them.
+fn configure(connection: &Connection) -> Result<()> {
+    // Foreign keys are off by default in SQLite. ON DELETE CASCADE does nothing without this.
+    connection.pragma_update(None, "foreign_keys", true)?;
+    connection.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+    Ok(())
 }
 
 /// Runs before pending migrations are applied, on first run and on upgrades alike.

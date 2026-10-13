@@ -14,6 +14,8 @@ impl Theme {
             text: rgb(0xdce0e5).into(),
             ghost_element_hover: rgb(0x363c46).into(),
             ghost_element_active: rgb(0x454a56).into(),
+            element_selected: rgb(0x454a56).into(),
+            error: rgb(0xd07277).into(),
         }
     }
 }

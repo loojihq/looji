@@ -6,6 +6,7 @@ mod one_dark;
 
 use gpui::{App, Global, Hsla};
 
+#[derive(Clone)]
 pub struct Theme {
     pub title_bar_background: Hsla,
     pub title_bar_inactive_background: Hsla,
@@ -15,6 +16,8 @@ pub struct Theme {
     pub text: Hsla,
     pub ghost_element_hover: Hsla,
     pub ghost_element_active: Hsla,
+    pub element_selected: Hsla,
+    pub error: Hsla,
 }
 
 impl Global for Theme {}

@@ -7,10 +7,10 @@ mod title_bar;
 mod workspace;
 
 use gpui::{App, Application};
-use looji_persistence as persistence;
+use looji_persistence::{self as persistence, SqliteStore};
 
 use database::AppDatabase;
-use workspace::Workspace;
+use workspace::{WorkspaceList, WorkspaceView};
 
 pub const APP_NAME: &str = "Looji";
 
@@ -21,8 +21,8 @@ fn main() {
     let database_path = persistence::database_path(&data_dir);
 
     // Opening creates the folder and an empty database on first run.
-    let connection = match persistence::open_database(&database_path) {
-        Ok(connection) => connection,
+    let store = match SqliteStore::open(&database_path) {
+        Ok(store) => store,
         Err(err) => fail(&format!(
             "looji could not open its database at {}.\n\n{err}\n\n\
              If another copy of looji is running, close it and try again.",
@@ -30,12 +30,18 @@ fn main() {
         )),
     };
 
+    // Loads before the window opens, so the first frame already shows the right workspace.
+    let workspaces = match WorkspaceList::load(&store) {
+        Ok(list) => list,
+        Err(err) => fail(&format!("looji could not load your workspaces.\n\n{err}")),
+    };
+
     Application::new().run(move |cx: &mut App| {
         theme::init(cx);
-        cx.set_global(AppDatabase(connection));
+        cx.set_global(AppDatabase(store));
         quit_when_last_window_closes(cx);
 
-        Workspace::open_window(cx).expect("failed to open main window");
+        WorkspaceView::open_window(cx, workspaces).expect("failed to open main window");
         cx.activate(true);
     });
 }

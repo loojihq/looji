@@ -10,6 +10,7 @@ looji-domain.workspace = true
 directories = "6"
 rusqlite = { version = "0.40", features = ["bundled"] }
 thiserror = "2"
+uuid = "1.28.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"
