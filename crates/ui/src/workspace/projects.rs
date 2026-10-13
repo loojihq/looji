@@ -270,6 +270,10 @@ pub(super) fn content(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("LOOJI_CARD_GALLERY").is_some() {
+        return super::card::gallery(theme).into_any_element();
+    }
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => board::render(project, &view.board, theme, cx).into_any_element(),

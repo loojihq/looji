@@ -6,6 +6,7 @@ use looji_domain::{Position, TaskRepository, Timestamp};
 use looji_domain::{Project, Status, StatusColumn, Task, status_columns};
 
 use super::WorkspaceView;
+use super::card::{CalendarDate, CardDensity, CardView, task_card};
 use crate::theme::Theme;
 
 const HEADER_HEIGHT: Pixels = px(36.);
@@ -20,6 +21,7 @@ pub(super) fn render(
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
     let columns = status_columns(tasks, &project.visible_statuses());
+    let today = CalendarDate::utc_today();
     #[cfg(not(debug_assertions))]
     let _ = cx;
     let root = div()
@@ -62,7 +64,7 @@ pub(super) fn render(
                     columns
                         .iter()
                         .enumerate()
-                        .map(|(index, column)| column_view(index, column, theme)),
+                        .map(|(index, column)| column_view(index, column, theme, today)),
                 ),
         );
     #[cfg(debug_assertions)]
@@ -70,7 +72,12 @@ pub(super) fn render(
     root
 }
 
-fn column_view(index: usize, column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
+fn column_view(
+    index: usize,
+    column: &StatusColumn<'_>,
+    theme: &Theme,
+    today: CalendarDate,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -82,7 +89,7 @@ fn column_view(index: usize, column: &StatusColumn<'_>, theme: &Theme) -> impl I
         .border_1()
         .border_color(theme.palette.border)
         .child(header(column, theme))
-        .child(body(index, column, theme))
+        .child(body(index, column, theme, today))
 }
 
 fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
@@ -107,7 +114,12 @@ fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
 }
 
 /// The scrollable card area. Only this part scrolls, so the header stays put.
-fn body(index: usize, column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
+fn body(
+    index: usize,
+    column: &StatusColumn<'_>,
+    theme: &Theme,
+    today: CalendarDate,
+) -> impl IntoElement {
     let body = div()
         .id(("column-body", index as u64))
         .flex()
@@ -121,7 +133,12 @@ fn body(index: usize, column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElem
     if column.tasks.is_empty() {
         body.child(drop_zone(index, theme))
     } else {
-        body.children(column.tasks.iter().map(|task| card(task, theme)))
+        body.children(
+            column
+                .tasks
+                .iter()
+                .map(|task| task_card(card_view(task), CardDensity::Compact, today, theme)),
+        )
     }
 }
 
@@ -143,18 +160,15 @@ fn drop_zone(index: usize, theme: &Theme) -> impl IntoElement {
         .child("No tasks")
 }
 
-/// A placeholder card. The task card component replaces this function and nothing else.
-fn card(task: &Task, theme: &Theme) -> impl IntoElement {
-    div()
-        .id(task.id().as_uuid())
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.sm)
-        .bg(theme.palette.surface)
-        .border_1()
-        .border_color(theme.palette.border)
-        .text_size(theme.typography.body)
-        .child(task.title().to_string())
+fn card_view(task: &Task) -> CardView<'_> {
+    CardView {
+        id: task.id(),
+        title: task.title(),
+        priority: None,
+        assignee: None,
+        estimate_minutes: task.estimate().map(|estimate| estimate.minutes()),
+        due: None,
+    }
 }
 
 fn status_label(status: Status) -> &'static str {

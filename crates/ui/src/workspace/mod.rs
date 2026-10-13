@@ -2,6 +2,7 @@
 
 mod avatar;
 mod board;
+mod card;
 mod columns;
 mod delete;
 mod preferences_panel;
