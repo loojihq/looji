@@ -23,6 +23,15 @@ pub enum Mode {
     Dark,
 }
 
+impl From<looji_domain::PreferredTheme> for Mode {
+    fn from(theme: looji_domain::PreferredTheme) -> Self {
+        match theme {
+            looji_domain::PreferredTheme::Light => Mode::Light,
+            looji_domain::PreferredTheme::Dark => Mode::Dark,
+        }
+    }
+}
+
 impl Mode {
     pub fn toggled(self) -> Self {
         match self {
@@ -107,8 +116,8 @@ impl Theme {
 
 impl Global for Theme {}
 
-pub fn init(cx: &mut App) {
-    cx.set_global(Theme::for_mode(Mode::Dark));
+pub fn init(cx: &mut App, mode: Mode) {
+    cx.set_global(Theme::for_mode(mode));
 }
 
 /// Switches mode and re-renders every window, so nothing keeps the old palette.
@@ -124,5 +133,14 @@ pub trait ActiveTheme {
 impl ActiveTheme for App {
     fn theme(&self) -> &Theme {
         self.global::<Theme>()
+    }
+}
+
+impl From<Mode> for looji_domain::PreferredTheme {
+    fn from(mode: Mode) -> Self {
+        match mode {
+            Mode::Light => looji_domain::PreferredTheme::Light,
+            Mode::Dark => looji_domain::PreferredTheme::Dark,
+        }
     }
 }

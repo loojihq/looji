@@ -103,6 +103,8 @@ fn configure(connection: &Connection) -> Result<()> {
     // Foreign keys are off by default in SQLite. ON DELETE CASCADE does nothing without this.
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+    // Wait for another connection's write instead of failing with SQLITE_BUSY.
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(())
 }
 

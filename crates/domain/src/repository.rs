@@ -17,6 +17,12 @@ use crate::{
 pub trait SettingsRepository {
     fn active_workspace(&self) -> RepoResult<Option<WorkspaceId>>;
     fn set_active_workspace(&self, id: WorkspaceId) -> RepoResult<()>;
+    /// The stored text for `key`, if any. Keys this version doesn't know are never asked for.
+    fn get_setting(&self, key: &str) -> RepoResult<Option<String>>;
+    /// Inserts or overwrites the row for `key`.
+    fn set_setting(&self, key: &str, value: &str) -> RepoResult<()>;
+    /// Deletes the row for `key`. Missing keys are not an error.
+    fn remove_setting(&self, key: &str) -> RepoResult<()>;
 }
 
 pub trait WorkspaceRepository {

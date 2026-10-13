@@ -7,6 +7,7 @@ mod board;
 mod error;
 mod ids;
 mod position;
+pub mod preferences;
 mod project;
 pub mod repository;
 mod status;
@@ -20,6 +21,9 @@ pub use board::{Column, ColumnRecord};
 pub use error::{DomainError, RepoError, RepoResult};
 pub use ids::{ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use position::Position;
+pub use preferences::{
+    DefaultView, Preference, Preferences, Theme as PreferredTheme, UpdateChannel,
+};
 pub use project::{
     MAX_DESCRIPTION_CHARS, Project, ProjectRecord, clean_description, validate_project_name,
 };

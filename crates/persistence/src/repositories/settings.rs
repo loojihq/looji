@@ -26,11 +26,32 @@ impl SettingsRepository for SqliteStore {
     }
 
     fn set_active_workspace(&self, id: WorkspaceId) -> RepoResult<()> {
+        self.set_setting(ACTIVE_WORKSPACE_KEY, &id.as_uuid().to_string())
+    }
+
+    fn get_setting(&self, key: &str) -> RepoResult<Option<String>> {
+        query_one(
+            &self.connection,
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| get::<String>(row, 0),
+        )
+    }
+
+    fn set_setting(&self, key: &str, value: &str) -> RepoResult<()> {
         execute(
             &self.connection,
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            params![ACTIVE_WORKSPACE_KEY, id.as_uuid().to_string()],
+            params![key, value],
+        )
+    }
+
+    fn remove_setting(&self, key: &str) -> RepoResult<()> {
+        execute(
+            &self.connection,
+            "DELETE FROM settings WHERE key = ?1",
+            params![key],
         )
     }
 }

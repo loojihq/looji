@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod database;
+mod settings;
 mod theme;
 mod title_bar;
 mod workspace;
@@ -37,8 +38,19 @@ fn main() {
         Err(err) => fail(&format!("looji could not load your workspaces.\n\n{err}")),
     };
 
+    // Preferences load before the window too, so the first frame uses the saved theme.
+    let preferences = match looji_domain::preferences::load(&store) {
+        Ok(preferences) => preferences,
+        Err(err) => fail(&format!(
+            "looji could not read your settings.
+
+{err}"
+        )),
+    };
+
     Application::new().run(move |cx: &mut App| {
-        theme::init(cx);
+        theme::init(cx, preferences.theme.into());
+        cx.set_global(settings::AppPreferences(preferences));
         cx.set_global(AppDatabase {
             store,
             database_path: database_path.clone(),

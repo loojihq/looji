@@ -2,6 +2,7 @@
 
 mod avatar;
 mod delete;
+mod preferences_panel;
 mod project_state;
 mod projects;
 mod sidebar;
@@ -232,7 +233,11 @@ impl WorkspaceView {
     /// Switches between light and dark mode. Every window re-renders with the new palette.
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
         let next = cx.theme().mode.toggled();
-        crate::theme::set_mode(next, cx);
+        // Save first, so the screen never shows a theme that wasn't stored.
+        match crate::settings::update(cx, looji_domain::Preference::Theme(next.into())) {
+            Ok(()) => crate::theme::set_mode(next, cx),
+            Err(err) => self.status = Some(format!("Could not save the theme: {err}")),
+        }
         cx.notify();
     }
 
