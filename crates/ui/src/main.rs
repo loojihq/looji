@@ -41,6 +41,7 @@ fn main() {
         theme::init(cx);
         cx.set_global(AppDatabase {
             store,
+            database_path: database_path.clone(),
             icons_dir: icons_dir.clone(),
         });
         quit_when_last_window_closes(cx);

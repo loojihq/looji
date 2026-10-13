@@ -3,9 +3,10 @@
 //! This is the single source of truth: the sidebar and the header both render
 //! from it. The view changes it only after the matching storage write succeeds.
 
-use looji_domain::{RepoResult, SettingsRepository, Workspace, WorkspaceId, WorkspaceRepository};
-
-const FIRST_WORKSPACE_NAME: &str = "Personal";
+use looji_domain::{
+    DEFAULT_WORKSPACE_NAME, RepoResult, SettingsRepository, Workspace, WorkspaceId,
+    WorkspaceRepository,
+};
 
 pub struct WorkspaceList {
     items: Vec<Workspace>,
@@ -23,7 +24,7 @@ impl WorkspaceList {
     {
         let mut items = store.list()?;
         if items.is_empty() {
-            let first = Workspace::new(FIRST_WORKSPACE_NAME).expect("the default name is valid");
+            let first = Workspace::new(DEFAULT_WORKSPACE_NAME).expect("the default name is valid");
             store.save(&first)?;
             items.push(first);
         }
@@ -68,6 +69,12 @@ impl WorkspaceList {
         {
             *slot = workspace;
         }
+    }
+
+    /// Replaces the list with the stored one after a delete. `active` must be in `items`.
+    pub(super) fn reload(&mut self, items: Vec<Workspace>, active: WorkspaceId) {
+        self.items = items;
+        self.active = active;
     }
 
     /// Only call with an id that is in the list. Storage is written by the caller first.
@@ -132,7 +139,7 @@ mod store_tests {
         let list = WorkspaceList::load(&store).unwrap();
 
         assert_eq!(list.items().len(), 1);
-        assert_eq!(list.active().name(), FIRST_WORKSPACE_NAME);
+        assert_eq!(list.active().name(), DEFAULT_WORKSPACE_NAME);
         assert_eq!(
             store.active_workspace().unwrap(),
             Some(list.active_workspace_id())
@@ -164,5 +171,52 @@ mod store_tests {
         let list = WorkspaceList::load(&store).unwrap();
 
         assert_eq!(list.active_workspace_id(), second.id());
+    }
+}
+
+/// The workspace to select when `id` is deleted: the one after it in sidebar order, or the
+/// one before it if it was last. `None` if it's the only workspace.
+pub fn neighbour_after(items: &[Workspace], id: WorkspaceId) -> Option<WorkspaceId> {
+    let index = items.iter().position(|workspace| workspace.id() == id)?;
+    items
+        .get(index + 1)
+        .or_else(|| {
+            index
+                .checked_sub(1)
+                .and_then(|previous| items.get(previous))
+        })
+        .map(Workspace::id)
+}
+
+#[cfg(test)]
+mod neighbour_tests {
+    use super::*;
+
+    fn workspace(name: &str) -> Workspace {
+        Workspace::new(name).unwrap()
+    }
+
+    #[test]
+    fn picks_the_workspace_after_the_deleted_one() {
+        let items = [workspace("A"), workspace("B"), workspace("C")];
+        assert_eq!(neighbour_after(&items, items[0].id()), Some(items[1].id()));
+    }
+
+    #[test]
+    fn picks_the_one_before_when_the_last_is_deleted() {
+        let items = [workspace("A"), workspace("B")];
+        assert_eq!(neighbour_after(&items, items[1].id()), Some(items[0].id()));
+    }
+
+    #[test]
+    fn there_is_no_neighbour_for_the_only_workspace() {
+        let items = [workspace("A")];
+        assert_eq!(neighbour_after(&items, items[0].id()), None);
+    }
+
+    #[test]
+    fn an_unknown_id_has_no_neighbour() {
+        let items = [workspace("A")];
+        assert_eq!(neighbour_after(&items, WorkspaceId::new()), None);
     }
 }

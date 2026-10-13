@@ -108,7 +108,8 @@ fn label_row(
                 .flex_row()
                 .flex_shrink_0()
                 .child(icon_button(id, theme, cx))
-                .child(rename_button(id, theme, cx)),
+                .child(rename_button(id, theme, cx))
+                .child(delete_button(id, theme, cx)),
         )
 }
 
@@ -148,6 +149,25 @@ fn rename_button(
             // Keep this click from also switching to the row.
             cx.stop_propagation();
             this.begin_rename(id, window, cx);
+        }))
+}
+
+fn delete_button(
+    id: WorkspaceId,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    div()
+        .id(("delete", id.as_uuid().as_u64_pair().0))
+        .px_1()
+        .text_xs()
+        .text_color(theme.text.opacity(0.6))
+        .hover(|style| style.text_color(theme.error))
+        .child("Delete")
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            // Keep this click from also switching to the row.
+            cx.stop_propagation();
+            this.begin_delete(id, window, cx);
         }))
 }
 

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::{execute, get, query_one};
 use crate::SqliteStore;
 
-const ACTIVE_WORKSPACE_KEY: &str = "active_workspace_id";
+pub(crate) const ACTIVE_WORKSPACE_KEY: &str = "active_workspace_id";
 
 impl SettingsRepository for SqliteStore {
     fn active_workspace(&self) -> RepoResult<Option<WorkspaceId>> {

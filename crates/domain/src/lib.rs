@@ -29,4 +29,6 @@ pub use status::Status;
 pub use task::{Estimate, Task, TaskRecord};
 pub use team::{TeamMember, TeamMemberRecord};
 pub use time::Timestamp;
-pub use workspace::{Workspace, WorkspaceRecord, next_untitled_name, validate_name};
+pub use workspace::{
+    DEFAULT_WORKSPACE_NAME, Workspace, WorkspaceRecord, next_untitled_name, validate_name,
+};

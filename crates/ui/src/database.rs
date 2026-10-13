@@ -7,6 +7,9 @@ use looji_persistence::SqliteStore;
 
 pub struct AppDatabase {
     pub store: SqliteStore,
+    /// The database file. Background work opens its own connection to it, since WAL mode
+    /// lets that run alongside the UI's connection.
+    pub database_path: PathBuf,
     /// Where workspace icon files live. Read by the views that render or replace icons.
     pub icons_dir: PathBuf,
 }

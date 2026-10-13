@@ -5,7 +5,7 @@
 
 mod column;
 mod project;
-mod settings;
+pub(crate) mod settings;
 mod task;
 mod team;
 mod workspace;

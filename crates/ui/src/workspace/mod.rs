@@ -1,8 +1,11 @@
 //! The main window: a title bar over a sidebar of workspaces and the main pane.
 
 mod avatar;
+mod delete;
 mod sidebar;
 mod state;
+
+use delete::PendingDelete;
 
 use gpui::{prelude::*, *};
 use looji_domain::{
@@ -39,6 +42,8 @@ pub struct WorkspaceView {
     rename: Option<Rename>,
     /// Failures that aren't tied to one row, such as a switch that couldn't be saved.
     status: Option<String>,
+    /// The delete confirmation, while it's open.
+    pending_delete: Option<PendingDelete>,
 }
 
 impl WorkspaceView {
@@ -49,6 +54,7 @@ impl WorkspaceView {
                 list,
                 rename: None,
                 status: None,
+                pending_delete: None,
             })
         })
     }
@@ -203,6 +209,13 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_delete.is_some() {
+            // Cancel is the default action, so Enter and Escape both close the dialog.
+            if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
+                self.cancel_delete(cx);
+            }
+            return;
+        }
         let Some(rename) = self.rename.as_mut() else {
             return;
         };
@@ -267,6 +280,10 @@ impl Render for WorkspaceView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let active_name = self.list.active().name().to_string();
+        let dialog = self
+            .pending_delete
+            .clone()
+            .map(|pending| delete::dialog(&pending, &theme, cx).into_any_element());
 
         div()
             .id("workspace")
@@ -287,6 +304,7 @@ impl Render for WorkspaceView {
                     .child(sidebar::render(self, cx))
                     .child(main_pane(&active_name, &theme)),
             )
+            .children(dialog)
     }
 }
 

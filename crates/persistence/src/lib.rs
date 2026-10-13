@@ -5,6 +5,11 @@ mod migrations;
 mod repositories;
 mod schema;
 mod store;
+mod workspace_delete;
+
+pub use workspace_delete::{
+    DeleteError, DeletedWorkspace, WorkspaceSummary, workspace_scoped_tables,
+};
 
 use std::{
     fs,

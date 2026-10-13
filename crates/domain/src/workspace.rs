@@ -1,5 +1,8 @@
 use crate::{error::DomainError, ids::WorkspaceId, time::Timestamp, validation::trimmed_text};
 
+/// The name of the workspace created when none exist.
+pub const DEFAULT_WORKSPACE_NAME: &str = "Personal";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     id: WorkspaceId,
