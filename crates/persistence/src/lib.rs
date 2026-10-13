@@ -18,6 +18,7 @@ use std::{
 };
 
 pub use migrations::{Migration, migrate};
+pub use repositories::task_move::MoveError;
 pub use rusqlite::Connection;
 pub use status_visibility::VisibilityError;
 pub use store::SqliteStore;

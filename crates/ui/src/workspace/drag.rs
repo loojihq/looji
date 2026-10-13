@@ -47,6 +47,8 @@ pub enum CancelReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DropResult {
     pub task: TaskId,
+    /// The column the card was in when the drag started.
+    pub from: Status,
     pub status: Status,
     pub index: usize,
 }
@@ -390,12 +392,13 @@ impl Drag {
             {
                 Exit::Unchanged
             }
-            (_, Some(landing)) => Exit::Dropped(DropResult {
+            (Some(source), Some(landing)) => Exit::Dropped(DropResult {
                 task: card,
+                from: source.status,
                 status: landing.status,
                 index: landing.index,
             }),
-            (_, None) => Exit::Cancelled(CancelReason::NoDropTarget),
+            _ => Exit::Cancelled(CancelReason::NoDropTarget),
         };
         self.clear();
         exit
@@ -786,6 +789,7 @@ mod tests {
             exit,
             Exit::Dropped(DropResult {
                 task: task(2),
+                from: Status::Todo,
                 status: Status::Todo,
                 index: 0
             })
@@ -816,6 +820,7 @@ mod tests {
             exit,
             Exit::Dropped(DropResult {
                 task: task(2),
+                from: Status::Todo,
                 status: Status::Todo,
                 index: 2
             })
@@ -864,6 +869,7 @@ mod tests {
             exit,
             Exit::Dropped(DropResult {
                 task: task(2),
+                from: Status::Todo,
                 status: Status::Todo,
                 index: 2
             })
@@ -891,6 +897,7 @@ mod tests {
             exit,
             Exit::Dropped(DropResult {
                 task: task(2),
+                from: Status::Todo,
                 status: Status::Done,
                 index: 0
             })
@@ -947,6 +954,7 @@ mod tests {
             exit,
             Exit::Dropped(DropResult {
                 task: task(2),
+                from: Status::Todo,
                 status: Status::Todo,
                 index: 0
             })

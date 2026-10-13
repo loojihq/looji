@@ -9,6 +9,7 @@ mod drag;
 mod dragging;
 mod landing;
 mod layout;
+mod moves;
 mod preferences_panel;
 mod project_state;
 mod projects;

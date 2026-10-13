@@ -35,6 +35,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "in_review_column",
         sql: include_str!("sql/0006_in_review_column.sql"),
     },
+    Migration {
+        version: 7,
+        name: "task_activity",
+        sql: include_str!("sql/0007_task_activity.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -108,5 +113,38 @@ mod tests {
             [],
         );
         assert!(inserted.is_ok(), "{inserted:?}");
+    }
+
+    #[test]
+    fn tasks_from_before_the_history_keep_their_status_and_start_with_no_history() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..6]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'in_progress', 'a0', NULL, NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let status: String = connection
+            .query_row("SELECT status FROM tasks WHERE id = 't'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, "in_progress");
+        let history: i64 = connection
+            .query_row("SELECT COUNT(*) FROM task_activity", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(history, 0);
     }
 }

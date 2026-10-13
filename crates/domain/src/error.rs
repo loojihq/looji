@@ -23,6 +23,10 @@ pub enum DomainError {
     UnknownStatus(String),
     #[error("'{0}' is not a valid id")]
     InvalidId(String),
+    #[error("the '{status}' column isn't shown on this project")]
+    StatusNotVisible { status: String },
+    #[error("the task is already in that column")]
+    SameStatus,
     #[error("a workspace named '{name}' already exists")]
     DuplicateName { name: String },
     #[error("a project named '{name}' already exists in this workspace")]
