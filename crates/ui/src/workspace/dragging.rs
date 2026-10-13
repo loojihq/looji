@@ -13,14 +13,17 @@ use gpui::{prelude::*, *};
 use looji_domain::{Status, TaskId};
 
 use super::WorkspaceView;
+use super::autoscroll::{EDGE_ZONE, Ramp, advance, edge_velocity};
 use super::board::card_view;
 use super::card::{CalendarDate, CardDensity, task_card};
 use super::drag::{CancelReason, Command, Drag, Exit, Input};
 use super::layout::{BoardLayout, CardSlot, ColumnSlot, Point as DragPoint, Rect};
 use crate::theme::Theme;
 
+/// How often the scroll loop runs while a column is being scrolled.
+const SCROLL_TICK: Duration = Duration::from_millis(16);
+
 /// The drag state owned by the workspace view.
-#[derive(Default)]
 pub(super) struct DragSession {
     session: Drag,
     /// The long-press timer. Dropping it cancels the timer.
@@ -31,14 +34,57 @@ pub(super) struct DragSession {
     overlay_width: Option<Pixels>,
     /// Filled by the board's paint. Shared with the paint callbacks.
     pub(super) layout: Rc<RefCell<BoardLayout>>,
+    /// One scroll handle per status column, kept across renders so each column keeps its place.
+    scrolls: Vec<(Status, ScrollHandle)>,
+    /// Where the pointer is, for the scroll loop to re-check the landing against.
+    pointer: Option<DragPoint>,
+    /// The column the pointer is over, which is the only one that scrolls.
+    scroll_owner: Option<Status>,
+    /// How far the scroll speed has ramped in or out.
+    ramp: Ramp,
+    /// The scroll loop. Dropping it cancels the loop.
+    scroll_task: Option<Task<()>>,
+    /// Whether a scroll loop is running, so only one runs at a time.
+    scrolling: bool,
     #[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
     last_exit: Option<Exit>,
+}
+
+impl Default for DragSession {
+    fn default() -> Self {
+        Self {
+            session: Drag::default(),
+            timer: None,
+            activation: None,
+            overlay_width: None,
+            layout: Rc::default(),
+            scrolls: Status::ALL
+                .into_iter()
+                .map(|status| (status, ScrollHandle::new()))
+                .collect(),
+            pointer: None,
+            scroll_owner: None,
+            ramp: Ramp::default(),
+            scroll_task: None,
+            scrolling: false,
+            last_exit: None,
+        }
+    }
 }
 
 impl DragSession {
     /// The drag as it stands: the source, and the landing the placeholder shows.
     pub(super) fn session(&self) -> &Drag {
         &self.session
+    }
+
+    /// The scroll handle of a status column. The column's body tracks it.
+    pub(super) fn scroll_handle(&self, status: Status) -> ScrollHandle {
+        self.scrolls
+            .iter()
+            .find(|(column, _)| *column == status)
+            .map(|(_, handle)| handle.clone())
+            .expect("every status has a scroll handle")
     }
 
     /// The card being dragged, once it has lifted. The board dims its slot.
@@ -96,27 +142,37 @@ pub(super) fn record_columns(
     }
 }
 
-/// The painted cards of one column. `slots` are the column's items in the order they were
-/// rendered, so `bounds` pairs with them one to one. The placeholder isn't a card, so it's skipped.
-pub(super) fn record_cards(
-    layout: &Rc<RefCell<BoardLayout>>,
-    status: Status,
-    slots: Vec<Option<TaskId>>,
-) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static {
-    let layout = layout.clone();
-    move |bounds, _, _| {
-        let cards = slots
-            .iter()
-            .zip(bounds)
-            .filter_map(|(task, bounds)| {
-                task.map(|task| CardSlot {
-                    task,
-                    status,
-                    bounds: rect(bounds),
+/// Works out where every card is, from each column's scroll state, and records them. The
+/// paint doesn't report card bounds while a column is scroll-tracked, so the positions come from
+/// the scroll handle: where the item was laid out, moved by the column's current offset.
+fn refresh_cards(layout: &mut BoardLayout, handle: impl Fn(Status) -> ScrollHandle) {
+    let updates: Vec<(Status, Vec<CardSlot>)> = layout
+        .items
+        .iter()
+        .map(|(status, items)| {
+            let handle = handle(*status);
+            let offset = handle.offset();
+            let cards = items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    let task = (*item)?;
+                    let bounds = handle.bounds_for_item(index)?;
+                    Some(CardSlot {
+                        task,
+                        status: *status,
+                        bounds: rect(Bounds {
+                            origin: bounds.origin + offset,
+                            size: bounds.size,
+                        }),
+                    })
                 })
-            })
-            .collect();
-        layout.borrow_mut().set_cards(status, cards);
+                .collect();
+            (*status, cards)
+        })
+        .collect();
+    for (status, cards) in updates {
+        layout.set_cards(status, cards);
     }
 }
 
@@ -193,6 +249,7 @@ impl WorkspaceView {
         if event.button != MouseButton::Left {
             return;
         }
+        self.refresh_layout();
         let origin = match self.drag.layout.borrow().card(task) {
             Some(slot) => slot.bounds.origin,
             None => return,
@@ -228,6 +285,106 @@ impl WorkspaceView {
             return self.drive_drag(Input::Cancel(CancelReason::PointerLeftWindow), cx);
         }
         self.drive_drag(Input::Move { pointer, at: now() }, cx);
+        self.follow_scroll(pointer, cx);
+    }
+
+    /// Records where the pointer is and which column owns the scroll. Moving to another column
+    /// stops scrolling the old one at once, and the new column's speed ramps in from zero.
+    fn follow_scroll(&mut self, pointer: DragPoint, cx: &mut Context<Self>) {
+        self.drag.pointer = Some(pointer);
+        let owner = self
+            .drag
+            .layout
+            .borrow()
+            .column_at(pointer)
+            .map(|column| column.status);
+        if owner != self.drag.scroll_owner {
+            self.drag.scroll_owner = owner;
+            self.drag.ramp.reset();
+        }
+        if owner.is_some() && !self.drag.scrolling {
+            self.start_autoscroll(cx);
+        }
+    }
+
+    /// Starts the scroll loop. It runs until the pointer is out of every zone and the speed has
+    /// ramped back down, or until the drag ends.
+    fn start_autoscroll(&mut self, cx: &mut Context<Self>) {
+        self.drag.scrolling = true;
+        self.drag.scroll_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(SCROLL_TICK).await;
+                let keep_going = this
+                    .update(cx, |view, cx| view.autoscroll_tick(cx))
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// One step of the scroll loop. Returns whether the loop should keep running.
+    fn autoscroll_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pointer) = self.drag.pointer else {
+            self.drag.scrolling = false;
+            return false;
+        };
+        if self.drag.session.lifted_at().is_none() {
+            self.drag.scrolling = false;
+            return false;
+        }
+        let owner = self.drag.scroll_owner;
+        let velocity = owner.map_or(0.0, |status| self.edge_velocity_for(status, pointer));
+        let inside = velocity != 0.0;
+        let factor = self.drag.ramp.step(inside, SCROLL_TICK.as_secs_f32());
+        if !inside && factor == 0.0 {
+            self.drag.scrolling = false;
+            return false;
+        }
+        if let Some(status) = owner {
+            let seconds = SCROLL_TICK.as_secs_f32();
+            self.scroll_column(status, velocity * factor * seconds, cx);
+        }
+        true
+    }
+
+    /// The scroll speed for `pointer` over a column's body. Zero if the column doesn't overflow,
+    /// so it has nothing to scroll.
+    fn edge_velocity_for(&self, status: Status, pointer: DragPoint) -> f32 {
+        let handle = self.drag.scroll_handle(status);
+        if f32::from(handle.max_offset().height) <= 0.0 {
+            return 0.0;
+        }
+        let body = handle.bounds();
+        edge_velocity(
+            pointer.y,
+            f32::from(body.origin.y),
+            f32::from(body.origin.y + body.size.height),
+            EDGE_ZONE,
+        )
+    }
+
+    /// Scrolls a column by `delta` pixels, clamped at both ends. The painted cards move with it at
+    /// once, and the landing is worked out again from the moved positions.
+    fn scroll_column(&mut self, status: Status, delta: f32, cx: &mut Context<Self>) {
+        let handle = self.drag.scroll_handle(status);
+        let max = f32::from(handle.max_offset().height);
+        let scroll = -f32::from(handle.offset().y);
+        let next = advance(scroll, max, delta);
+        let applied = next - scroll;
+        if applied == 0.0 {
+            return;
+        }
+        let offset = handle.offset();
+        handle.set_offset(Point {
+            x: offset.x,
+            y: px(-next),
+        });
+        if let Some(pointer) = self.drag.pointer {
+            self.drive_drag(Input::Move { pointer, at: now() }, cx);
+        }
+        cx.notify();
     }
 
     fn pointer_released(&mut self, event: &MouseUpEvent, window: &Window, cx: &mut Context<Self>) {
@@ -253,8 +410,15 @@ impl WorkspaceView {
         true
     }
 
+    /// Re-reads the cards from their columns' scroll state, so the drag sees what is on screen.
+    fn refresh_layout(&self) {
+        let mut layout = self.drag.layout.borrow_mut();
+        refresh_cards(&mut layout, |status| self.drag.scroll_handle(status));
+    }
+
     /// Feeds one input to the drag and carries out what it asks for.
     fn drive_drag(&mut self, input: Input, cx: &mut Context<Self>) {
+        self.refresh_layout();
         let layout = self.drag.layout.clone();
         let commands = self.drag.session.feed(input, &layout.borrow());
         for command in commands {
@@ -294,6 +458,11 @@ impl WorkspaceView {
         self.drag.timer = None;
         self.drag.activation = None;
         self.drag.overlay_width = None;
+        self.drag.scroll_task = None;
+        self.drag.scrolling = false;
+        self.drag.scroll_owner = None;
+        self.drag.pointer = None;
+        self.drag.ramp.reset();
         self.drag.last_exit = Some(exit);
         // Placed at a new index, in this column or another. A drop where the card already is
         // never reaches here: it ends as `Exit::Unchanged`.

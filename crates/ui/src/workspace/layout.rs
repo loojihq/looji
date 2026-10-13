@@ -47,7 +47,7 @@ pub struct ColumnSlot {
     pub bounds: Rect,
 }
 
-/// A card on the board, in the order it appears in its column.
+/// A  on the board, in the order it appears in its column.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardSlot {
     pub task: TaskId,
@@ -55,11 +55,15 @@ pub struct CardSlot {
     pub bounds: Rect,
 }
 
-/// What the last paint measured. Written by the board's paint callbacks, read by the drag.
+/// What the last paint measured, read by the drag. Columns come from the paint. Cards are
+/// worked out from each column's scroll state, so they stay right while a column scrolls.
 #[derive(Debug, Default)]
 pub struct BoardLayout {
     pub columns: Vec<ColumnSlot>,
     pub cards: Vec<CardSlot>,
+    /// The items of each column in display order, as the last render built them. `None` is the
+    /// placeholder, which isn't a card.
+    pub items: Vec<(Status, Vec<Option<TaskId>>)>,
 }
 
 impl BoardLayout {
@@ -78,7 +82,14 @@ impl BoardLayout {
         self.columns = columns;
     }
 
-    /// Replaces the cards of one column. Other columns keep their cards from the same paint.
+    /// Records a column's items for the next paint. Called from render, before the paint that
+    /// lays them out.
+    pub fn set_items(&mut self, status: Status, items: Vec<Option<TaskId>>) {
+        self.items.retain(|(column, _)| *column != status);
+        self.items.push((status, items));
+    }
+
+    /// Replaces the cards of one column.
     pub fn set_cards(&mut self, status: Status, cards: Vec<CardSlot>) {
         self.cards.retain(|card| card.status != status);
         self.cards.extend(cards);

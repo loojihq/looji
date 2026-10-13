@@ -731,6 +731,7 @@ mod tests {
         BoardLayout {
             columns: vec![column(Status::Todo, 0.0), column(Status::Done, 120.0)],
             cards: cards.iter().map(|&(n, y)| card(n, y)).collect(),
+            ..Default::default()
         }
     }
 

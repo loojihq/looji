@@ -11,7 +11,7 @@ use super::WorkspaceView;
 use super::card::{CalendarDate, CardDensity, CardView, task_card};
 #[cfg(debug_assertions)]
 use super::drag::Exit;
-use super::dragging::{DragSession, record_cards, record_columns};
+use super::dragging::{DragSession, record_columns};
 use super::landing::{Slot, column_sequence, stack_tops};
 use crate::theme::Theme;
 
@@ -237,10 +237,11 @@ fn body(
             Slot::Placeholder => None,
         })
         .collect();
+    drag.layout.borrow_mut().set_items(status, slots);
     content
-        .on_children_prepainted(record_cards(&drag.layout, status, slots))
         .id(("column-body", index as u64))
         .overflow_y_scroll()
+        .track_scroll(&drag.scroll_handle(status))
 }
 
 /// Glides an item the given distance from its place to its place now, so siblings slide to make

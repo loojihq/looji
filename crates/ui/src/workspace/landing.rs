@@ -249,6 +249,7 @@ mod tests {
                 },
             ],
             cards: three_cards(),
+            ..Default::default()
         };
 
         let todo = landing_at(&layout, task(DRAGGED), Point { x: 50.0, y: 200.0 }, None);
@@ -287,6 +288,7 @@ mod tests {
                 },
             }],
             cards: three_cards(),
+            ..Default::default()
         };
         let previous = Some(Landing {
             status: Status::Done,

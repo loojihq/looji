@@ -1,5 +1,6 @@
 //! The main window: a title bar over a sidebar of workspaces and projects, and the main pane.
 
+mod autoscroll;
 mod avatar;
 mod board;
 mod card;
