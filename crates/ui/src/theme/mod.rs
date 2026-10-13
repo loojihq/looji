@@ -1,32 +1,120 @@
-//! Application-wide colors, stored as a gpui global and read via [`ActiveTheme`].
+//! Design tokens: colour, type, spacing, radius, and elevation, in one place.
 //!
-//! To add a theme, create a file next to `one_dark.rs` with its own constructor.
+//! Components read `cx.theme()` and use the named roles. They don't spell out colours or sizes.
+//! `tokens.rs` holds the raw values, `palette.rs` maps them to roles, and `contrast.rs` and
+//! `guard.rs` are tests that check the contrast of every role pair and that no component
+//! hard-codes a colour.
 
-mod one_dark;
+mod palette;
+mod tokens;
 
-use gpui::{App, Global, Hsla};
+#[cfg(test)]
+mod contrast;
+#[cfg(test)]
+mod guard;
 
-#[derive(Clone)]
+pub use palette::{AvatarColors, Palette};
+
+use gpui::{App, BoxShadow, Global, Pixels, point, px};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Light,
+    Dark,
+}
+
+impl Mode {
+    pub fn toggled(self) -> Self {
+        match self {
+            Mode::Light => Mode::Dark,
+            Mode::Dark => Mode::Light,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Typography {
+    pub caption: Pixels,
+    pub body: Pixels,
+    pub title: Pixels,
+    pub heading: Pixels,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Spacing {
+    pub xs: Pixels,
+    pub sm: Pixels,
+    pub md: Pixels,
+    pub lg: Pixels,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Radius {
+    pub sm: Pixels,
+    pub md: Pixels,
+    pub lg: Pixels,
+}
+
+/// Surfaces step up in colour before shadows are used. Only dialogs cast a shadow.
+#[derive(Debug, Clone)]
+pub struct Elevation {
+    pub overlay: Vec<BoxShadow>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Theme {
-    pub title_bar_background: Hsla,
-    pub title_bar_inactive_background: Hsla,
-    pub editor_background: Hsla,
-    pub panel_background: Hsla,
-    pub border: Hsla,
-    pub text: Hsla,
-    pub ghost_element_hover: Hsla,
-    pub ghost_element_active: Hsla,
-    pub element_selected: Hsla,
-    pub error: Hsla,
-    /// Backgrounds for initial-letter avatars, picked per workspace.
-    /// TEMPORARY: replace with the design-system tokens once they exist.
-    pub avatar_colors: [Hsla; 6],
+    pub mode: Mode,
+    pub palette: Palette,
+    pub typography: Typography,
+    pub spacing: Spacing,
+    pub radius: Radius,
+    pub elevation: Elevation,
+}
+
+impl Theme {
+    pub fn for_mode(mode: Mode) -> Self {
+        Self {
+            mode,
+            palette: Palette::for_mode(mode),
+            typography: Typography {
+                caption: px(tokens::typography::CAPTION),
+                body: px(tokens::typography::BODY),
+                title: px(tokens::typography::TITLE),
+                heading: px(tokens::typography::HEADING),
+            },
+            spacing: Spacing {
+                xs: px(tokens::spacing::XS),
+                sm: px(tokens::spacing::SM),
+                md: px(tokens::spacing::MD),
+                lg: px(tokens::spacing::LG),
+            },
+            radius: Radius {
+                sm: px(tokens::radius::SM),
+                md: px(tokens::radius::MD),
+                lg: px(tokens::radius::LG),
+            },
+            elevation: Elevation {
+                overlay: vec![BoxShadow {
+                    color: Palette::for_mode(mode).shadow,
+                    offset: point(px(0.), px(tokens::shadow::OFFSET_Y)),
+                    blur_radius: px(tokens::shadow::BLUR),
+                    spread_radius: px(0.),
+                }],
+            },
+        }
+    }
 }
 
 impl Global for Theme {}
 
 pub fn init(cx: &mut App) {
-    cx.set_global(Theme::one_dark());
+    cx.set_global(Theme::for_mode(Mode::Dark));
+}
+
+/// Switches mode and re-renders every window, so nothing keeps the old palette.
+pub fn set_mode(mode: Mode, cx: &mut App) {
+    cx.set_global(Theme::for_mode(mode));
+    cx.refresh_windows();
 }
 
 pub trait ActiveTheme {

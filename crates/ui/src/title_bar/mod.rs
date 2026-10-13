@@ -28,9 +28,9 @@ impl RenderOnce for TitleBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let background = if window.is_window_active() {
-            theme.title_bar_background
+            theme.palette.title_bar
         } else {
-            theme.title_bar_inactive_background
+            theme.palette.title_bar_inactive
         };
 
         div()

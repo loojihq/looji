@@ -155,7 +155,7 @@ pub(super) fn dialog(
         .flex()
         .items_center()
         .justify_center()
-        .bg(gpui::black().opacity(0.5))
+        .bg(theme.palette.scrim)
         .occlude()
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_delete(cx)))
         .child(
@@ -163,21 +163,22 @@ pub(super) fn dialog(
                 .id("delete-panel")
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap(theme.spacing.md)
                 .w(px(380.))
-                .p_4()
-                .rounded_lg()
-                .bg(theme.panel_background)
+                .p(theme.spacing.lg)
+                .rounded(theme.radius.lg)
+                .bg(theme.palette.surface_raised)
+                .shadow(theme.elevation.overlay.clone())
                 .border_1()
-                .border_color(theme.border)
+                .border_color(theme.palette.border)
                 // Clicks on the panel must not reach the backdrop and close the dialog.
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     div()
-                        .text_lg()
+                        .text_size(theme.typography.title)
                         .child(format!("Delete \"{}\"?", pending.name)),
                 )
-                .child(div().text_sm().child(format!(
+                .child(div().text_size(theme.typography.body).child(format!(
                     "This permanently removes {counts} in this workspace, along with its icon. \
                      This can't be undone."
                 )))
@@ -186,7 +187,7 @@ pub(super) fn dialog(
                         .flex()
                         .flex_row()
                         .justify_end()
-                        .gap_2()
+                        .gap(theme.spacing.sm)
                         .child(cancel_button(theme, cx))
                         .child(confirm_button(confirm_label, pending.deleting, theme, cx)),
                 ),
@@ -196,13 +197,13 @@ pub(super) fn dialog(
 fn cancel_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     div()
         .id("delete-cancel")
-        .px_3()
-        .py_1()
-        .rounded_md()
+        .px(theme.spacing.md)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
         .cursor_pointer()
         .border_1()
-        .border_color(theme.border)
-        .hover(|style| style.bg(theme.ghost_element_hover))
+        .border_color(theme.palette.border_control)
+        .hover(|style| style.bg(theme.palette.surface_hover))
         .child("Cancel")
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_delete(cx)))
 }
@@ -215,18 +216,20 @@ fn confirm_button(
 ) -> impl IntoElement {
     let button = div()
         .id("delete-confirm")
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .text_color(gpui::white())
-        .bg(theme.error)
+        .px(theme.spacing.md)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
         .child(label);
     if disabled {
-        button.opacity(0.6)
+        // Neutral while the delete runs, so the destructive colour isn't shown on a disabled control.
+        button
+            .bg(theme.palette.surface_selected)
+            .text_color(theme.palette.text_disabled)
     } else {
         button
+            .bg(theme.palette.danger)
+            .text_color(theme.palette.on_danger)
             .cursor_pointer()
-            .hover(|style| style.opacity(0.85))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.confirm_delete(cx)))
     }
 }

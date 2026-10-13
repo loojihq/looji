@@ -8,7 +8,7 @@ use looji_domain::{Workspace, WorkspaceId};
 use super::{Rename, WorkspaceView, avatar, projects};
 use crate::{
     database::AppDatabase,
-    theme::{ActiveTheme, Theme},
+    theme::{ActiveTheme, Mode, Theme},
 };
 
 const SIDEBAR_WIDTH: Pixels = px(240.);
@@ -35,23 +35,24 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .gap_1()
+        .gap(theme.spacing.xs)
         .w(SIDEBAR_WIDTH)
         .h_full()
-        .p_2()
-        .bg(theme.panel_background)
+        .p(theme.spacing.sm)
+        .bg(theme.palette.surface_raised)
         .border_r_1()
-        .border_color(theme.border)
-        .text_sm()
+        .border_color(theme.palette.border)
+        .text_size(theme.typography.body)
         .children(rows)
         .child(new_workspace_button(&theme, cx))
         .child(projects::sidebar_section(view, &theme, cx))
+        .child(theme_toggle(&theme, cx))
         .when_some(view.status.as_ref(), |sidebar, message| {
             sidebar.child(
                 div()
-                    .px_2()
-                    .text_xs()
-                    .text_color(theme.error)
+                    .px(theme.spacing.sm)
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.danger)
                     .child(message.clone()),
             )
         })
@@ -71,14 +72,14 @@ fn label_row(
         .flex_row()
         .items_center()
         .justify_between()
-        .gap_2()
-        .px_2()
-        .py_1()
-        .rounded_md()
+        .gap(theme.spacing.sm)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
         .cursor_pointer()
-        .when(is_active, |row| row.bg(theme.element_selected))
+        .when(is_active, |row| row.bg(theme.palette.surface_selected))
         .when(!is_active, |row| {
-            row.hover(|style| style.bg(theme.ghost_element_hover))
+            row.hover(|style| style.bg(theme.palette.surface_hover))
         })
         // One click switches; double-click starts renaming.
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -93,7 +94,7 @@ fn label_row(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_2()
+                .gap(theme.spacing.sm)
                 .min_w_0()
                 .child(avatar::render(workspace, icons_dir, theme))
                 .child(
@@ -121,10 +122,10 @@ fn icon_button(
 ) -> impl IntoElement {
     div()
         .id(("icon", id.as_uuid().as_u64_pair().0))
-        .px_1()
-        .text_xs()
-        .text_color(theme.text.opacity(0.6))
-        .hover(|style| style.text_color(theme.text))
+        .px(theme.spacing.xs)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .hover(|style| style.text_color(theme.palette.text_primary))
         .child("Icon")
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             // Keep this click from also switching to the row.
@@ -141,10 +142,10 @@ fn rename_button(
     div()
         .id(("rename", id.as_uuid().as_u64_pair().0))
         .flex_shrink_0()
-        .px_1()
-        .text_xs()
-        .text_color(theme.text.opacity(0.6))
-        .hover(|style| style.text_color(theme.text))
+        .px(theme.spacing.xs)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .hover(|style| style.text_color(theme.palette.text_primary))
         .child("Rename")
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             // Keep this click from also switching to the row.
@@ -160,10 +161,10 @@ fn delete_button(
 ) -> impl IntoElement {
     div()
         .id(("delete", id.as_uuid().as_u64_pair().0))
-        .px_1()
-        .text_xs()
-        .text_color(theme.text.opacity(0.6))
-        .hover(|style| style.text_color(theme.error))
+        .px(theme.spacing.xs)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .hover(|style| style.text_color(theme.palette.danger))
         .child("Delete")
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             // Keep this click from also switching to the row.
@@ -177,23 +178,23 @@ fn editing_row(rename: &Rename, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .gap_1()
+        .gap(theme.spacing.xs)
         .child(
             div()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .bg(theme.element_selected)
+                .px(theme.spacing.sm)
+                .py(theme.spacing.xs)
+                .rounded(theme.radius.md)
+                .bg(theme.palette.surface_selected)
                 .border_1()
-                .border_color(theme.border)
+                .border_color(theme.palette.border)
                 .child(format!("{}|", rename.draft)),
         )
         .when_some(rename.error.as_ref(), |row, message| {
             row.child(
                 div()
-                    .px_2()
-                    .text_xs()
-                    .text_color(theme.error)
+                    .px(theme.spacing.sm)
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.danger)
                     .child(message.clone()),
             )
         })
@@ -202,14 +203,33 @@ fn editing_row(rename: &Rename, theme: &Theme) -> impl IntoElement {
 fn new_workspace_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     div()
         .id("new-workspace")
-        .mt_2()
-        .px_2()
-        .py_1()
-        .rounded_md()
+        .mt(theme.spacing.sm)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
         .cursor_pointer()
-        .hover(|style| style.bg(theme.ghost_element_hover))
+        .hover(|style| style.bg(theme.palette.surface_hover))
         .child("+ New workspace")
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.create_workspace(window, cx);
         }))
+}
+
+/// Switches between light and dark mode. The label names the mode the click switches to.
+fn theme_toggle(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+    let target = match theme.mode {
+        Mode::Dark => "Switch to light",
+        Mode::Light => "Switch to dark",
+    };
+    div()
+        .id("theme-toggle")
+        .mt(theme.spacing.sm)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .cursor_pointer()
+        .text_color(theme.palette.text_secondary)
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        .child(target)
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_theme(cx)))
 }

@@ -7,7 +7,7 @@ use looji_domain::{Workspace, WorkspaceId};
 use looji_persistence::icons::icon_path;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::theme::Theme;
+use crate::theme::{AvatarColors, Theme};
 
 pub const AVATAR_SIZE: Pixels = px(28.);
 
@@ -25,7 +25,7 @@ pub fn render(workspace: &Workspace, icons_dir: &Path, theme: &Theme) -> impl In
             let (id, name, colors) = (
                 workspace.id(),
                 workspace.name().to_string(),
-                theme.avatar_colors,
+                theme.palette.avatars,
             );
             img(path)
                 .size(AVATAR_SIZE)
@@ -39,11 +39,11 @@ pub fn render(workspace: &Workspace, icons_dir: &Path, theme: &Theme) -> impl In
 }
 
 fn initial_avatar(id: WorkspaceId, name: &str, theme: &Theme) -> AnyElement {
-    avatar_with(id, name, &theme.avatar_colors)
+    avatar_with(id, name, &theme.palette.avatars)
 }
 
-fn avatar_with(id: WorkspaceId, name: &str, colors: &[Hsla; 6]) -> AnyElement {
-    let color = colors[palette_index(id, colors.len())];
+fn avatar_with(id: WorkspaceId, name: &str, colors: &[AvatarColors; 6]) -> AnyElement {
+    let pair = colors[palette_index(id, colors.len())];
     div()
         .flex()
         .flex_shrink_0()
@@ -51,8 +51,8 @@ fn avatar_with(id: WorkspaceId, name: &str, colors: &[Hsla; 6]) -> AnyElement {
         .justify_center()
         .size(AVATAR_SIZE)
         .rounded_full()
-        .bg(color)
-        .text_color(gpui::white())
+        .bg(pair.background)
+        .text_color(pair.text)
         .text_sm()
         .child(initial(name))
         .into_any_element()

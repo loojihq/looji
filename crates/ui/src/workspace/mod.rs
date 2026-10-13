@@ -229,6 +229,13 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Switches between light and dark mode. Every window re-renders with the new palette.
+    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        let next = cx.theme().mode.toggled();
+        crate::theme::set_mode(next, cx);
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.project_dialog.is_some() {
             return self.project_dialog_key(event, cx);
@@ -324,8 +331,8 @@ impl Render for WorkspaceView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.editor_background)
-            .text_color(theme.text)
+            .bg(theme.palette.surface)
+            .text_color(theme.palette.text_primary)
             .child(TitleBar::new(APP_NAME))
             .child(
                 div()
@@ -353,10 +360,10 @@ fn main_pane(header: String, body: AnyElement, theme: &Theme) -> impl IntoElemen
                 .flex()
                 .items_center()
                 .h(px(40.))
-                .px_4()
+                .px(theme.spacing.lg)
                 .border_b_1()
-                .border_color(theme.border)
-                .text_lg()
+                .border_color(theme.palette.border)
+                .text_size(theme.typography.title)
                 .child(header),
         )
         .child(body)

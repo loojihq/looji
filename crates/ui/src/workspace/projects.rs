@@ -208,33 +208,33 @@ pub(super) fn sidebar_section(
     div()
         .flex()
         .flex_col()
-        .gap_1()
-        .mt_3()
+        .gap(theme.spacing.xs)
+        .mt(theme.spacing.md)
         .child(
             div()
-                .px_2()
-                .text_xs()
-                .text_color(theme.text.opacity(0.6))
+                .px(theme.spacing.sm)
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
                 .child("PROJECTS"),
         )
         .children(rows)
         .when(is_empty, |section| {
             section.child(
                 div()
-                    .px_2()
-                    .text_xs()
-                    .text_color(theme.text.opacity(0.6))
+                    .px(theme.spacing.sm)
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.text_secondary)
                     .child("No projects yet"),
             )
         })
         .child(
             div()
                 .id("new-project")
-                .px_2()
-                .py_1()
-                .rounded_md()
+                .px(theme.spacing.sm)
+                .py(theme.spacing.xs)
+                .rounded(theme.radius.md)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.ghost_element_hover))
+                .hover(|style| style.bg(theme.palette.surface_hover))
                 .child("+ New project")
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.open_project_dialog(window, cx);
@@ -251,14 +251,14 @@ fn project_row(
     let id = project.id();
     div()
         .id(id.as_uuid())
-        .px_2()
-        .py_1()
-        .rounded_md()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
         .cursor_pointer()
         .truncate()
-        .when(is_active, |row| row.bg(theme.element_selected))
+        .when(is_active, |row| row.bg(theme.palette.surface_selected))
         .when(!is_active, |row| {
-            row.hover(|style| style.bg(theme.ghost_element_hover))
+            row.hover(|style| style.bg(theme.palette.surface_hover))
         })
         .child(project.name().to_string())
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_project(id, cx)))
@@ -283,22 +283,22 @@ fn empty_workspace(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoE
         .flex_1()
         .items_center()
         .justify_center()
-        .gap_3()
+        .gap(theme.spacing.md)
         .child(
             div()
-                .text_color(theme.text.opacity(0.7))
+                .text_color(theme.palette.text_secondary)
                 .child("This workspace has no projects yet."),
         )
         .child(
             div()
                 .id("create-project-cta")
-                .px_3()
-                .py_1()
-                .rounded_md()
+                .px(theme.spacing.md)
+                .py(theme.spacing.xs)
+                .rounded(theme.radius.md)
                 .cursor_pointer()
                 .border_1()
-                .border_color(theme.border)
-                .hover(|style| style.bg(theme.ghost_element_hover))
+                .border_color(theme.palette.border)
+                .hover(|style| style.bg(theme.palette.surface_hover))
                 .child("Create project")
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.open_project_dialog(window, cx);
@@ -309,28 +309,28 @@ fn empty_workspace(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoE
 fn board(project: &Project, tasks: &[Task], theme: &Theme) -> impl IntoElement {
     let body: AnyElement = if tasks.is_empty() {
         div()
-            .text_color(theme.text.opacity(0.7))
+            .text_color(theme.palette.text_secondary)
             .child("No tasks yet.")
             .into_any_element()
     } else {
         div()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(theme.spacing.xs)
             .children(tasks.iter().map(|task| {
                 div()
                     .flex()
                     .flex_row()
                     .justify_between()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .bg(theme.panel_background)
+                    .px(theme.spacing.sm)
+                    .py(theme.spacing.xs)
+                    .rounded(theme.radius.md)
+                    .bg(theme.palette.surface_raised)
                     .child(task.title().to_string())
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme.text.opacity(0.6))
+                            .text_size(theme.typography.caption)
+                            .text_color(theme.palette.text_secondary)
                             .child(task.status().as_str().to_string()),
                     )
             }))
@@ -341,14 +341,18 @@ fn board(project: &Project, tasks: &[Task], theme: &Theme) -> impl IntoElement {
         .flex()
         .flex_col()
         .flex_1()
-        .p_4()
-        .gap_3()
-        .child(div().text_lg().child(project.name().to_string()))
+        .p(theme.spacing.lg)
+        .gap(theme.spacing.md)
+        .child(
+            div()
+                .text_size(theme.typography.heading)
+                .child(project.name().to_string()),
+        )
         .when_some(project.description(), |header, text| {
             header.child(
                 div()
-                    .text_sm()
-                    .text_color(theme.text.opacity(0.7))
+                    .text_size(theme.typography.body)
+                    .text_color(theme.palette.text_secondary)
                     .child(text.to_string()),
             )
         })
@@ -370,7 +374,7 @@ pub(super) fn dialog(
         .flex()
         .items_center()
         .justify_center()
-        .bg(gpui::black().opacity(0.5))
+        .bg(theme.palette.scrim)
         .occlude()
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_project_dialog(cx)))
         .child(
@@ -378,15 +382,16 @@ pub(super) fn dialog(
                 .id("project-panel")
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap(theme.spacing.md)
                 .w(px(420.))
-                .p_4()
-                .rounded_lg()
-                .bg(theme.panel_background)
+                .p(theme.spacing.lg)
+                .rounded(theme.radius.lg)
+                .bg(theme.palette.surface_raised)
+                .shadow(theme.elevation.overlay.clone())
                 .border_1()
-                .border_color(theme.border)
+                .border_color(theme.palette.border)
                 .on_click(|_, _, cx| cx.stop_propagation())
-                .child(div().text_lg().child("New project"))
+                .child(div().text_size(theme.typography.title).child("New project"))
                 .child(field(
                     "Name",
                     &dialog.name,
@@ -408,8 +413,8 @@ pub(super) fn dialog(
                 .when_some(dialog.error.as_ref(), |panel, message| {
                     panel.child(
                         div()
-                            .text_sm()
-                            .text_color(theme.error)
+                            .text_size(theme.typography.body)
+                            .text_color(theme.palette.danger)
                             .child(message.clone()),
                     )
                 })
@@ -418,17 +423,17 @@ pub(super) fn dialog(
                         .flex()
                         .flex_row()
                         .justify_end()
-                        .gap_2()
+                        .gap(theme.spacing.sm)
                         .child(
                             div()
                                 .id("project-cancel")
-                                .px_3()
-                                .py_1()
-                                .rounded_md()
+                                .px(theme.spacing.md)
+                                .py(theme.spacing.xs)
+                                .rounded(theme.radius.md)
                                 .cursor_pointer()
                                 .border_1()
-                                .border_color(theme.border)
-                                .hover(|style| style.bg(theme.ghost_element_hover))
+                                .border_color(theme.palette.border_control)
+                                .hover(|style| style.bg(theme.palette.surface_hover))
                                 .child("Cancel")
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.cancel_project_dialog(cx)
@@ -437,12 +442,12 @@ pub(super) fn dialog(
                         .child(
                             div()
                                 .id("project-create")
-                                .px_3()
-                                .py_1()
-                                .rounded_md()
+                                .px(theme.spacing.md)
+                                .py(theme.spacing.xs)
+                                .rounded(theme.radius.md)
                                 .cursor_pointer()
-                                .bg(theme.element_selected)
-                                .hover(|style| style.opacity(0.85))
+                                .bg(theme.palette.accent)
+                                .text_color(theme.palette.on_accent)
                                 .child("Create")
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.submit_project(cx)
@@ -466,26 +471,30 @@ fn field(
     div()
         .flex()
         .flex_col()
-        .gap_1()
+        .gap(theme.spacing.xs)
         .child(
             div()
                 .flex()
                 .flex_row()
                 .justify_between()
-                .text_xs()
-                .text_color(theme.text.opacity(0.7))
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
                 .child(label)
                 .when_some(counter, |row, count| row.child(count)),
         )
         .child(
             div()
                 .id(label)
-                .px_2()
-                .py_1()
-                .rounded_md()
+                .px(theme.spacing.sm)
+                .py(theme.spacing.xs)
+                .rounded(theme.radius.sm)
                 .border_1()
-                .border_color(if active { theme.text } else { theme.border })
-                .bg(theme.editor_background)
+                .border_color(if active {
+                    theme.palette.accent
+                } else {
+                    theme.palette.border_control
+                })
+                .bg(theme.palette.surface)
                 .child(format!("{text}{caret}"))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.focus_project_field(which, cx)

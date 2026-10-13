@@ -10,8 +10,6 @@ use crate::theme::ActiveTheme;
 
 const CAPTION_BUTTON_WIDTH: Pixels = px(36.);
 const CAPTION_ICON_SIZE: Pixels = px(10.);
-/// Windows' standard close-button red: rgb(232, 17, 32).
-const CLOSE_HOVER: u32 = 0xe81120;
 
 #[derive(IntoElement)]
 pub struct WindowsWindowControls;
@@ -97,14 +95,20 @@ impl RenderOnce for CaptionButton {
         let theme = cx.theme();
         let (hover_bg, hover_fg, active_bg, active_fg) = match self {
             Self::Close => {
-                let red: Hsla = rgb(CLOSE_HOVER).into();
-                (red, white(), red.opacity(0.8), white().opacity(0.8))
+                let danger = theme.palette.danger;
+                let on_danger = theme.palette.on_danger;
+                (
+                    danger,
+                    on_danger,
+                    danger.opacity(0.8),
+                    on_danger.opacity(0.8),
+                )
             }
             _ => (
-                theme.ghost_element_hover,
-                theme.text,
-                theme.ghost_element_active,
-                theme.text,
+                theme.palette.surface_hover,
+                theme.palette.text_primary,
+                theme.palette.surface_active,
+                theme.palette.text_primary,
             ),
         };
 
