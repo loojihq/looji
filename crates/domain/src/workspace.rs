@@ -4,6 +4,7 @@ use crate::{error::DomainError, ids::WorkspaceId, time::Timestamp, validation::t
 pub struct Workspace {
     id: WorkspaceId,
     name: String,
+    icon_file: Option<String>,
     created_at: Timestamp,
     updated_at: Timestamp,
 }
@@ -14,6 +15,7 @@ impl Workspace {
         Ok(Self {
             id: WorkspaceId::new(),
             name: trimmed_text(name, DomainError::EmptyName)?,
+            icon_file: None,
             created_at: now,
             updated_at: now,
         })
@@ -25,6 +27,21 @@ impl Workspace {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The icon's file name inside the icons directory, if one is set.
+    pub fn icon_file(&self) -> Option<&str> {
+        self.icon_file.as_deref()
+    }
+
+    /// Only the file name is stored, never a path. Leaves the workspace unchanged if it's invalid.
+    pub fn set_icon_file(&mut self, file_name: Option<String>) -> Result<(), DomainError> {
+        if let Some(name) = &file_name {
+            validate_icon_file(name)?;
+        }
+        self.icon_file = file_name;
+        self.updated_at = Timestamp::now();
+        Ok(())
     }
 
     pub fn created_at(&self) -> Timestamp {
@@ -48,16 +65,37 @@ impl Workspace {
 pub struct WorkspaceRecord {
     pub id: WorkspaceId,
     pub name: String,
+    pub icon_file: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// A plain file name: non-empty, no path separators, and not `.` or `..`.
+fn validate_icon_file(file_name: &str) -> Result<(), DomainError> {
+    let is_plain = !file_name.is_empty()
+        && file_name != "."
+        && file_name != ".."
+        && !file_name.contains(['/', '\\', ':'])
+        && !file_name.chars().any(char::is_control);
+    if is_plain {
+        Ok(())
+    } else {
+        Err(DomainError::InvalidIconFile {
+            file_name: file_name.to_string(),
+        })
+    }
 }
 
 impl TryFrom<WorkspaceRecord> for Workspace {
     type Error = DomainError;
 
     fn try_from(record: WorkspaceRecord) -> Result<Self, Self::Error> {
+        if let Some(file_name) = &record.icon_file {
+            validate_icon_file(file_name)?;
+        }
         Ok(Self {
             id: record.id,
+            icon_file: record.icon_file,
             name: trimmed_text(&record.name, DomainError::EmptyName)?,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -183,6 +221,37 @@ mod tests {
     #[test]
     fn trims_names() {
         assert_eq!(Workspace::new("  Personal ").unwrap().name(), "Personal");
+    }
+
+    #[test]
+    fn icon_file_must_be_a_plain_file_name() {
+        let mut workspace = Workspace::new("Personal").unwrap();
+        for bad in [
+            "",
+            ".",
+            "..",
+            "icons/x.png",
+            "..\\x.png",
+            "C:x.png",
+            "bad\nname.png",
+        ] {
+            assert!(
+                workspace.set_icon_file(Some(bad.to_string())).is_err(),
+                "accepted {bad:?}"
+            );
+        }
+        assert_eq!(workspace.icon_file(), None);
+    }
+
+    #[test]
+    fn a_valid_icon_file_name_is_kept_and_can_be_cleared() {
+        let mut workspace = Workspace::new("Personal").unwrap();
+        workspace
+            .set_icon_file(Some("workspace-1-abc.png".to_string()))
+            .unwrap();
+        assert_eq!(workspace.icon_file(), Some("workspace-1-abc.png"));
+        workspace.set_icon_file(None).unwrap();
+        assert_eq!(workspace.icon_file(), None);
     }
 
     #[test]

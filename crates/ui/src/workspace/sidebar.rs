@@ -1,16 +1,22 @@
 //! The workspace list: rows to switch between, a rename field, and a create button.
 
-use gpui::{prelude::*, *};
-use looji_domain::WorkspaceId;
+use std::path::Path;
 
-use super::{Rename, WorkspaceView};
-use crate::theme::{ActiveTheme, Theme};
+use gpui::{prelude::*, *};
+use looji_domain::{Workspace, WorkspaceId};
+
+use super::{Rename, WorkspaceView, avatar};
+use crate::{
+    database::AppDatabase,
+    theme::{ActiveTheme, Theme},
+};
 
 const SIDEBAR_WIDTH: Pixels = px(240.);
 
 pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let active = view.list.active_workspace_id();
+    let icons_dir = cx.global::<AppDatabase>().icons_dir.clone();
 
     let rows: Vec<AnyElement> = view
         .list
@@ -20,7 +26,7 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
             let id = workspace.id();
             match &view.rename {
                 Some(rename) if rename.id == id => editing_row(rename, &theme).into_any_element(),
-                _ => label_row(workspace.name(), id == active, id, &theme, cx).into_any_element(),
+                _ => label_row(workspace, id == active, &icons_dir, &theme, cx).into_any_element(),
             }
         })
         .collect();
@@ -51,12 +57,13 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
 }
 
 fn label_row(
-    name: &str,
+    workspace: &Workspace,
     is_active: bool,
-    id: WorkspaceId,
+    icons_dir: &Path,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
+    let id = workspace.id();
     div()
         .id(id.as_uuid())
         .flex()
@@ -80,8 +87,48 @@ fn label_row(
                 this.switch_to(id, cx);
             }
         }))
-        .child(div().min_w_0().truncate().child(name.to_string()))
-        .child(rename_button(id, theme, cx))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .child(avatar::render(workspace, icons_dir, theme))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(workspace.name().to_string()),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_shrink_0()
+                .child(icon_button(id, theme, cx))
+                .child(rename_button(id, theme, cx)),
+        )
+}
+
+fn icon_button(
+    id: WorkspaceId,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    div()
+        .id(("icon", id.as_uuid().as_u64_pair().0))
+        .px_1()
+        .text_xs()
+        .text_color(theme.text.opacity(0.6))
+        .hover(|style| style.text_color(theme.text))
+        .child("Icon")
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            // Keep this click from also switching to the row.
+            cx.stop_propagation();
+            this.choose_icon(id, cx);
+        }))
 }
 
 fn rename_button(

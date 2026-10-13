@@ -1,11 +1,14 @@
-//! The app's store, shared with views through a gpui global.
+//! The app's store and file locations, shared with views through a gpui global.
+
+use std::path::PathBuf;
 
 use gpui::Global;
 use looji_persistence::SqliteStore;
 
-pub struct AppDatabase(
-    // Read by the features that load and save data; held here so it lives as long as the app.
-    #[allow(dead_code)] pub SqliteStore,
-);
+pub struct AppDatabase {
+    pub store: SqliteStore,
+    /// Where workspace icon files live. Read by the views that render or replace icons.
+    pub icons_dir: PathBuf,
+}
 
 impl Global for AppDatabase {}

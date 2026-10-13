@@ -11,6 +11,8 @@ directories = "6"
 rusqlite = { version = "0.40", features = ["bundled"] }
 thiserror = "2"
 uuid = "1.28.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 tempfile = "3.27.0"

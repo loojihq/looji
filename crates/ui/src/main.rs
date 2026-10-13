@@ -19,6 +19,7 @@ fn main() {
         fail("looji could not find your user data folder.");
     };
     let database_path = persistence::database_path(&data_dir);
+    let icons_dir = persistence::icons::icons_dir(&data_dir);
 
     // Opening creates the folder and an empty database on first run.
     let store = match SqliteStore::open(&database_path) {
@@ -38,7 +39,10 @@ fn main() {
 
     Application::new().run(move |cx: &mut App| {
         theme::init(cx);
-        cx.set_global(AppDatabase(store));
+        cx.set_global(AppDatabase {
+            store,
+            icons_dir: icons_dir.clone(),
+        });
         quit_when_last_window_closes(cx);
 
         WorkspaceView::open_window(cx, workspaces).expect("failed to open main window");

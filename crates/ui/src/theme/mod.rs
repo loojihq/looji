@@ -18,6 +18,9 @@ pub struct Theme {
     pub ghost_element_active: Hsla,
     pub element_selected: Hsla,
     pub error: Hsla,
+    /// Backgrounds for initial-letter avatars, picked per workspace.
+    /// TEMPORARY: replace with the design-system tokens once they exist.
+    pub avatar_colors: [Hsla; 6],
 }
 
 impl Global for Theme {}

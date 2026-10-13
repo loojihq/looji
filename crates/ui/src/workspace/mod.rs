@@ -1,5 +1,6 @@
 //! The main window: a title bar over a sidebar of workspaces and the main pane.
 
+mod avatar;
 mod sidebar;
 mod state;
 
@@ -8,6 +9,7 @@ use looji_domain::{
     DomainError, RepoError, SettingsRepository, Workspace, WorkspaceId, WorkspaceRepository,
     next_untitled_name, validate_name,
 };
+use looji_persistence::icons::{IconError, import_icon};
 
 pub use state::WorkspaceList;
 
@@ -143,6 +145,63 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Asks for an image, imports it on a background thread, then records it. The icon only
+    /// changes if the import and the database write both succeed.
+    fn choose_icon(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose icon".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(source) = paths.into_iter().next() else {
+                return;
+            };
+            let Ok(icons_dir) = cx.update(|cx| cx.global::<AppDatabase>().icons_dir.clone()) else {
+                return;
+            };
+            let imported = cx
+                .background_executor()
+                .spawn(async move { import_icon(&source, &icons_dir, id) })
+                .await;
+            let _ = this.update(cx, |view, cx| view.apply_icon(id, imported, cx));
+        })
+        .detach();
+    }
+
+    fn apply_icon(
+        &mut self,
+        id: WorkspaceId,
+        imported: Result<String, IconError>,
+        cx: &mut Context<Self>,
+    ) {
+        let file_name = match imported {
+            Ok(file_name) => file_name,
+            Err(err) => {
+                self.status = Some(format!("Could not use that image: {err}"));
+                return cx.notify();
+            }
+        };
+        let icons_dir = cx.global::<AppDatabase>().icons_dir.clone();
+        match store(cx).replace_workspace_icon(&icons_dir, id, Some(&file_name)) {
+            Ok(()) => {
+                // Validated by `import_icon`, so the file name is always accepted here.
+                if let Some(mut updated) = self.list.find(id).cloned()
+                    && updated.set_icon_file(Some(file_name)).is_ok()
+                {
+                    self.list.replace(updated);
+                }
+                self.status = None;
+            }
+            Err(err) => self.status = Some(format!("Could not change the icon: {err}")),
+        }
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(rename) = self.rename.as_mut() else {
             return;
@@ -172,7 +231,7 @@ impl WorkspaceView {
 }
 
 fn store(cx: &App) -> &looji_persistence::SqliteStore {
-    &cx.global::<AppDatabase>().0
+    &cx.global::<AppDatabase>().store
 }
 
 fn rename_message(err: &DomainError) -> String {

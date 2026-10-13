@@ -23,6 +23,8 @@ pub enum DomainError {
     InvalidId(String),
     #[error("a workspace named '{name}' already exists")]
     DuplicateName { name: String },
+    #[error("'{file_name}' is not a valid icon file name")]
+    InvalidIconFile { file_name: String },
 }
 
 /// A repository could not load or save an entity.
