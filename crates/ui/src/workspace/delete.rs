@@ -111,6 +111,7 @@ impl WorkspaceView {
             Ok(active) => match WorkspaceRepository::list(store(cx)) {
                 Ok(items) => {
                     self.list.reload(items, active);
+                    self.reload_projects(cx);
                     self.status = None;
                 }
                 Err(err) => {

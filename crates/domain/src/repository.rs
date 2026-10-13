@@ -29,7 +29,8 @@ pub trait WorkspaceRepository {
 
 pub trait ProjectRepository {
     fn save(&self, project: &Project) -> RepoResult<()>;
-    fn find(&self, id: ProjectId) -> RepoResult<Option<Project>>;
+    /// Finds a project only inside `workspace`. A project from another workspace is `None`.
+    fn find(&self, workspace: WorkspaceId, id: ProjectId) -> RepoResult<Option<Project>>;
     fn list_for_workspace(&self, workspace: WorkspaceId) -> RepoResult<Vec<Project>>;
     /// Also removes the project's tasks and columns.
     fn delete(&self, id: ProjectId) -> RepoResult<()>;

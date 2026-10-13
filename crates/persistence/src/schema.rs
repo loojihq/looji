@@ -25,4 +25,9 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "workspace_icon",
         sql: include_str!("sql/0004_workspace_icon.sql"),
     },
+    Migration {
+        version: 5,
+        name: "project_description",
+        sql: include_str!("sql/0005_project_description.sql"),
+    },
 ];

@@ -20,7 +20,9 @@ pub use board::{Column, ColumnRecord};
 pub use error::{DomainError, RepoError, RepoResult};
 pub use ids::{ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use position::Position;
-pub use project::{Project, ProjectRecord};
+pub use project::{
+    MAX_DESCRIPTION_CHARS, Project, ProjectRecord, clean_description, validate_project_name,
+};
 pub use repository::{
     ColumnRepository, ProjectRepository, SettingsRepository, TaskRepository, TeamMemberRepository,
     WorkspaceRepository,

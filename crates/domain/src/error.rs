@@ -23,6 +23,10 @@ pub enum DomainError {
     InvalidId(String),
     #[error("a workspace named '{name}' already exists")]
     DuplicateName { name: String },
+    #[error("a project named '{name}' already exists in this workspace")]
+    DuplicateProjectName { name: String },
+    #[error("a description can be at most {max} characters")]
+    DescriptionTooLong { max: usize },
     #[error("'{file_name}' is not a valid icon file name")]
     InvalidIconFile { file_name: String },
 }

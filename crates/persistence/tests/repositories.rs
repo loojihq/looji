@@ -77,7 +77,7 @@ fn project_round_trips() {
     ProjectRepository::save(&store, &original).unwrap();
 
     assert_eq!(
-        ProjectRepository::find(&store, original.id()).unwrap(),
+        ProjectRepository::find(&store, workspace.id(), original.id()).unwrap(),
         Some(original.clone())
     );
     assert_eq!(
@@ -218,7 +218,7 @@ fn deleting_a_workspace_removes_its_projects_tasks_columns_and_members() {
             .is_none()
     );
     assert!(
-        ProjectRepository::find(&store, project.id())
+        ProjectRepository::find(&store, workspace.id(), project.id())
             .unwrap()
             .is_none()
     );

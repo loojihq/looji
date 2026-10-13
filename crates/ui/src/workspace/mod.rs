@@ -1,15 +1,19 @@
-//! The main window: a title bar over a sidebar of workspaces and the main pane.
+//! The main window: a title bar over a sidebar of workspaces and projects, and the main pane.
 
 mod avatar;
 mod delete;
+mod project_state;
+mod projects;
 mod sidebar;
 mod state;
 
 use delete::PendingDelete;
+use project_state::ProjectList;
+use projects::ProjectDialog;
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, RepoError, SettingsRepository, Workspace, WorkspaceId, WorkspaceRepository,
+    DomainError, RepoError, SettingsRepository, Task, Workspace, WorkspaceId, WorkspaceRepository,
     next_untitled_name, validate_name,
 };
 use looji_persistence::icons::{IconError, import_icon};
@@ -44,17 +48,30 @@ pub struct WorkspaceView {
     status: Option<String>,
     /// The delete confirmation, while it's open.
     pending_delete: Option<PendingDelete>,
+    /// The projects of the active workspace.
+    projects: ProjectList,
+    /// The tasks of the selected project. Empty when no project is selected.
+    board: Vec<Task>,
+    /// The create-project dialog, while it's open.
+    project_dialog: Option<ProjectDialog>,
 }
 
 impl WorkspaceView {
     pub fn open_window(cx: &mut App, list: WorkspaceList) -> Result<WindowHandle<Self>> {
         cx.open_window(window_options(cx), |_, cx| {
-            cx.new(|cx| Self {
-                focus_handle: cx.focus_handle(),
-                list,
-                rename: None,
-                status: None,
-                pending_delete: None,
+            cx.new(|cx| {
+                let mut view = Self {
+                    focus_handle: cx.focus_handle(),
+                    list,
+                    rename: None,
+                    status: None,
+                    pending_delete: None,
+                    projects: ProjectList::empty(),
+                    board: Vec::new(),
+                    project_dialog: None,
+                };
+                view.reload_projects(cx);
+                view
             })
         })
     }
@@ -67,7 +84,11 @@ impl WorkspaceView {
         }
         // Write first; only move the selection once the write has succeeded.
         match SettingsRepository::set_active_workspace(store(cx), id) {
-            Ok(()) => self.list.set_active(id),
+            Ok(()) => {
+                self.list.set_active(id);
+                // The previous workspace's project must not stay selected.
+                self.reload_projects(cx);
+            }
             Err(err) => self.status = Some(format!("Could not switch workspace: {err}")),
         }
         cx.notify();
@@ -209,6 +230,9 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.project_dialog.is_some() {
+            return self.project_dialog_key(event, cx);
+        }
         if self.pending_delete.is_some() {
             // Cancel is the default action, so Enter and Escape both close the dialog.
             if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
@@ -233,7 +257,7 @@ impl WorkspaceView {
                 if modifiers.control || modifiers.alt || modifiers.platform {
                     return;
                 }
-                if let Some(text) = keystroke.key_char.as_deref() {
+                if let Some(text) = typed_text(keystroke) {
                     rename.draft.push_str(text);
                     rename.error = None;
                     cx.notify();
@@ -279,11 +303,19 @@ fn window_options(cx: &App) -> WindowOptions {
 impl Render for WorkspaceView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let active_name = self.list.active().name().to_string();
-        let dialog = self
+        let header = match self.projects.active() {
+            Some(project) => format!("{} / {}", self.list.active().name(), project.name()),
+            None => self.list.active().name().to_string(),
+        };
+        let body = projects::content(self, &theme, cx);
+        let delete_dialog = self
             .pending_delete
             .clone()
             .map(|pending| delete::dialog(&pending, &theme, cx).into_any_element());
+        let project_dialog = self
+            .project_dialog
+            .clone()
+            .map(|dialog| projects::dialog(&dialog, &theme, cx));
 
         div()
             .id("workspace")
@@ -302,13 +334,14 @@ impl Render for WorkspaceView {
                     .flex_1()
                     .min_h_0()
                     .child(sidebar::render(self, cx))
-                    .child(main_pane(&active_name, &theme)),
+                    .child(main_pane(header, body, &theme)),
             )
-            .children(dialog)
+            .children(delete_dialog)
+            .children(project_dialog)
     }
 }
 
-fn main_pane(active_name: &str, theme: &Theme) -> impl IntoElement {
+fn main_pane(header: String, body: AnyElement, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -324,15 +357,17 @@ fn main_pane(active_name: &str, theme: &Theme) -> impl IntoElement {
                 .border_b_1()
                 .border_color(theme.border)
                 .text_lg()
-                .child(active_name.to_string()),
+                .child(header),
         )
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .justify_center()
-                .items_center()
-                .text_xl()
-                .child("Main pane"),
-        )
+        .child(body)
+}
+
+/// The text a keystroke types. The space key can arrive without `key_char`, so it's
+/// handled explicitly.
+pub(super) fn typed_text(keystroke: &Keystroke) -> Option<&str> {
+    match keystroke.key_char.as_deref() {
+        Some(text) => Some(text),
+        None if keystroke.key == "space" => Some(" "),
+        None => None,
+    }
 }

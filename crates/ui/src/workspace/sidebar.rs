@@ -5,7 +5,7 @@ use std::path::Path;
 use gpui::{prelude::*, *};
 use looji_domain::{Workspace, WorkspaceId};
 
-use super::{Rename, WorkspaceView, avatar};
+use super::{Rename, WorkspaceView, avatar, projects};
 use crate::{
     database::AppDatabase,
     theme::{ActiveTheme, Theme},
@@ -45,6 +45,7 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
         .text_sm()
         .children(rows)
         .child(new_workspace_button(&theme, cx))
+        .child(projects::sidebar_section(view, &theme, cx))
         .when_some(view.status.as_ref(), |sidebar, message| {
             sidebar.child(
                 div()

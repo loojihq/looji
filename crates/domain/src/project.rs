@@ -5,11 +5,15 @@ use crate::{
     validation::trimmed_text,
 };
 
+/// Longest project description, in characters after trimming.
+pub const MAX_DESCRIPTION_CHARS: usize = 500;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     id: ProjectId,
     workspace_id: WorkspaceId,
     name: String,
+    description: Option<String>,
     created_at: Timestamp,
     updated_at: Timestamp,
 }
@@ -21,6 +25,7 @@ impl Project {
             id: ProjectId::new(),
             workspace_id,
             name: trimmed_text(name, DomainError::EmptyName)?,
+            description: None,
             created_at: now,
             updated_at: now,
         })
@@ -38,6 +43,10 @@ impl Project {
         &self.name
     }
 
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
     pub fn created_at(&self) -> Timestamp {
         self.created_at
     }
@@ -52,6 +61,48 @@ impl Project {
         self.updated_at = Timestamp::now();
         Ok(())
     }
+
+    /// Blank or missing text clears the description. Leaves the project unchanged if the text
+    /// is too long.
+    pub fn set_description(&mut self, description: Option<&str>) -> Result<(), DomainError> {
+        self.description = clean_description(description)?;
+        self.updated_at = Timestamp::now();
+        Ok(())
+    }
+}
+
+/// Checks a proposed project name against the other projects in the same workspace.
+///
+/// Trimmed and compared ignoring case. Pass only the projects of one workspace.
+pub fn validate_project_name<'a>(
+    name: &str,
+    projects: impl IntoIterator<Item = &'a Project>,
+    editing: Option<ProjectId>,
+) -> Result<String, DomainError> {
+    let cleaned = trimmed_text(name, DomainError::EmptyName)?;
+    let wanted = cleaned.to_lowercase();
+    let taken = projects
+        .into_iter()
+        .filter(|project| Some(project.id()) != editing)
+        .any(|project| project.name().to_lowercase() == wanted);
+    if taken {
+        return Err(DomainError::DuplicateProjectName { name: cleaned });
+    }
+    Ok(cleaned)
+}
+
+/// Trims a description. Blank text becomes `None`. Text over the limit is an error.
+pub fn clean_description(description: Option<&str>) -> Result<Option<String>, DomainError> {
+    let trimmed = description.map(str::trim).filter(|text| !text.is_empty());
+    match trimmed {
+        Some(text) if text.chars().count() > MAX_DESCRIPTION_CHARS => {
+            Err(DomainError::DescriptionTooLong {
+                max: MAX_DESCRIPTION_CHARS,
+            })
+        }
+        Some(text) => Ok(Some(text.to_string())),
+        None => Ok(None),
+    }
 }
 
 /// Stored values for a project. Converting it back into a [`Project`] re-runs validation.
@@ -60,6 +111,7 @@ pub struct ProjectRecord {
     pub id: ProjectId,
     pub workspace_id: WorkspaceId,
     pub name: String,
+    pub description: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -72,8 +124,81 @@ impl TryFrom<ProjectRecord> for Project {
             id: record.id,
             workspace_id: record.workspace_id,
             name: trimmed_text(&record.name, DomainError::EmptyName)?,
+            description: clean_description(record.description.as_deref())?,
             created_at: record.created_at,
             updated_at: record.updated_at,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(workspace: WorkspaceId, name: &str) -> Project {
+        Project::new(workspace, name).unwrap()
+    }
+
+    #[test]
+    fn names_are_unique_ignoring_case_and_padding_within_a_workspace() {
+        let workspace = WorkspaceId::new();
+        let existing = [project(workspace, "Website")];
+        assert!(matches!(
+            validate_project_name("  website ", &existing, None),
+            Err(DomainError::DuplicateProjectName { .. })
+        ));
+    }
+
+    #[test]
+    fn a_project_may_keep_its_own_name() {
+        let workspace = WorkspaceId::new();
+        let website = project(workspace, "Website");
+        let existing = [website.clone()];
+        assert_eq!(
+            validate_project_name("Website", &existing, Some(website.id())),
+            Ok("Website".to_string())
+        );
+    }
+
+    #[test]
+    fn blank_names_are_rejected() {
+        assert_eq!(
+            validate_project_name("   ", &[] as &[Project], None),
+            Err(DomainError::EmptyName)
+        );
+    }
+
+    #[test]
+    fn descriptions_are_trimmed_and_blank_ones_become_none() {
+        assert_eq!(
+            clean_description(Some("  Launch site  ")),
+            Ok(Some("Launch site".into()))
+        );
+        assert_eq!(clean_description(Some("   ")), Ok(None));
+        assert_eq!(clean_description(None), Ok(None));
+    }
+
+    #[test]
+    fn descriptions_over_the_limit_are_rejected() {
+        let long = "x".repeat(MAX_DESCRIPTION_CHARS + 1);
+        assert_eq!(
+            clean_description(Some(&long)),
+            Err(DomainError::DescriptionTooLong {
+                max: MAX_DESCRIPTION_CHARS
+            })
+        );
+        assert!(clean_description(Some(&"x".repeat(MAX_DESCRIPTION_CHARS))).is_ok());
+    }
+
+    #[test]
+    fn a_failed_description_keeps_the_previous_one() {
+        let mut project = project(WorkspaceId::new(), "Website");
+        project.set_description(Some("Keep me")).unwrap();
+        assert!(
+            project
+                .set_description(Some(&"x".repeat(MAX_DESCRIPTION_CHARS + 1)))
+                .is_err()
+        );
+        assert_eq!(project.description(), Some("Keep me"));
     }
 }
