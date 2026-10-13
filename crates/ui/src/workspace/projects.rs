@@ -276,7 +276,9 @@ pub(super) fn content(
     }
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
-        Some(project) => board::render(project, &view.board, theme, cx).into_any_element(),
+        Some(project) => {
+            board::render(project, &view.board, &view.drag, theme, cx).into_any_element()
+        }
     }
 }
 

@@ -5,6 +5,8 @@ mod board;
 mod card;
 mod columns;
 mod delete;
+mod drag;
+mod dragging;
 mod preferences_panel;
 mod project_state;
 mod projects;
@@ -60,6 +62,8 @@ pub struct WorkspaceView {
     project_dialog: Option<ProjectDialog>,
     /// A column hide waiting for confirmation.
     pending_column: Option<columns::PendingColumn>,
+    /// The card drag in progress, and the last drag's outcome.
+    drag: dragging::DragSession,
 }
 
 impl WorkspaceView {
@@ -76,6 +80,7 @@ impl WorkspaceView {
                     board: Vec::new(),
                     project_dialog: None,
                     pending_column: None,
+                    drag: dragging::DragSession::default(),
                 };
                 view.reload_projects(cx);
                 view
@@ -248,6 +253,9 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.key_pressed(event, cx) {
+            return;
+        }
         if self.pending_column.is_some() {
             if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
                 self.cancel_column_hide(cx);
@@ -364,9 +372,12 @@ impl Render for WorkspaceView {
                     .child(sidebar::render(self, cx))
                     .child(main_pane(header, body, &theme)),
             )
+            .child(dragging::listeners(cx.entity().downgrade()))
             .children(delete_dialog)
             .children(project_dialog)
             .children(column_dialog)
+            // Last, so the lifted card draws above everything else.
+            .children(dragging::overlay(self, &theme))
     }
 }
 

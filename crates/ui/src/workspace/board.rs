@@ -1,12 +1,19 @@
 //! The board: one column per status, each with a header showing its count and a scrollable body.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui::{prelude::*, *};
 #[cfg(debug_assertions)]
 use looji_domain::{Position, TaskRepository, Timestamp};
-use looji_domain::{Project, Status, StatusColumn, Task, status_columns};
+use looji_domain::{Project, Status, StatusColumn, Task, TaskId, status_columns};
 
 use super::WorkspaceView;
 use super::card::{CalendarDate, CardDensity, CardView, task_card};
+use super::drag::{CardSlot, ColumnSlot};
+#[cfg(debug_assertions)]
+use super::dragging::Exit;
+use super::dragging::{self, BoardLayout, DragSession};
 use crate::theme::Theme;
 
 const HEADER_HEIGHT: Pixels = px(36.);
@@ -17,11 +24,14 @@ const DROP_ZONE_HEIGHT: Pixels = px(96.);
 pub(super) fn render(
     project: &Project,
     tasks: &[Task],
+    drag: &DragSession,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
     let columns = status_columns(tasks, &project.visible_statuses());
     let today = CalendarDate::utc_today();
+    let layout = drag.layout.clone();
+    let dragged = drag.dragged();
     #[cfg(not(debug_assertions))]
     let _ = cx;
     let root = div()
@@ -60,15 +70,28 @@ pub(super) fn render(
                 .flex_1()
                 .min_h_0()
                 .gap(theme.spacing.sm)
-                .children(
-                    columns
-                        .iter()
-                        .enumerate()
-                        .map(|(index, column)| column_view(index, column, theme, today)),
-                ),
+                .on_children_prepainted({
+                    let layout = layout.clone();
+                    let statuses: Vec<Status> =
+                        columns.iter().map(|column| column.status).collect();
+                    move |bounds, _, _| {
+                        let columns = statuses
+                            .iter()
+                            .zip(bounds)
+                            .map(|(&status, bounds)| ColumnSlot {
+                                status,
+                                bounds: dragging::rect(bounds),
+                            })
+                            .collect();
+                        layout.borrow_mut().set_columns(columns);
+                    }
+                })
+                .children(columns.iter().enumerate().map(|(index, column)| {
+                    column_view(index, column, theme, today, &layout, dragged, cx)
+                })),
         );
     #[cfg(debug_assertions)]
-    let root = root.child(debug_controls(theme, cx));
+    let root = root.child(debug_controls(theme, cx, drag.last_exit()));
     root
 }
 
@@ -77,7 +100,10 @@ fn column_view(
     column: &StatusColumn<'_>,
     theme: &Theme,
     today: CalendarDate,
-) -> impl IntoElement {
+    layout: &Rc<RefCell<BoardLayout>>,
+    dragged: Option<TaskId>,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement + use<> {
     div()
         .flex()
         .flex_col()
@@ -89,7 +115,7 @@ fn column_view(
         .border_1()
         .border_color(theme.palette.border)
         .child(header(column, theme))
-        .child(body(index, column, theme, today))
+        .child(body(index, column, theme, today, layout, dragged, cx))
 }
 
 fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
@@ -119,27 +145,75 @@ fn body(
     column: &StatusColumn<'_>,
     theme: &Theme,
     today: CalendarDate,
-) -> impl IntoElement {
-    let body = div()
-        .id(("column-body", index as u64))
+    layout: &Rc<RefCell<BoardLayout>>,
+    dragged: Option<TaskId>,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement + use<> {
+    let content = div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
         .gap(theme.spacing.xs)
         .p(theme.spacing.xs);
 
-    if column.tasks.is_empty() {
-        body.child(drop_zone(index, theme))
+    // The cards' bounds are recorded for the drop target. An empty column's child is the drop
+    // zone, which pairs with no ids, so the column ends up with no cards.
+    let ids: Vec<TaskId> = column.tasks.iter().map(|task| task.id()).collect();
+    let status = column.status;
+    let layout = layout.clone();
+    let content = if column.tasks.is_empty() {
+        content.child(drop_zone(index, theme))
     } else {
-        body.children(
+        content.children(
             column
                 .tasks
                 .iter()
-                .map(|task| task_card(card_view(task), CardDensity::Compact, today, theme)),
+                .map(|task| card_slot(task, today, theme, dragged, cx)),
         )
-    }
+    };
+    content
+        .on_children_prepainted(move |bounds, _, _| {
+            let cards = ids
+                .iter()
+                .copied()
+                .zip(bounds)
+                .map(|(task, bounds)| CardSlot {
+                    task,
+                    status,
+                    bounds: dragging::rect(bounds),
+                })
+                .collect();
+            layout.borrow_mut().set_cards(status, cards);
+        })
+        .id(("column-body", index as u64))
+        .overflow_y_scroll()
+}
+
+/// A card with a press handler. The card under a drag is dimmed where it sits, so the column
+/// doesn't reflow.
+fn card_slot(
+    task: &Task,
+    today: CalendarDate,
+    theme: &Theme,
+    dragged: Option<TaskId>,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement + use<> {
+    let id = task.id();
+    div()
+        .when(dragged == Some(id), |slot| slot.opacity(0.4))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.card_pressed(id, event, window, cx)
+            }),
+        )
+        .child(task_card(
+            card_view(task),
+            CardDensity::Compact,
+            today,
+            theme,
+        ))
 }
 
 /// The empty-column target. It keeps its height and has a stable ID, so drag can find it later.
@@ -160,7 +234,7 @@ fn drop_zone(index: usize, theme: &Theme) -> impl IntoElement {
         .child("No tasks")
 }
 
-fn card_view(task: &Task) -> CardView<'_> {
+pub(super) fn card_view(task: &Task) -> CardView<'_> {
     CardView {
         id: task.id(),
         title: task.title(),
@@ -184,13 +258,18 @@ fn status_label(status: Status) -> &'static str {
 /// Temporary controls for creating and deleting tasks until the create dialog and the delete
 /// flow exist. Compiled only in debug builds.
 #[cfg(debug_assertions)]
-pub(super) fn debug_controls(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+pub(super) fn debug_controls(
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+    last_exit: Option<Exit>,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
         .gap(theme.spacing.sm)
         .text_size(theme.typography.caption)
         .text_color(theme.palette.text_secondary)
+        .child(exit_text(last_exit))
         .child(
             div()
                 .id("debug-add-task")
@@ -207,6 +286,20 @@ pub(super) fn debug_controls(theme: &Theme, cx: &mut Context<WorkspaceView>) -> 
                 .child("− last task")
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.delete_last_task(cx))),
         )
+}
+
+/// What the last drag did, for checking drops and cancels by hand.
+#[cfg(debug_assertions)]
+fn exit_text(exit: Option<Exit>) -> String {
+    match exit {
+        None => String::new(),
+        Some(Exit::Dropped(result)) => format!(
+            "Last drop: {} at index {}",
+            status_label(result.status),
+            result.index
+        ),
+        Some(Exit::Cancelled(reason)) => format!("Last drag cancelled: {reason:?}"),
+    }
 }
 
 impl WorkspaceView {
