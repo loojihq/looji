@@ -1,14 +1,18 @@
-//! SQLite storage: where the database lives and how its schema is set up.
+//! SQLite storage: where the database lives, how it is opened, and how its schema evolves.
 
 mod migrations;
+mod schema;
 
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
+pub use migrations::{Migration, migrate};
 pub use rusqlite::Connection;
 use thiserror::Error;
+
+use migrations::migrate_with_hook;
 
 const DATABASE_FILE_NAME: &str = "looji.db";
 
@@ -22,12 +26,25 @@ pub enum Error {
     },
     #[error("could not open the database: {source}")]
     Open {
-        path: PathBuf,
         #[source]
         source: rusqlite::Error,
     },
-    #[error("could not set up the database schema: {0}")]
-    Schema(#[from] rusqlite::Error),
+    #[error("could not set up the database: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error(
+        "the database is at schema v{version}, but this version of looji only knows up to v{latest}"
+    )]
+    DatabaseAhead { version: u32, latest: u32 },
+    #[error("v{version} is recorded as applied but this version of looji does not have it")]
+    MissingMigration { version: u32 },
+    #[error("invalid migration list: {0}")]
+    InvalidMigrations(String),
+    #[error("migration v{version} ({name}) failed and was rolled back: {reason}")]
+    MigrationFailed {
+        version: u32,
+        name: String,
+        reason: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -42,9 +59,13 @@ pub fn database_path(data_dir: &Path) -> PathBuf {
     data_dir.join(DATABASE_FILE_NAME)
 }
 
-/// Opens the database at `path`, creating the file and its parent directories
-/// on first run, then brings the schema up to date.
+/// Opens the app database at `path`, creating it on first run, and migrates it to the latest schema.
 pub fn open_database(path: &Path) -> Result<Connection> {
+    open_database_with_migrations(path, schema::MIGRATIONS)
+}
+
+/// Like [`open_database`], but migrates to the newest entry in `migrations` instead of the app's list.
+pub fn open_database_with_migrations(path: &Path, migrations: &[Migration]) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| Error::CreateDirectory {
             path: parent.to_path_buf(),
@@ -52,31 +73,20 @@ pub fn open_database(path: &Path) -> Result<Connection> {
         })?;
     }
 
-    let mut connection = Connection::open(path).map_err(|source| Error::Open {
-        path: path.to_path_buf(),
-        source,
+    let mut connection = Connection::open(path).map_err(|source| Error::Open { source })?;
+
+    // Set outside any transaction, where SQLite would ignore or reject them.
+    connection.pragma_update(None, "foreign_keys", true)?;
+    connection.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+
+    migrate_with_hook(&mut connection, migrations, |pending| {
+        back_up_before_upgrade(path, pending)
     })?;
-    migrations::apply(&mut connection)?;
     Ok(connection)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn creates_missing_directories_and_database_on_first_run() {
-        let base = std::env::temp_dir().join(format!("looji-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let path = database_path(&base.join("nested").join("data"));
-
-        let connection = open_database(&path).expect("database opens on first run");
-        assert!(path.exists());
-        drop(connection);
-
-        // Reopening an existing database must also succeed.
-        open_database(&path).expect("database reopens on later runs");
-
-        fs::remove_dir_all(&base).expect("cleans up temp directory");
-    }
+/// Runs before pending migrations are applied, on first run and on upgrades alike.
+/// Placeholder for the "back up database and run migrations on upgrade" task.
+fn back_up_before_upgrade(_path: &Path, _pending: &[u32]) -> Result<()> {
+    Ok(())
 }

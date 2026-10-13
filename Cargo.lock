@@ -3056,6 +3056,7 @@ dependencies = [
  "directories",
  "looji-domain",
  "rusqlite",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
