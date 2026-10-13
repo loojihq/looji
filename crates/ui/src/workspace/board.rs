@@ -1,7 +1,6 @@
 //! The board: one column per status, each with a header showing its count and a scrollable body.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{prelude::*, *};
 #[cfg(debug_assertions)]
@@ -10,14 +9,18 @@ use looji_domain::{Project, Status, StatusColumn, Task, TaskId, status_columns};
 
 use super::WorkspaceView;
 use super::card::{CalendarDate, CardDensity, CardView, task_card};
-use super::drag::{CardSlot, ColumnSlot};
 #[cfg(debug_assertions)]
-use super::dragging::Exit;
-use super::dragging::{self, BoardLayout, DragSession};
+use super::drag::Exit;
+use super::dragging::{DragSession, record_cards, record_columns};
+use super::landing::{Slot, column_sequence, stack_tops};
 use crate::theme::Theme;
 
 const HEADER_HEIGHT: Pixels = px(36.);
 const DROP_ZONE_HEIGHT: Pixels = px(96.);
+/// The placeholder's height in an empty column, where there's no dragged card to measure.
+const EMPTY_SLOT_HEIGHT: f32 = 56.;
+/// How long siblings take to slide out of the way of the placeholder.
+const SHIFT_DURATION: Duration = Duration::from_millis(150);
 
 /// Renders the selected project's board. Counts and cards come from one grouping of `tasks`,
 /// so a header can't disagree with the cards under it.
@@ -30,8 +33,6 @@ pub(super) fn render(
 ) -> impl IntoElement {
     let columns = status_columns(tasks, &project.visible_statuses());
     let today = CalendarDate::utc_today();
-    let layout = drag.layout.clone();
-    let dragged = drag.dragged();
     #[cfg(not(debug_assertions))]
     let _ = cx;
     let root = div()
@@ -70,25 +71,16 @@ pub(super) fn render(
                 .flex_1()
                 .min_h_0()
                 .gap(theme.spacing.sm)
-                .on_children_prepainted({
-                    let layout = layout.clone();
-                    let statuses: Vec<Status> =
-                        columns.iter().map(|column| column.status).collect();
-                    move |bounds, _, _| {
-                        let columns = statuses
-                            .iter()
-                            .zip(bounds)
-                            .map(|(&status, bounds)| ColumnSlot {
-                                status,
-                                bounds: dragging::rect(bounds),
-                            })
-                            .collect();
-                        layout.borrow_mut().set_columns(columns);
-                    }
-                })
-                .children(columns.iter().enumerate().map(|(index, column)| {
-                    column_view(index, column, theme, today, &layout, dragged, cx)
-                })),
+                .on_children_prepainted(record_columns(
+                    &drag.layout,
+                    columns.iter().map(|column| column.status).collect(),
+                ))
+                .children(
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(index, column)| column_view(index, column, theme, today, drag, cx)),
+                ),
         );
     #[cfg(debug_assertions)]
     let root = root.child(debug_controls(theme, cx, drag.last_exit()));
@@ -100,8 +92,7 @@ fn column_view(
     column: &StatusColumn<'_>,
     theme: &Theme,
     today: CalendarDate,
-    layout: &Rc<RefCell<BoardLayout>>,
-    dragged: Option<TaskId>,
+    drag: &DragSession,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
     div()
@@ -115,7 +106,7 @@ fn column_view(
         .border_1()
         .border_color(theme.palette.border)
         .child(header(column, theme))
-        .child(body(index, column, theme, today, layout, dragged, cx))
+        .child(body(index, column, theme, today, drag, cx))
 }
 
 fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
@@ -140,15 +131,71 @@ fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
 }
 
 /// The scrollable card area. Only this part scrolls, so the header stays put.
+///
+/// The items come from `column_sequence`, the same function the drop uses. While a card is being
+/// dragged over this column, the placeholder sits at the landing index, and the card under the
+/// drag leaves its slot if the drag is in this column.
 fn body(
     index: usize,
     column: &StatusColumn<'_>,
     theme: &Theme,
     today: CalendarDate,
-    layout: &Rc<RefCell<BoardLayout>>,
-    dragged: Option<TaskId>,
+    drag: &DragSession,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
+    let session = drag.session();
+    let status = column.status;
+    let dragged = drag.dragged();
+    let source = session.source();
+    let source_task = source
+        .filter(|source| source.status == status)
+        .map(|s| s.task);
+    let ids: Vec<TaskId> = column.tasks.iter().map(|task| task.id()).collect();
+
+    let now = session
+        .landing()
+        .filter(|landing| landing.status == status)
+        .map(|landing| landing.index);
+    let before = session
+        .previous()
+        .filter(|landing| landing.status == status)
+        .map(|landing| landing.index);
+    let sequence = column_sequence(&ids, source_task.filter(|_| now.is_some()), now);
+    let earlier = column_sequence(&ids, source_task.filter(|_| before.is_some()), before);
+
+    // The placeholder is as tall as the card it stands in for, or a fixed height in an empty column.
+    let others = ids.iter().filter(|id| Some(**id) != source_task).count();
+    let placeholder_height = match source {
+        Some(source) if others > 0 => source.height,
+        _ => EMPTY_SLOT_HEIGHT,
+    };
+
+    let gap = f32::from(theme.spacing.xs);
+    let (tops, earlier_tops) = {
+        let layout = drag.layout.borrow();
+        let heights = |sequence: &[Slot]| -> Vec<f32> {
+            sequence
+                .iter()
+                .map(|slot| match slot {
+                    Slot::Task(task) => layout
+                        .card(*task)
+                        .map_or(placeholder_height, |card| card.bounds.height),
+                    Slot::Placeholder => placeholder_height,
+                })
+                .collect()
+        };
+        (
+            stack_tops(&heights(&sequence), gap),
+            stack_tops(&heights(&earlier), gap),
+        )
+    };
+
+    // Each item slides from where it was in the last landing to where it is now.
+    let key_base = format!(
+        "shift-{}-{}",
+        status.as_str(),
+        now.map_or("none".to_string(), |index| index.to_string())
+    );
     let content = div()
         .flex()
         .flex_col()
@@ -157,48 +204,85 @@ fn body(
         .gap(theme.spacing.xs)
         .p(theme.spacing.xs);
 
-    // The cards' bounds are recorded for the drop target. An empty column's child is the drop
-    // zone, which pairs with no ids, so the column ends up with no cards.
-    let ids: Vec<TaskId> = column.tasks.iter().map(|task| task.id()).collect();
-    let status = column.status;
-    let layout = layout.clone();
-    let content = if column.tasks.is_empty() {
+    let content = if sequence.is_empty() {
         content.child(drop_zone(index, theme))
     } else {
-        content.children(
-            column
-                .tasks
+        let items = sequence.iter().enumerate().map(|(position, slot)| {
+            let offset = earlier
                 .iter()
-                .map(|task| card_slot(task, today, theme, dragged, cx)),
-        )
+                .position(|earlier_slot| earlier_slot == slot)
+                .map_or(0.0, |earlier_position| {
+                    earlier_tops[earlier_position] - tops[position]
+                });
+            let key = SharedString::from(format!("{key_base}-{position}"));
+            match slot {
+                Slot::Task(id) => {
+                    let task = column
+                        .tasks
+                        .iter()
+                        .find(|task| task.id() == *id)
+                        .expect("the sequence only holds this column's tasks");
+                    shifted(card_slot(task, today, theme, dragged, cx), key, offset)
+                }
+                Slot::Placeholder => shifted(placeholder(placeholder_height, theme), key, offset),
+            }
+        });
+        content.children(items)
     };
-    content
-        .on_children_prepainted(move |bounds, _, _| {
-            let cards = ids
-                .iter()
-                .copied()
-                .zip(bounds)
-                .map(|(task, bounds)| CardSlot {
-                    task,
-                    status,
-                    bounds: dragging::rect(bounds),
-                })
-                .collect();
-            layout.borrow_mut().set_cards(status, cards);
+
+    let slots: Vec<Option<TaskId>> = sequence
+        .iter()
+        .map(|slot| match slot {
+            Slot::Task(task) => Some(*task),
+            Slot::Placeholder => None,
         })
+        .collect();
+    content
+        .on_children_prepainted(record_cards(&drag.layout, status, slots))
         .id(("column-body", index as u64))
         .overflow_y_scroll()
 }
 
-/// A card with a press handler. The card under a drag is dimmed where it sits, so the column
-/// doesn't reflow.
+/// Glides an item the given distance from its place to its place now, so siblings slide to make
+/// room for the placeholder instead of jumping.
+///
+/// The item sits inside a plain wrapper, and only the item moves. The wrapper keeps its place in
+/// the layout, so the paint callbacks still record the resting positions the drop reads.
+fn shifted(element: Div, key: SharedString, offset: f32) -> Div {
+    let item = if offset.abs() < 0.5 {
+        element.into_any_element()
+    } else {
+        element
+            .with_animation(
+                key,
+                Animation::new(SHIFT_DURATION).with_easing(ease_out_quint()),
+                move |element, delta| element.relative().top(px(offset * (1.0 - delta))),
+            )
+            .into_any_element()
+    };
+    div().child(item)
+}
+
+/// The slot the dragged card would land in, shown while the drag is over this column.
+fn placeholder(height: f32, theme: &Theme) -> Div {
+    div()
+        .flex_shrink_0()
+        .h(px(height))
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_dashed()
+        .border_color(theme.palette.border_control)
+}
+
+/// A card with a press handler. The card under a drag is dimmed where it sits, unless the
+/// placeholder has taken its place.
 fn card_slot(
     task: &Task,
     today: CalendarDate,
     theme: &Theme,
     dragged: Option<TaskId>,
     cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement + use<> {
+) -> Div {
     let id = task.id();
     div()
         .when(dragged == Some(id), |slot| slot.opacity(0.4))
@@ -298,6 +382,7 @@ fn exit_text(exit: Option<Exit>) -> String {
             status_label(result.status),
             result.index
         ),
+        Some(Exit::Unchanged) => "Last drop: same place, nothing saved".to_string(),
         Some(Exit::Cancelled(reason)) => format!("Last drag cancelled: {reason:?}"),
     }
 }

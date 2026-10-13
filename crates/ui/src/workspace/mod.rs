@@ -7,6 +7,8 @@ mod columns;
 mod delete;
 mod drag;
 mod dragging;
+mod landing;
+mod layout;
 mod preferences_panel;
 mod project_state;
 mod projects;

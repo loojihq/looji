@@ -1,16 +1,22 @@
-//! The drag state machine. Pure logic: timestamped input goes in, effects come out. Nothing here
-//! touches gpui, so the timing and thresholds are tested directly.
+//! The drag. A state machine turns timestamped input into press, lift, follow, and release, and a
+//! session on top of it tracks where the card would land. Nothing here touches gpui, so the
+//! timing, thresholds, and drop results are tested directly.
 //!
 //! A press on a card does one of three things:
 //! - released before [`LONG_PRESS`] without moving: a click, which opens the card;
 //! - held still for [`LONG_PRESS`]: the card lifts and follows the pointer;
 //! - moved fast from the start (a flick), mostly sideways: the card lifts at once.
 //!
-//! A release while lifted drops the card. Every other exit is an [`Input::Cancel`].
+//! While lifted, every move recomputes the landing and stores it. A release commits the stored
+//! landing, not one recomputed from the release position, so the drop is what was on screen.
+//! Every other exit is an [`Input::Cancel`].
 
 use std::time::Duration;
 
 use looji_domain::{Status, TaskId};
+
+use super::landing::{Landing, landing_at};
+use super::layout::{BoardLayout, Point};
 
 /// How far the pointer may move, in logical pixels, before the press counts as a move.
 pub const SLOP: f32 = 6.0;
@@ -20,47 +26,6 @@ pub const LONG_PRESS: Duration = Duration::from_millis(450);
 pub const FLICK_SPEED: f32 = 1200.0;
 /// How much recent movement a flick is measured over.
 pub const FLICK_WINDOW: Duration = Duration::from_millis(100);
-
-/// A point in logical pixels, relative to the window.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Point {
-    fn distance(self, other: Point) -> f32 {
-        (self.x - other.x).hypot(self.y - other.y)
-    }
-
-    fn minus(self, other: Point) -> Point {
-        Point {
-            x: self.x - other.x,
-            y: self.y - other.y,
-        }
-    }
-}
-
-/// A rectangle in logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Rect {
-    pub origin: Point,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Rect {
-    fn contains(&self, point: Point) -> bool {
-        point.x >= self.origin.x
-            && point.x < self.origin.x + self.width
-            && point.y >= self.origin.y
-            && point.y < self.origin.y + self.height
-    }
-
-    fn mid_y(&self) -> f32 {
-        self.origin.y + self.height / 2.0
-    }
-}
 
 /// Why a drag ended without a drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +41,34 @@ pub enum CancelReason {
     CaptureLost,
     /// The release was inside the window but outside every column.
     NoDropTarget,
+}
+
+/// A card that was moved to a new place: the status column and the index among its other cards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropResult {
+    pub task: TaskId,
+    pub status: Status,
+    pub index: usize,
+}
+
+/// How a drag ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))] // The fields are read by the debug controls only.
+pub enum Exit {
+    Dropped(DropResult),
+    /// Released where the card already was. Nothing is written.
+    Unchanged,
+    Cancelled(CancelReason),
+}
+
+/// Where the lifted card came from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Source {
+    pub task: TaskId,
+    pub status: Status,
+    /// The index among the column's cards, counting the card itself.
+    pub index: usize,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -101,6 +94,7 @@ pub enum Input {
     Cancel(CancelReason),
 }
 
+/// What the state machine decides. [`Drag`] turns these into [`Command`]s.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Effect {
     /// Start the long-press timer, then send [`Input::Tick`] with this generation.
@@ -122,6 +116,16 @@ pub enum Effect {
         pointer: Point,
     },
     Cancel(CancelReason),
+}
+
+/// What the workspace should do after an input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Command {
+    ArmTimer { generation: u64, after: Duration },
+    OpenCard(TaskId),
+    Lift(TaskId),
+    Follow,
+    End(Exit),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -304,50 +308,119 @@ fn is_flick(recent: &[(Point, Duration)]) -> bool {
     speed > FLICK_SPEED && dx.abs() >= dy.abs()
 }
 
-/// A column on the board, in logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ColumnSlot {
-    pub status: Status,
-    pub bounds: Rect,
+/// The drag as the workspace sees it: the machine, plus where the card came from and where it
+/// would land.
+#[derive(Debug, Default)]
+pub struct Drag {
+    machine: DragMachine,
+    source: Option<Source>,
+    /// Recomputed on every move while lifted. The release commits this, not a fresh calculation.
+    landing: Option<Landing>,
+    /// The landing before the most recent change, so the board can animate from it.
+    previous: Option<Landing>,
 }
 
-/// A card on the board, in the order it appears in its column.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CardSlot {
-    pub task: TaskId,
-    pub status: Status,
-    pub bounds: Rect,
+impl Drag {
+    /// Feeds one input and returns what the workspace should do. `layout` is the board as the
+    /// last paint measured it.
+    pub fn feed(&mut self, input: Input, layout: &BoardLayout) -> Vec<Command> {
+        let mut commands = Vec::new();
+        for effect in self.machine.feed(input) {
+            match effect {
+                Effect::ArmTimer { generation, after } => {
+                    commands.push(Command::ArmTimer { generation, after })
+                }
+                Effect::OpenCard(task) => commands.push(Command::OpenCard(task)),
+                Effect::Lift { card, pointer, .. } => {
+                    self.source = source_of(card, layout);
+                    self.track(pointer, layout);
+                    commands.push(Command::Lift(card));
+                }
+                Effect::Follow { pointer } => {
+                    self.track(pointer, layout);
+                    commands.push(Command::Follow);
+                }
+                Effect::Drop { card, .. } => {
+                    let exit = self.finish(card);
+                    commands.push(Command::End(exit));
+                }
+                Effect::Cancel(reason) => {
+                    self.clear();
+                    commands.push(Command::End(Exit::Cancelled(reason)));
+                }
+            }
+        }
+        commands
+    }
+
+    /// The lifted card and the top-left corner of its overlay.
+    pub fn lifted_at(&self) -> Option<(TaskId, Point)> {
+        self.machine.lifted_at()
+    }
+
+    pub fn source(&self) -> Option<Source> {
+        self.source
+    }
+
+    pub fn landing(&self) -> Option<Landing> {
+        self.landing
+    }
+
+    pub fn previous(&self) -> Option<Landing> {
+        self.previous
+    }
+
+    /// Stores the landing for `pointer`. Only the last change is kept as `previous`.
+    fn track(&mut self, pointer: Point, layout: &BoardLayout) {
+        let Some(source) = self.source else {
+            return;
+        };
+        let landing = landing_at(layout, source.task, pointer, self.landing);
+        if landing != self.landing {
+            self.previous = self.landing;
+            self.landing = landing;
+        }
+    }
+
+    /// Commits the stored landing. Dropping on the source's own index is a no-op.
+    fn finish(&mut self, card: TaskId) -> Exit {
+        let exit = match (self.source, self.landing) {
+            (Some(source), Some(landing))
+                if landing.status == source.status && landing.index == source.index =>
+            {
+                Exit::Unchanged
+            }
+            (_, Some(landing)) => Exit::Dropped(DropResult {
+                task: card,
+                status: landing.status,
+                index: landing.index,
+            }),
+            (_, None) => Exit::Cancelled(CancelReason::NoDropTarget),
+        };
+        self.clear();
+        exit
+    }
+
+    fn clear(&mut self) {
+        self.source = None;
+        self.landing = None;
+        self.previous = None;
+    }
 }
 
-/// Where a drag landed: the status column and the index among that column's other cards.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DropResult {
-    pub task: TaskId,
-    pub status: Status,
-    pub index: usize,
-}
-
-/// The column under the pointer, and the index for the card there: the number of other cards
-/// whose midpoint is above the pointer. `None` if the pointer is outside every column.
-pub fn resolve_drop(
-    dragged: TaskId,
-    pointer: Point,
-    columns: &[ColumnSlot],
-    cards: &[CardSlot],
-) -> Option<DropResult> {
-    let column = columns
+/// The source of a card: its column and its position there. `None` if it isn't on the board.
+fn source_of(task: TaskId, layout: &BoardLayout) -> Option<Source> {
+    let slot = layout.card(task)?;
+    let index = layout
+        .cards
         .iter()
-        .find(|column| column.bounds.contains(pointer))?;
-    let index = cards
-        .iter()
-        .filter(|card| {
-            card.status == column.status && card.task != dragged && card.bounds.mid_y() < pointer.y
-        })
-        .count();
-    Some(DropResult {
-        task: dragged,
-        status: column.status,
+        .filter(|card| card.status == slot.status)
+        .position(|card| card.task == task)?;
+    Some(Source {
+        task,
+        status: slot.status,
         index,
+        height: slot.bounds.height,
     })
 }
 
@@ -360,9 +433,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CancelReason, CardSlot, ColumnSlot, DragMachine, Effect, Input, LONG_PRESS, Point, Rect,
-        resolve_drop,
+        CancelReason, Command, Drag, DragMachine, DropResult, Effect, Exit, Input, LONG_PRESS,
     };
+    use crate::workspace::layout::{BoardLayout, CardSlot, ColumnSlot, Point, Rect};
 
     fn task(n: u128) -> TaskId {
         TaskId::from_uuid(Uuid::from_u128(n))
@@ -627,69 +700,308 @@ mod tests {
         ));
     }
 
-    fn column(status: Status, x: f32) -> ColumnSlot {
-        ColumnSlot {
+    // The board for the drag tests. Todo has A (top 0), D (top 60), and B (top 120), each 50 px
+    // tall, and Done is empty. Column Todo spans x 0–100 and Done spans x 120–220.
+    fn board() -> BoardLayout {
+        board_with(&[(1, 0.0), (2, 60.0), (3, 120.0)])
+    }
+
+    /// The same board with a card at each `(task, top)` in Todo.
+    fn board_with(cards: &[(u128, f32)]) -> BoardLayout {
+        let card = |n: u128, y: f32| CardSlot {
+            task: task(n),
+            status: Status::Todo,
+            bounds: Rect {
+                origin: point(0.0, y),
+                width: 100.0,
+                height: 50.0,
+            },
+        };
+        let column = |status: Status, x: f32| ColumnSlot {
             status,
             bounds: Rect {
                 origin: point(x, 0.0),
                 width: 100.0,
                 height: 500.0,
             },
+        };
+        BoardLayout {
+            columns: vec![column(Status::Todo, 0.0), column(Status::Done, 120.0)],
+            cards: cards.iter().map(|&(n, y)| card(n, y)).collect(),
         }
     }
 
-    fn card(n: u128, status: Status, y: f32) -> CardSlot {
-        CardSlot {
-            task: task(n),
-            status,
-            bounds: Rect {
-                origin: point(0.0, y),
-                width: 100.0,
-                height: 50.0,
+    /// Presses D (task 2) at its origin, holds it until it lifts, and returns the drag.
+    fn lifted_d(layout: &BoardLayout) -> Drag {
+        let mut drag = Drag::default();
+        drag.feed(
+            Input::Down {
+                card: task(2),
+                pointer: point(50.0, 85.0),
+                card_origin: point(0.0, 60.0),
+                at: at(0),
             },
+            layout,
+        );
+        let commands = drag.feed(Input::Tick { generation: 1 }, layout);
+        assert_eq!(commands, [Command::Lift(task(2))]);
+        drag
+    }
+
+    fn end_of(commands: &[Command]) -> Exit {
+        match commands {
+            [Command::End(exit)] => *exit,
+            other => panic!("expected the drag to end, got {other:?}"),
         }
     }
 
     #[test]
-    fn a_drop_outside_every_column_has_no_target() {
-        let columns = [column(Status::Todo, 0.0)];
+    fn lifting_keeps_the_placeholder_at_the_source_index() {
+        let layout = board();
+        let drag = lifted_d(&layout);
+        let source = drag.source().expect("the card has a source");
+        assert_eq!(source.index, 1);
+        assert_eq!(drag.landing().map(|landing| landing.index), Some(1));
+    }
+
+    #[test]
+    fn the_placeholder_index_is_the_drop_index_at_the_top() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 5.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        assert_eq!(drag.landing().map(|l| l.index), Some(0));
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(50.0, 5.0),
+            },
+            &layout,
+        ));
         assert_eq!(
-            resolve_drop(task(9), point(500.0, 10.0), &columns, &[]),
-            None
+            exit,
+            Exit::Dropped(DropResult {
+                task: task(2),
+                status: Status::Todo,
+                index: 0
+            })
         );
     }
 
     #[test]
-    fn a_drop_in_an_empty_column_is_index_zero() {
-        let columns = [column(Status::Todo, 0.0), column(Status::Done, 120.0)];
-        let result = resolve_drop(task(9), point(150.0, 200.0), &columns, &[]).unwrap();
-        assert_eq!(result.status, Status::Done);
-        assert_eq!(result.index, 0);
-        assert_eq!(result.task, task(9));
+    fn the_placeholder_index_is_the_drop_index_in_the_middle() {
+        // D is dragged from index 1 of four. Past B's band and before C's, D lands at index 2.
+        let layout = board_with(&[(1, 0.0), (2, 60.0), (3, 120.0), (4, 180.0)]);
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 170.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        let landing = drag.landing().map(|l| l.index);
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(50.0, 170.0),
+            },
+            &layout,
+        ));
+        assert_eq!(landing, Some(2));
+        assert_eq!(
+            exit,
+            Exit::Dropped(DropResult {
+                task: task(2),
+                status: Status::Todo,
+                index: 2
+            })
+        );
     }
 
     #[test]
-    fn the_index_counts_cards_whose_midpoint_is_above_the_pointer() {
-        let columns = [column(Status::Todo, 0.0)];
-        let cards = [
-            card(1, Status::Todo, 0.0),   // midpoint 25
-            card(2, Status::Todo, 60.0),  // midpoint 85
-            card(3, Status::Todo, 120.0), // midpoint 145
-        ];
-        let result = resolve_drop(task(9), point(50.0, 100.0), &columns, &cards).unwrap();
-        assert_eq!(result.index, 2);
-        assert_eq!(result.status, Status::Todo);
+    fn the_middle_of_a_three_card_column_is_the_source_position() {
+        // With three cards, D's middle is its own slot, so there's nothing to write.
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 130.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(50.0, 130.0),
+            },
+            &layout,
+        ));
+        assert_eq!(exit, Exit::Unchanged);
     }
 
     #[test]
-    fn the_dragged_card_is_not_counted_and_other_columns_are_ignored() {
-        let columns = [column(Status::Todo, 0.0)];
-        let cards = [
-            card(9, Status::Todo, 0.0),   // the card being dragged
-            card(2, Status::Done, 60.0),  // a card in another column
-            card(3, Status::Todo, 120.0), // below the pointer
-        ];
-        let result = resolve_drop(task(9), point(50.0, 100.0), &columns, &cards).unwrap();
-        assert_eq!(result.index, 0);
+    fn the_placeholder_index_is_the_drop_index_at_the_bottom() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 400.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(50.0, 400.0),
+            },
+            &layout,
+        ));
+        assert_eq!(
+            exit,
+            Exit::Dropped(DropResult {
+                task: task(2),
+                status: Status::Todo,
+                index: 2
+            })
+        );
+    }
+
+    #[test]
+    fn the_placeholder_index_is_the_drop_index_in_an_empty_column() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(150.0, 200.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(150.0, 200.0),
+            },
+            &layout,
+        ));
+        assert_eq!(
+            exit,
+            Exit::Dropped(DropResult {
+                task: task(2),
+                status: Status::Done,
+                index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn releasing_over_the_source_position_is_a_no_op() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 400.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 85.0),
+                at: at(200),
+            },
+            &layout,
+        );
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(50.0, 85.0),
+            },
+            &layout,
+        ));
+        assert_eq!(exit, Exit::Unchanged);
+    }
+
+    #[test]
+    fn the_drop_uses_the_last_stored_landing_not_the_release_position() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        // The last move leaves the landing at the top.
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 5.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        // The release arrives at a spot that would land lower. It must be ignored.
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(50.0, 400.0),
+            },
+            &layout,
+        ));
+        assert_eq!(
+            exit,
+            Exit::Dropped(DropResult {
+                task: task(2),
+                status: Status::Todo,
+                index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn a_release_after_the_drag_has_no_landing_is_cancelled() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(500.0, 200.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        let exit = end_of(&drag.feed(
+            Input::Up {
+                pointer: point(500.0, 200.0),
+            },
+            &layout,
+        ));
+        assert_eq!(exit, Exit::Cancelled(CancelReason::NoDropTarget));
+    }
+
+    #[test]
+    fn escape_ends_the_drag_and_clears_the_landing() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 400.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        let exit = end_of(&drag.feed(Input::Cancel(CancelReason::Escape), &layout));
+        assert_eq!(exit, Exit::Cancelled(CancelReason::Escape));
+        assert!(drag.landing().is_none());
+        assert!(drag.source().is_none());
+    }
+
+    #[test]
+    fn the_previous_landing_is_kept_for_the_animation() {
+        let layout = board();
+        let mut drag = lifted_d(&layout);
+        drag.feed(
+            Input::Move {
+                pointer: point(50.0, 5.0),
+                at: at(100),
+            },
+            &layout,
+        );
+        assert_eq!(drag.previous().map(|l| l.index), Some(1));
+        assert_eq!(drag.landing().map(|l| l.index), Some(0));
     }
 }

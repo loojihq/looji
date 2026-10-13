@@ -1,4 +1,4 @@
-//! The pointer side of drag. It feeds window input to the drag machine in `drag.rs`, starts the
+//! The pointer side of drag. It feeds window input to the drag session in `drag.rs`, starts the
 //! long-press timer, draws the lifted card, and routes every exit through [`WorkspaceView::end_drag`].
 //!
 //! Touch arrives here as mouse input. gpui 0.2.2 on Windows has no touch or pointer API, and
@@ -15,47 +15,14 @@ use looji_domain::{Status, TaskId};
 use super::WorkspaceView;
 use super::board::card_view;
 use super::card::{CalendarDate, CardDensity, task_card};
-use super::drag::{
-    self as drag, CancelReason, CardSlot, ColumnSlot, DragMachine, DropResult, Effect, Input,
-    resolve_drop,
-};
+use super::drag::{CancelReason, Command, Drag, Exit, Input};
+use super::layout::{BoardLayout, CardSlot, ColumnSlot, Point as DragPoint, Rect};
 use crate::theme::Theme;
-
-/// What the last paint measured, in window coordinates. Drop targets are resolved from this.
-#[derive(Default)]
-pub(super) struct BoardLayout {
-    columns: Vec<ColumnSlot>,
-    cards: Vec<CardSlot>,
-}
-
-impl BoardLayout {
-    fn card(&self, task: TaskId) -> Option<&CardSlot> {
-        self.cards.iter().find(|card| card.task == task)
-    }
-
-    pub(super) fn set_columns(&mut self, columns: Vec<ColumnSlot>) {
-        self.columns = columns;
-    }
-
-    /// Replaces the cards of one column. Other columns keep their cards from the same paint.
-    pub(super) fn set_cards(&mut self, status: Status, cards: Vec<CardSlot>) {
-        self.cards.retain(|card| card.status != status);
-        self.cards.extend(cards);
-    }
-}
-
-/// How a drag ended. Kept after the drag so the debug controls can show it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
-pub(super) enum Exit {
-    Dropped(DropResult),
-    Cancelled(CancelReason),
-}
 
 /// The drag state owned by the workspace view.
 #[derive(Default)]
 pub(super) struct DragSession {
-    machine: DragMachine,
+    session: Drag,
     /// The long-press timer. Dropping it cancels the timer.
     timer: Option<Task<()>>,
     /// Ends the drag if the window stops being active. Dropped when the drag ends.
@@ -69,9 +36,14 @@ pub(super) struct DragSession {
 }
 
 impl DragSession {
+    /// The drag as it stands: the source, and the landing the placeholder shows.
+    pub(super) fn session(&self) -> &Drag {
+        &self.session
+    }
+
     /// The card being dragged, once it has lifted. The board dims its slot.
     pub(super) fn dragged(&self) -> Option<TaskId> {
-        self.machine.lifted_at().map(|(card, _)| card)
+        self.session.lifted_at().map(|(card, _)| card)
     }
 
     #[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
@@ -86,17 +58,17 @@ fn now() -> Duration {
     START.get_or_init(Instant::now).elapsed()
 }
 
-fn point(position: Point<Pixels>) -> drag::Point {
-    drag::Point {
+fn point(position: Point<Pixels>) -> DragPoint {
+    DragPoint {
         x: f32::from(position.x),
         y: f32::from(position.y),
     }
 }
 
 /// A painted rectangle, in the drag module's terms.
-pub(super) fn rect(bounds: Bounds<Pixels>) -> drag::Rect {
-    drag::Rect {
-        origin: drag::Point {
+fn rect(bounds: Bounds<Pixels>) -> Rect {
+    Rect {
+        origin: DragPoint {
             x: f32::from(bounds.origin.x),
             y: f32::from(bounds.origin.y),
         },
@@ -105,9 +77,52 @@ pub(super) fn rect(bounds: Bounds<Pixels>) -> drag::Rect {
     }
 }
 
+/// The painted columns, in the order the board lays them out.
+pub(super) fn record_columns(
+    layout: &Rc<RefCell<BoardLayout>>,
+    statuses: Vec<Status>,
+) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static {
+    let layout = layout.clone();
+    move |bounds, _, _| {
+        let columns = statuses
+            .iter()
+            .zip(bounds)
+            .map(|(&status, bounds)| ColumnSlot {
+                status,
+                bounds: rect(bounds),
+            })
+            .collect();
+        layout.borrow_mut().set_columns(columns);
+    }
+}
+
+/// The painted cards of one column. `slots` are the column's items in the order they were
+/// rendered, so `bounds` pairs with them one to one. The placeholder isn't a card, so it's skipped.
+pub(super) fn record_cards(
+    layout: &Rc<RefCell<BoardLayout>>,
+    status: Status,
+    slots: Vec<Option<TaskId>>,
+) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static {
+    let layout = layout.clone();
+    move |bounds, _, _| {
+        let cards = slots
+            .iter()
+            .zip(bounds)
+            .filter_map(|(task, bounds)| {
+                task.map(|task| CardSlot {
+                    task,
+                    status,
+                    bounds: rect(bounds),
+                })
+            })
+            .collect();
+        layout.borrow_mut().set_cards(status, cards);
+    }
+}
+
 /// Whether a point is inside the window. Mouse moves and releases still arrive outside it
 /// while the button is held, so this is how leaving the window is detected.
-fn inside(window: &Window, point: drag::Point) -> bool {
+fn inside(window: &Window, point: DragPoint) -> bool {
     let size = window.viewport_size();
     point.x >= 0.0
         && point.y >= 0.0
@@ -143,7 +158,7 @@ pub(super) fn listeners(view: WeakEntity<WorkspaceView>) -> impl IntoElement {
 /// The lifted card, drawn above the board at the pointer minus the grab point. It has no
 /// handlers, so it doesn't take hits from the board.
 pub(super) fn overlay(view: &WorkspaceView, theme: &Theme) -> Option<AnyElement> {
-    let (card, top_left) = view.drag.machine.lifted_at()?;
+    let (card, top_left) = view.drag.session.lifted_at()?;
     let width = view.drag.overlay_width?;
     let task = view.board.iter().find(|task| task.id() == card)?;
     let today = CalendarDate::utc_today();
@@ -201,7 +216,7 @@ impl WorkspaceView {
     }
 
     fn pointer_moved(&mut self, event: &MouseMoveEvent, window: &Window, cx: &mut Context<Self>) {
-        if self.drag.machine.is_idle() {
+        if self.drag.activation.is_none() {
             return;
         }
         // Without the button held, the release was lost, so the drag can't finish normally.
@@ -216,7 +231,7 @@ impl WorkspaceView {
     }
 
     fn pointer_released(&mut self, event: &MouseUpEvent, window: &Window, cx: &mut Context<Self>) {
-        if self.drag.machine.is_idle() || event.button != MouseButton::Left {
+        if self.drag.activation.is_none() || event.button != MouseButton::Left {
             return;
         }
         let pointer = point(event.position);
@@ -231,23 +246,25 @@ impl WorkspaceView {
     /// Escape cancels a drag. Returns whether the key was used. Keys go through the focused
     /// element, so this is called from the workspace's key handler rather than a window listener.
     pub(super) fn key_pressed(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        if self.drag.machine.is_idle() || event.keystroke.key != "escape" {
+        if self.drag.activation.is_none() || event.keystroke.key != "escape" {
             return false;
         }
         self.drive_drag(Input::Cancel(CancelReason::Escape), cx);
         true
     }
 
-    /// Feeds one input to the machine and carries out what it asks for.
+    /// Feeds one input to the drag and carries out what it asks for.
     fn drive_drag(&mut self, input: Input, cx: &mut Context<Self>) {
-        for effect in self.drag.machine.feed(input) {
-            self.apply_effect(effect, cx);
+        let layout = self.drag.layout.clone();
+        let commands = self.drag.session.feed(input, &layout.borrow());
+        for command in commands {
+            self.apply_command(command, cx);
         }
     }
 
-    fn apply_effect(&mut self, effect: Effect, cx: &mut Context<Self>) {
-        match effect {
-            Effect::ArmTimer { generation, after } => {
+    fn apply_command(&mut self, command: Command, cx: &mut Context<Self>) {
+        match command {
+            Command::ArmTimer { generation, after } => {
                 self.drag.timer = Some(cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(after).await;
                     let _ = this.update(cx, |view, cx| {
@@ -255,8 +272,8 @@ impl WorkspaceView {
                     });
                 }));
             }
-            Effect::OpenCard(task) => open_card(task),
-            Effect::Lift { card, .. } => {
+            Command::OpenCard(task) => open_card(task),
+            Command::Lift(card) => {
                 self.drag.overlay_width = self
                     .drag
                     .layout
@@ -265,19 +282,8 @@ impl WorkspaceView {
                     .map(|slot| px(slot.bounds.width));
                 cx.notify();
             }
-            Effect::Follow { .. } => cx.notify(),
-            Effect::Drop { card, pointer } => {
-                let target = {
-                    let layout = self.drag.layout.borrow();
-                    resolve_drop(card, pointer, &layout.columns, &layout.cards)
-                };
-                let exit = match target {
-                    Some(result) => Exit::Dropped(result),
-                    None => Exit::Cancelled(CancelReason::NoDropTarget),
-                };
-                self.end_drag(exit, cx);
-            }
-            Effect::Cancel(reason) => self.end_drag(Exit::Cancelled(reason), cx),
+            Command::Follow => cx.notify(),
+            Command::End(exit) => self.end_drag(exit, cx),
         }
     }
 
