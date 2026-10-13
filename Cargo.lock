@@ -2177,14 +2177,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-template"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "windows 0.61.3",
-]
-
-[[package]]
 name = "gpui_collections"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2986,6 +2978,14 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 dependencies = [
  "serde_core",
  "value-bag",
+]
+
+[[package]]
+name = "looji"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "windows 0.61.3",
 ]
 
 [[package]]
