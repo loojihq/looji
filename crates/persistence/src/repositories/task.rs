@@ -69,8 +69,9 @@ impl TaskRepository for SqliteStore {
     }
 
     fn list_for_project(&self, project: ProjectId) -> RepoResult<Vec<Task>> {
-        let sql =
-            format!("SELECT {TASK_COLUMNS} FROM tasks WHERE project_id = ?1 ORDER BY position, id");
+        let sql = format!(
+            "SELECT {TASK_COLUMNS} FROM tasks WHERE project_id = ?1 ORDER BY position COLLATE BINARY, id"
+        );
         query_all(
             &self.connection,
             &sql,

@@ -295,10 +295,9 @@ impl WorkspaceView {
         self.drag.activation = None;
         self.drag.overlay_width = None;
         self.drag.last_exit = Some(exit);
-        // A drop in the same column is a reorder, which isn't persisted yet.
-        if let Exit::Dropped(result) = exit
-            && result.from != result.status
-        {
+        // Placed at a new index, in this column or another. A drop where the card already is
+        // never reaches here: it ends as `Exit::Unchanged`.
+        if let Exit::Dropped(result) = exit {
             self.commit_move(result, cx);
         }
         cx.notify();

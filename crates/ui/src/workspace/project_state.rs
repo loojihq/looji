@@ -96,11 +96,17 @@ mod tests {
     }
 
     fn task(store: &SqliteStore, project: &Project, title: &str) {
+        // Each task goes after the last, since keys are unique within a column.
+        let last = TaskRepository::list_for_project(store, project.id())
+            .unwrap()
+            .last()
+            .map(|task| task.position().as_str().to_string());
+        let key = looji_domain::after(last.as_deref()).unwrap();
         let task = Task::new(
             project.id(),
             title,
             Status::Todo,
-            Position::new("a0").unwrap(),
+            Position::new(key).unwrap(),
         )
         .unwrap();
         TaskRepository::save(store, &task).unwrap();

@@ -25,8 +25,10 @@ pub enum DomainError {
     InvalidId(String),
     #[error("the '{status}' column isn't shown on this project")]
     StatusNotVisible { status: String },
-    #[error("the task is already in that column")]
-    SameStatus,
+    #[error("'{key}' is not a valid position key")]
+    InvalidPositionKey { key: String },
+    #[error("the position before must sort before the position after")]
+    PositionsOutOfOrder,
     #[error("a workspace named '{name}' already exists")]
     DuplicateName { name: String },
     #[error("a project named '{name}' already exists in this workspace")]

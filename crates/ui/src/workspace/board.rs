@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gpui::{prelude::*, *};
 #[cfg(debug_assertions)]
-use looji_domain::{Position, TaskRepository, Timestamp};
+use looji_domain::{Position, TaskRepository};
 use looji_domain::{Project, Status, StatusColumn, Task, TaskId, status_columns};
 
 use super::WorkspaceView;
@@ -404,9 +404,16 @@ impl WorkspaceView {
         }
         let status = visible[self.board.len() % visible.len()];
         let title = format!("Sample task {}", self.board.len() + 1);
-        // Zero-padded timestamps sort in creation order.
-        let position = Position::new(format!("{:020}", Timestamp::now().unix_millis()))
-            .expect("timestamps are never empty");
+        // After the column's last task, so the sample lands at the end.
+        let last = self
+            .board
+            .iter()
+            .rev()
+            .find(|other| other.status() == status)
+            .map(|other| other.position().as_str().to_string());
+        let position =
+            Position::new(looji_domain::after(last.as_deref()).expect("stored keys are valid"))
+                .expect("keys are never empty");
         let task = Task::new(project, &title, status, position).expect("sample titles are valid");
         match TaskRepository::save(super::store(cx), &task) {
             Ok(()) => self.board.push(task),

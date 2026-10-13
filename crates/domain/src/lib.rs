@@ -7,6 +7,7 @@ mod activity;
 mod board;
 mod error;
 mod ids;
+mod ordering;
 mod position;
 pub mod preferences;
 mod project;
@@ -25,6 +26,9 @@ pub use activity::{ActivityKind, TaskActivity};
 pub use board::{Column, ColumnRecord};
 pub use error::{DomainError, RepoError, RepoResult};
 pub use ids::{ActivityId, ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
+pub use ordering::{
+    FIRST_KEY, REBALANCE_LENGTH, after, before, key_between, needs_rebalance, rebalance,
+};
 pub use position::Position;
 pub use preferences::{
     DefaultView, Preference, Preferences, Theme as PreferredTheme, UpdateChannel,

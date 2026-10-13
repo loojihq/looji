@@ -1,5 +1,5 @@
-//! Moving a task to another status column. The rules are checked here. The write, and the history
-//! entry that goes with it, live in persistence.
+//! Moving a task within or between status columns. The rules are checked here. The write, and the
+//! key that orders the task in its new place, live in persistence.
 
 use crate::{
     error::DomainError,
@@ -7,28 +7,28 @@ use crate::{
     status::Status,
 };
 
-/// A task moving from one status to another within one project.
+/// A task placed at `index` in the `to` column of one project. The index counts the column's
+/// other tasks, so it's the same index the drop placeholder showed. A move that keeps the status
+/// is a reorder within the column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskMove {
     task: TaskId,
     project: ProjectId,
     from: Status,
     to: Status,
+    index: usize,
 }
 
 impl TaskMove {
-    /// `visible` is the statuses shown on the project. Moving into a hidden column is rejected,
-    /// and so is a move to the column the task is already in.
+    /// `visible` is the statuses shown on the project. Moving into a hidden column is rejected.
     pub fn new(
         task: TaskId,
         project: ProjectId,
         from: Status,
         to: Status,
+        index: usize,
         visible: &[Status],
     ) -> Result<Self, DomainError> {
-        if from == to {
-            return Err(DomainError::SameStatus);
-        }
         if !visible.contains(&to) {
             return Err(DomainError::StatusNotVisible {
                 status: to.as_str().to_string(),
@@ -39,6 +39,7 @@ impl TaskMove {
             project,
             from,
             to,
+            index,
         })
     }
 
@@ -56,5 +57,9 @@ impl TaskMove {
 
     pub fn to(&self) -> Status {
         self.to
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
     }
 }
