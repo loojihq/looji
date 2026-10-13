@@ -1,0 +1,8 @@
+[package]
+name = "looji-domain"
+description = "Plain Rust domain types and rules. No GPUI or SQLite dependencies."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

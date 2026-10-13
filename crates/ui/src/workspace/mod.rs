@@ -1,12 +1,17 @@
-//! The root view of the main window.
+//! The root view of the main window: a title bar above a sidebar and main pane.
 
 use gpui::{prelude::*, *};
 
-use crate::{APP_NAME, theme::ActiveTheme, title_bar::TitleBar};
+use crate::{
+    APP_NAME,
+    theme::{ActiveTheme, Theme},
+    title_bar::TitleBar,
+};
 
+const SIDEBAR_WIDTH: Pixels = px(240.);
 const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1280.), px(800.));
-/// Same minimum as Zed, so the titlebar controls never overlap.
-const MIN_WINDOW_SIZE: Size<Pixels> = size(px(360.), px(240.));
+/// Below this the sidebar and main pane can't both render usefully.
+const MIN_WINDOW_SIZE: Size<Pixels> = size(px(640.), px(400.));
 
 pub struct Workspace;
 
@@ -49,11 +54,38 @@ impl Render for Workspace {
             .child(
                 div()
                     .flex()
+                    .flex_row()
                     .flex_1()
-                    .justify_center()
-                    .items_center()
-                    .text_xl()
-                    .child("Hello, World!"),
+                    .min_h_0()
+                    .child(sidebar(theme))
+                    .child(main_pane()),
             )
     }
+}
+
+fn sidebar(theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .w(SIDEBAR_WIDTH)
+        .h_full()
+        .p_3()
+        .bg(theme.panel_background)
+        .border_r_1()
+        .border_color(theme.border)
+        .text_sm()
+        .child("Sidebar")
+}
+
+fn main_pane() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .justify_center()
+        .items_center()
+        .text_xl()
+        .child("Main pane")
 }

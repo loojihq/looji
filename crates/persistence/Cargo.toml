@@ -1,0 +1,12 @@
+[package]
+name = "looji-persistence"
+description = "SQLite storage for looji."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+looji-domain.workspace = true
+directories = "6"
+rusqlite = { version = "0.40", features = ["bundled"] }
+thiserror = "2"
