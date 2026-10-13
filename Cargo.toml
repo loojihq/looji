@@ -1,0 +1,10 @@
+[package]
+name = "gpui-template"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui = "0.2.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61.3", features = ["Wdk_System_SystemServices", "Win32_System_SystemInformation"] }
