@@ -4,6 +4,7 @@ pub mod icons;
 mod migrations;
 mod repositories;
 mod schema;
+mod status_visibility;
 mod store;
 mod workspace_delete;
 
@@ -18,6 +19,7 @@ use std::{
 
 pub use migrations::{Migration, migrate};
 pub use rusqlite::Connection;
+pub use status_visibility::VisibilityError;
 pub use store::SqliteStore;
 use thiserror::Error;
 

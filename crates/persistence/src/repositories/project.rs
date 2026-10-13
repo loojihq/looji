@@ -14,8 +14,9 @@ fn read_project(row: &Row<'_>) -> RepoResult<ProjectRecord> {
         workspace_id: read_id(row, 1, WorkspaceId::from_uuid)?,
         name: get(row, 2)?,
         description: get(row, 3)?,
-        created_at: read_timestamp(row, 4)?,
-        updated_at: read_timestamp(row, 5)?,
+        show_in_review: get(row, 4)?,
+        created_at: read_timestamp(row, 5)?,
+        updated_at: read_timestamp(row, 6)?,
     })
 }
 
@@ -28,14 +29,17 @@ fn save_error(err: rusqlite::Error) -> RepoError {
     }
 }
 
-const PROJECT_COLUMNS: &str = "id, workspace_id, name, description, created_at, updated_at";
+const PROJECT_COLUMNS: &str =
+    "id, workspace_id, name, description, show_in_review, created_at, updated_at";
 
 impl ProjectRepository for SqliteStore {
+    /// Inserts or updates the name and description. The column flags are written only on insert:
+    /// later changes go through `SqliteStore::set_status_visible`, so a rename can't undo them.
     fn save(&self, project: &Project) -> RepoResult<()> {
         self.connection
             .execute(
-                "INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO projects (id, workspace_id, name, description, show_in_review, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT (id) DO UPDATE SET
                      name = excluded.name,
                      description = excluded.description,
@@ -45,6 +49,7 @@ impl ProjectRepository for SqliteStore {
                     id_text(project.workspace_id().as_uuid()),
                     project.name(),
                     project.description(),
+                    project.show_in_review(),
                     project.created_at().unix_millis(),
                     project.updated_at().unix_millis(),
                 ],

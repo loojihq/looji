@@ -12,6 +12,7 @@ mod project;
 pub mod repository;
 mod status;
 mod status_columns;
+mod status_visibility;
 mod task;
 mod team;
 mod time;
@@ -34,6 +35,7 @@ pub use repository::{
 };
 pub use status::Status;
 pub use status_columns::{StatusColumn, status_columns};
+pub use status_visibility::{check_hideable, resolve_visible_status, visible_statuses};
 pub use task::{Estimate, Task, TaskRecord};
 pub use team::{TeamMember, TeamMemberRecord};
 pub use time::Timestamp;

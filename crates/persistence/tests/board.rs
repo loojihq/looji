@@ -25,7 +25,7 @@ fn create(store: &SqliteStore, project: &Project, status: Status, key: &str) -> 
 /// Column counts in `Status::ALL` order, read from what the board would render.
 fn counts(store: &SqliteStore, project: &Project) -> Vec<usize> {
     let tasks = TaskRepository::list_for_project(store, project.id()).unwrap();
-    status_columns(&tasks)
+    status_columns(&tasks, &Status::ALL)
         .iter()
         .map(|column| column.count())
         .collect()
@@ -41,7 +41,7 @@ fn tasks_land_in_the_column_for_their_status() {
     create(&store, &website, Status::Done, "a3");
 
     // Backlog, Todo, InProgress, Done
-    assert_eq!(counts(&store, &website), vec![1, 2, 0, 1]);
+    assert_eq!(counts(&store, &website), vec![1, 2, 0, 0, 1]);
 }
 
 #[test]
@@ -50,13 +50,13 @@ fn counts_update_when_tasks_are_created_and_deleted() {
     let website = project(&store, "Website");
     let first = create(&store, &website, Status::InProgress, "a0");
     create(&store, &website, Status::InProgress, "a1");
-    assert_eq!(counts(&store, &website), vec![0, 0, 2, 0]);
+    assert_eq!(counts(&store, &website), vec![0, 0, 2, 0, 0]);
 
     TaskRepository::delete(&store, first.id()).unwrap();
-    assert_eq!(counts(&store, &website), vec![0, 0, 1, 0]);
+    assert_eq!(counts(&store, &website), vec![0, 0, 1, 0, 0]);
 
     create(&store, &website, Status::Done, "a2");
-    assert_eq!(counts(&store, &website), vec![0, 0, 1, 1]);
+    assert_eq!(counts(&store, &website), vec![0, 0, 1, 0, 1]);
 }
 
 #[test]
@@ -74,13 +74,13 @@ fn a_board_shows_only_its_own_projects_tasks() {
     create(&store, &api, Status::Todo, "a0");
     create(&store, &api, Status::Todo, "a1");
 
-    assert_eq!(counts(&store, &website), vec![0, 1, 0, 0]);
-    assert_eq!(counts(&store, &api), vec![0, 2, 0, 0]);
+    assert_eq!(counts(&store, &website), vec![0, 1, 0, 0, 0]);
+    assert_eq!(counts(&store, &api), vec![0, 2, 0, 0, 0]);
 }
 
 #[test]
 fn an_empty_project_has_four_zero_columns() {
     let store = store();
     let empty = project(&store, "Empty");
-    assert_eq!(counts(&store, &empty), vec![0, 0, 0, 0]);
+    assert_eq!(counts(&store, &empty), vec![0, 0, 0, 0, 0]);
 }

@@ -2,6 +2,7 @@
 
 mod avatar;
 mod board;
+mod columns;
 mod delete;
 mod preferences_panel;
 mod project_state;
@@ -56,6 +57,8 @@ pub struct WorkspaceView {
     board: Vec<Task>,
     /// The create-project dialog, while it's open.
     project_dialog: Option<ProjectDialog>,
+    /// A column hide waiting for confirmation.
+    pending_column: Option<columns::PendingColumn>,
 }
 
 impl WorkspaceView {
@@ -71,6 +74,7 @@ impl WorkspaceView {
                     projects: ProjectList::empty(),
                     board: Vec::new(),
                     project_dialog: None,
+                    pending_column: None,
                 };
                 view.reload_projects(cx);
                 view
@@ -243,6 +247,12 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_column.is_some() {
+            if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
+                self.cancel_column_hide(cx);
+            }
+            return;
+        }
         if self.project_dialog.is_some() {
             return self.project_dialog_key(event, cx);
         }
@@ -325,6 +335,10 @@ impl Render for WorkspaceView {
             .pending_delete
             .clone()
             .map(|pending| delete::dialog(&pending, &theme, cx).into_any_element());
+        let column_dialog = self
+            .pending_column
+            .clone()
+            .map(|pending| columns::dialog(&pending, &theme, cx));
         let project_dialog = self
             .project_dialog
             .clone()
@@ -351,6 +365,7 @@ impl Render for WorkspaceView {
             )
             .children(delete_dialog)
             .children(project_dialog)
+            .children(column_dialog)
     }
 }
 

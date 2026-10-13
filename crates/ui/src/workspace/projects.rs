@@ -57,7 +57,7 @@ impl WorkspaceView {
     }
 
     /// Loads the board for the selected project. Nothing is loaded when no project is selected.
-    fn reload_board(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reload_board(&mut self, cx: &mut Context<Self>) {
         self.board = match self.projects.active_id() {
             Some(project) => load_board(store(cx), project).unwrap_or_else(|err| {
                 self.status = Some(format!("Could not load the board: {err}"));

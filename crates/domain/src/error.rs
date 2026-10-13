@@ -17,6 +17,8 @@ pub enum DomainError {
     EstimateTooLarge,
     #[error("a position key can't be empty")]
     EmptyPosition,
+    #[error("the '{status}' column is always shown and can't be hidden")]
+    StatusNotHideable { status: String },
     #[error("'{0}' is not a valid status")]
     UnknownStatus(String),
     #[error("'{0}' is not a valid id")]

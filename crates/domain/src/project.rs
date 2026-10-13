@@ -1,6 +1,8 @@
 use crate::{
     error::DomainError,
     ids::{ProjectId, WorkspaceId},
+    status::Status,
+    status_visibility::check_hideable,
     time::Timestamp,
     validation::trimmed_text,
 };
@@ -14,6 +16,8 @@ pub struct Project {
     workspace_id: WorkspaceId,
     name: String,
     description: Option<String>,
+    /// Whether the In review column is shown. The defaults are always shown.
+    show_in_review: bool,
     created_at: Timestamp,
     updated_at: Timestamp,
 }
@@ -26,6 +30,7 @@ impl Project {
             workspace_id,
             name: trimmed_text(name, DomainError::EmptyName)?,
             description: None,
+            show_in_review: true,
             created_at: now,
             updated_at: now,
         })
@@ -41,6 +46,40 @@ impl Project {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn show_in_review(&self) -> bool {
+        self.show_in_review
+    }
+
+    /// Whether `status` has a column on this project's board. Defaults are always visible.
+    /// The statuses this project's board shows, in board order.
+    pub fn visible_statuses(&self) -> Vec<Status> {
+        Status::ALL
+            .into_iter()
+            .filter(|status| self.is_status_visible(*status))
+            .collect()
+    }
+
+    pub fn is_status_visible(&self, status: Status) -> bool {
+        match status {
+            Status::InReview => self.show_in_review,
+            other => other.is_default() || self.show_in_review,
+        }
+    }
+
+    /// Shows or hides an optional status column. Hiding a default fails. This only sets the
+    /// flag; moving the tasks in that column is the persistence layer's job, in the same
+    /// transaction.
+    pub fn set_status_visible(&mut self, status: Status, visible: bool) -> Result<(), DomainError> {
+        if !visible {
+            check_hideable(status)?;
+        }
+        if status == Status::InReview {
+            self.show_in_review = visible;
+            self.updated_at = Timestamp::now();
+        }
+        Ok(())
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -112,6 +151,7 @@ pub struct ProjectRecord {
     pub workspace_id: WorkspaceId,
     pub name: String,
     pub description: Option<String>,
+    pub show_in_review: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -125,6 +165,7 @@ impl TryFrom<ProjectRecord> for Project {
             workspace_id: record.workspace_id,
             name: trimmed_text(&record.name, DomainError::EmptyName)?,
             description: clean_description(record.description.as_deref())?,
+            show_in_review: record.show_in_review,
             created_at: record.created_at,
             updated_at: record.updated_at,
         })

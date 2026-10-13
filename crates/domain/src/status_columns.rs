@@ -20,9 +20,10 @@ impl StatusColumn<'_> {
 ///
 /// Always returns one column per status, in `Status::ALL` order, including empty ones. Every
 /// task appears in exactly one column.
-pub fn status_columns(tasks: &[Task]) -> Vec<StatusColumn<'_>> {
-    Status::ALL
-        .into_iter()
+pub fn status_columns<'a>(tasks: &'a [Task], visible: &[Status]) -> Vec<StatusColumn<'a>> {
+    visible
+        .iter()
+        .copied()
         .map(|status| StatusColumn {
             status,
             tasks: tasks
@@ -50,7 +51,7 @@ mod tests {
 
     #[test]
     fn always_returns_all_four_columns_in_order() {
-        let columns = status_columns(&[]);
+        let columns = status_columns(&[], &Status::ALL);
         let statuses: Vec<Status> = columns.iter().map(|column| column.status).collect();
         assert_eq!(statuses, Status::ALL.to_vec());
     }
@@ -58,7 +59,7 @@ mod tests {
     #[test]
     fn empty_columns_are_included_with_a_zero_count() {
         let tasks = [task(Status::Todo, "Write docs")];
-        let columns = status_columns(&tasks);
+        let columns = status_columns(&tasks, &Status::ALL);
 
         let done = columns
             .iter()
@@ -78,7 +79,7 @@ mod tests {
             task(Status::Done, "e"),
         ];
 
-        let columns = status_columns(&tasks);
+        let columns = status_columns(&tasks, &Status::ALL);
 
         let total: usize = columns.iter().map(StatusColumn::count).sum();
         assert_eq!(total, tasks.len());
@@ -100,7 +101,7 @@ mod tests {
     #[test]
     fn tasks_keep_the_order_they_were_given() {
         let tasks = [task(Status::Todo, "first"), task(Status::Todo, "second")];
-        let columns = status_columns(&tasks);
+        let columns = status_columns(&tasks, &Status::ALL);
         let titles: Vec<&str> = columns[1].tasks.iter().map(|task| task.title()).collect();
         assert_eq!(titles, vec!["first", "second"]);
     }

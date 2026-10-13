@@ -53,6 +53,17 @@ impl ProjectList {
         }
     }
 
+    /// Replaces a project with its stored copy. Keeps the selection.
+    pub fn replace(&mut self, project: Project) {
+        if let Some(slot) = self
+            .items
+            .iter_mut()
+            .find(|existing| existing.id() == project.id())
+        {
+            *slot = project;
+        }
+    }
+
     /// Adds a newly created project and selects it.
     pub fn add_and_select(&mut self, project: Project) {
         self.active = Some(project.id());

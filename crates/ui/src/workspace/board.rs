@@ -19,7 +19,7 @@ pub(super) fn render(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let columns = status_columns(tasks);
+    let columns = status_columns(tasks, &project.visible_statuses());
     #[cfg(not(debug_assertions))]
     let _ = cx;
     let root = div()
@@ -31,8 +31,17 @@ pub(super) fn render(
         .gap(theme.spacing.md)
         .child(
             div()
-                .text_size(theme.typography.heading)
-                .child(project.name().to_string()),
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap(theme.spacing.sm)
+                .child(
+                    div()
+                        .text_size(theme.typography.heading)
+                        .child(project.name().to_string()),
+                )
+                .child(column_toggle(project, theme, cx)),
         )
         .when_some(project.description(), |header, text| {
             header.child(
@@ -153,6 +162,7 @@ fn status_label(status: Status) -> &'static str {
         Status::Backlog => "Backlog",
         Status::Todo => "To do",
         Status::InProgress => "In progress",
+        Status::InReview => "In review",
         Status::Done => "Done",
     }
 }
@@ -192,7 +202,15 @@ impl WorkspaceView {
         let Some(project) = self.projects.active_id() else {
             return;
         };
-        let status = Status::ALL[self.board.len() % Status::ALL.len()];
+        let visible = self
+            .projects
+            .active()
+            .map(Project::visible_statuses)
+            .unwrap_or_default();
+        if visible.is_empty() {
+            return;
+        }
+        let status = visible[self.board.len() % visible.len()];
         let title = format!("Sample task {}", self.board.len() + 1);
         // Zero-padded timestamps sort in creation order.
         let position = Position::new(format!("{:020}", Timestamp::now().unix_millis()))
@@ -219,4 +237,34 @@ impl WorkspaceView {
         }
         cx.notify();
     }
+}
+
+/// The toggle for the optional In review column. Hiding a column that has tasks asks first.
+fn column_toggle(
+    project: &Project,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    let shown = project.is_status_visible(Status::InReview);
+    let label = if shown {
+        "In review column: shown"
+    } else {
+        "In review column: hidden"
+    };
+    div()
+        .id("column-toggle-in-review")
+        .flex_shrink_0()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        .child(label)
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.request_column_visibility(Status::InReview, !shown, cx);
+        }))
 }
