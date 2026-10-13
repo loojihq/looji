@@ -3,12 +3,12 @@
 use gpui::{prelude::*, *};
 use looji_domain::MAX_DESCRIPTION_CHARS;
 use looji_domain::{
-    DomainError, Project, ProjectId, ProjectRepository, RepoError, Task, clean_description,
+    DomainError, Project, ProjectId, ProjectRepository, RepoError, clean_description,
     validate_project_name,
 };
 
 use super::{
-    WorkspaceView,
+    WorkspaceView, board,
     project_state::{ProjectList, load_board},
     store, typed_text,
 };
@@ -272,7 +272,7 @@ pub(super) fn content(
 ) -> AnyElement {
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
-        Some(project) => board(project, &view.board, theme).into_any_element(),
+        Some(project) => board::render(project, &view.board, theme, cx).into_any_element(),
     }
 }
 
@@ -304,59 +304,6 @@ fn empty_workspace(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoE
                     this.open_project_dialog(window, cx);
                 })),
         )
-}
-
-fn board(project: &Project, tasks: &[Task], theme: &Theme) -> impl IntoElement {
-    let body: AnyElement = if tasks.is_empty() {
-        div()
-            .text_color(theme.palette.text_secondary)
-            .child("No tasks yet.")
-            .into_any_element()
-    } else {
-        div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.xs)
-            .children(tasks.iter().map(|task| {
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .px(theme.spacing.sm)
-                    .py(theme.spacing.xs)
-                    .rounded(theme.radius.md)
-                    .bg(theme.palette.surface_raised)
-                    .child(task.title().to_string())
-                    .child(
-                        div()
-                            .text_size(theme.typography.caption)
-                            .text_color(theme.palette.text_secondary)
-                            .child(task.status().as_str().to_string()),
-                    )
-            }))
-            .into_any_element()
-    };
-
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .p(theme.spacing.lg)
-        .gap(theme.spacing.md)
-        .child(
-            div()
-                .text_size(theme.typography.heading)
-                .child(project.name().to_string()),
-        )
-        .when_some(project.description(), |header, text| {
-            header.child(
-                div()
-                    .text_size(theme.typography.body)
-                    .text_color(theme.palette.text_secondary)
-                    .child(text.to_string()),
-            )
-        })
-        .child(body)
 }
 
 /// The create-project dialog, drawn over the window.

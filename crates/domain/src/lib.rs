@@ -11,6 +11,7 @@ pub mod preferences;
 mod project;
 pub mod repository;
 mod status;
+mod status_columns;
 mod task;
 mod team;
 mod time;
@@ -32,6 +33,7 @@ pub use repository::{
     WorkspaceRepository,
 };
 pub use status::Status;
+pub use status_columns::{StatusColumn, status_columns};
 pub use task::{Estimate, Task, TaskRecord};
 pub use team::{TeamMember, TeamMemberRecord};
 pub use time::Timestamp;

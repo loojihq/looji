@@ -1,6 +1,7 @@
 //! The main window: a title bar over a sidebar of workspaces and projects, and the main pane.
 
 mod avatar;
+mod board;
 mod delete;
 mod preferences_panel;
 mod project_state;
