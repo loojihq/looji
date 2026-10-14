@@ -9,7 +9,6 @@
 //! capital dotted I, for one), so a match is found in a lowercased copy and mapped back to the
 //! original characters. The ranges always fall on character boundaries.
 
-use std::borrow::Cow;
 use std::ops::Range;
 
 use looji_domain::{Task, TaskId};
@@ -92,21 +91,6 @@ pub fn matches(task: &Task, terms: &[String]) -> bool {
             || contains(task.description(), term)
             || task.tags().iter().any(|tag| contains(tag, term))
     })
-}
-
-/// The tasks a query leaves visible, in their existing order. With no terms, every task stays
-/// visible and nothing is copied.
-pub fn visible<'a>(tasks: &'a [Task], terms: &[String]) -> Cow<'a, [Task]> {
-    if terms.is_empty() {
-        return Cow::Borrowed(tasks);
-    }
-    Cow::Owned(
-        tasks
-            .iter()
-            .filter(|task| matches(task, terms))
-            .cloned()
-            .collect(),
-    )
 }
 
 /// A short piece of the description around its first match, with the matches in it marked.
@@ -228,7 +212,7 @@ mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use looji_domain::{Position, ProjectId, Status, Task, TaskId};
 
-    use super::{Debounce, full_index, hits, matches, merge, terms, visible};
+    use super::{Debounce, full_index, hits, matches, merge, terms};
 
     /// Every special character the spec lists, plus a few more that are regex or path syntax.
     const SPECIAL: &[&str] = &[
@@ -403,25 +387,6 @@ mod tests {
     fn no_snippet_when_only_the_title_matched() {
         let card = task("Plan", "unrelated", &[]);
         assert!(hits(&card, &terms("plan")).snippet.is_none());
-    }
-
-    #[test]
-    fn filtering_keeps_the_order_of_the_tasks_that_remain() {
-        let tasks = [
-            task("first copy", "", &[]),
-            task("second", "", &[]),
-            task("third copy", "", &[]),
-        ];
-        let query = terms("copy");
-        let kept = visible(&tasks, &query);
-        let shown: Vec<&str> = kept.iter().map(|task| task.title()).collect();
-        assert_eq!(shown, ["first copy", "third copy"]);
-    }
-
-    #[test]
-    fn no_terms_keeps_every_task() {
-        let tasks = [task("a", "", &[]), task("b", "", &[])];
-        assert_eq!(visible(&tasks, &[]).len(), 2);
     }
 
     #[test]

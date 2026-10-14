@@ -10,6 +10,7 @@ mod delete;
 mod drag;
 mod dragging;
 mod fields;
+mod filter_bar;
 mod keyboard;
 mod landing;
 mod layout;
@@ -34,8 +35,8 @@ use projects::ProjectDialog;
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, RepoError, SettingsRepository, Task, TaskId, TeamMember, Workspace, WorkspaceId,
-    WorkspaceRepository, next_untitled_name, validate_name,
+    DomainError, RepoError, SettingsRepository, Task, TaskFilter, TaskId, TeamMember, Workspace,
+    WorkspaceId, WorkspaceRepository, next_untitled_name, validate_name,
 };
 use looji_persistence::icons::{IconError, import_icon};
 
@@ -98,6 +99,11 @@ pub struct WorkspaceView {
     search_query: String,
     search_focused: bool,
     search_debounce: search::Debounce,
+    /// The board filter of the selected project, and the facet menu that is open, if any.
+    filter: TaskFilter,
+    filter_menu: Option<filter_bar::FilterMenu>,
+    /// One focus handle for each control in the filter bar, in tab order.
+    filter_focus: Vec<FocusHandle>,
 }
 
 impl WorkspaceView {
@@ -125,6 +131,11 @@ impl WorkspaceView {
                     search_query: String::new(),
                     search_focused: false,
                     search_debounce: search::Debounce::default(),
+                    filter: TaskFilter::default(),
+                    filter_menu: None,
+                    filter_focus: (0..filter_bar::CONTROL_COUNT)
+                        .map(|_| cx.focus_handle().tab_stop(true))
+                        .collect(),
                 };
                 view.reload_projects(cx);
                 view
@@ -305,6 +316,9 @@ impl WorkspaceView {
         if self.search_focused && self.search_key(event, window, cx) {
             return;
         }
+        if self.filter_menu.is_some() && self.filter_key(event, window, cx) {
+            return;
+        }
         let modifiers = event.keystroke.modifiers;
         if event.keystroke.key == "f" && (modifiers.control || modifiers.platform) {
             return self.focus_search(window, cx);
@@ -458,6 +472,7 @@ impl Render for WorkspaceView {
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.blur_tag_editor(cx);
                     this.blur_search(cx);
+                    this.filter_menu = None;
                 }),
             )
             .flex()

@@ -8,9 +8,9 @@ use looji_domain::{
 };
 
 use super::{
-    WorkspaceView, board, board_search,
+    WorkspaceView, board, board_search, filter_bar,
     project_state::{ProjectList, load_board},
-    search, store, typed_text,
+    store, typed_text,
 };
 use crate::theme::Theme;
 
@@ -54,6 +54,7 @@ impl WorkspaceView {
                 self.status = Some(format!("Could not load projects: {err}"));
             }
         }
+        self.load_project_filter(cx);
         self.reload_board(cx);
     }
 
@@ -71,11 +72,13 @@ impl WorkspaceView {
         self.cancel_keyboard_if_gone(cx);
         self.close_panel_if_gone(cx);
         self.close_tag_editors_if_gone();
+        self.prune_project_filter(cx);
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.reset_search();
         self.projects.select(id);
+        self.load_project_filter(cx);
         self.reload_board(cx);
         cx.notify();
     }
@@ -285,17 +288,20 @@ pub(super) fn content(
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
             let cards = board::card_context(view);
-            // The board draws only the cards the search leaves visible, in their order. A query that
-            // matches nothing is shown as such, rather than as an empty board.
-            let shown = search::visible(&view.board, &cards.terms);
-            let bar = board_search::bar(view, shown.len(), view.board.len(), theme, cx);
+            // The board draws only the cards the filters and the search leave visible, in their order.
+            let shown = board_search::shown_tasks(view);
+            let filters = filter_bar::bar(view, theme, cx);
+            let search = board_search::bar(view, shown.len(), view.board.len(), theme, cx);
+            let notice = filter_bar::empty_notice(view, shown.len(), theme, cx);
             let column = board::render(project, &shown, &cards, &view.drag, theme, cx);
             div()
                 .flex()
                 .flex_col()
                 .size_full()
                 .min_h_0()
-                .child(bar)
+                .child(filters)
+                .child(search)
+                .children(notice)
                 .child(div().flex_1().min_h_0().child(column))
                 .into_any_element()
         }

@@ -65,6 +65,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "normalised_tags",
         sql: include_str!("sql/0012_normalise_tags.sql"),
     },
+    Migration {
+        version: 13,
+        name: "project_filters",
+        sql: include_str!("sql/0013_project_filters.sql"),
+    },
 ];
 
 #[cfg(test)]

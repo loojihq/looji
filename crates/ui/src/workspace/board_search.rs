@@ -6,6 +6,7 @@
 //! typist re-filters once rather than on every key. Clearing the field, or pressing Escape, takes
 //! effect at once.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
@@ -83,7 +84,7 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn cancel_keyboard_if_hidden(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn cancel_keyboard_if_hidden(&mut self, cx: &mut Context<Self>) {
         let terms = search::terms(&self.search_query);
         let Hold::Holding { task, .. } = self.drag.keyboard else {
             return;
@@ -92,15 +93,23 @@ impl WorkspaceView {
             .board
             .iter()
             .find(|other| other.id() == task)
-            .is_some_and(|other| !search::matches(other, &terms));
+            .is_some_and(|other| !self.shows(other, &terms));
         if hidden {
             self.drag.keyboard = Hold::Idle;
             self.drag.session.clear_hold();
             self.drag.keyboard_activation = None;
-            self.drag.keyboard_notice =
-                Some("That card is hidden by the search, so the move was cancelled.".to_string());
+            self.drag.keyboard_notice = Some(
+                "That card is hidden by the search or filters, so the move was cancelled."
+                    .to_string(),
+            );
             cx.notify();
         }
+    }
+
+    /// Whether the board shows a task: it passes the filters and the search. Everything that decides
+    /// visibility goes through here, so the board, drops, and keyboard moves agree.
+    pub(super) fn shows(&self, task: &Task, terms: &[String]) -> bool {
+        self.filter.matches(task) && search::matches(task, terms)
     }
 
     /// A key while the field has the keyboard. Returns whether the field used it. Tab leaves the field
@@ -134,10 +143,10 @@ impl WorkspaceView {
     }
 
     /// The index a drop lands at among all of its column's cards, rather than among the visible
-    /// ones. With no search, the index is already the full one.
+    /// ones. With nothing hiding cards, the index is already the full one.
     pub(super) fn full_drop_index(&self, drop: &DropResult) -> usize {
         let terms = search::terms(&self.search_query);
-        if terms.is_empty() {
+        if terms.is_empty() && self.filter.is_empty() {
             return drop.index;
         }
         let others: Vec<&Task> = self
@@ -148,11 +157,27 @@ impl WorkspaceView {
         let full: Vec<_> = others.iter().map(|task| task.id()).collect();
         let visible: Vec<_> = others
             .iter()
-            .filter(|task| search::matches(task, &terms))
+            .filter(|task| self.shows(task, &terms))
             .map(|task| task.id())
             .collect();
         search::full_index(&full, &visible, drop.index)
     }
+}
+
+/// The tasks the board shows, in their order. It's computed once per render of the board, not once per
+/// card, and nothing is copied when no filter or search is running.
+pub(super) fn shown_tasks(view: &WorkspaceView) -> Cow<'_, [Task]> {
+    let terms = search::terms(&view.search_query);
+    if terms.is_empty() && view.filter.is_empty() {
+        return Cow::Borrowed(&view.board);
+    }
+    Cow::Owned(
+        view.board
+            .iter()
+            .filter(|task| view.shows(task, &terms))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// The search field and what it says about the board: how many cards are showing. Shown above the

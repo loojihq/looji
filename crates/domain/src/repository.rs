@@ -9,9 +9,20 @@ use crate::{
     ids::{ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId},
     project::Project,
     task::Task,
+    task_filter::TaskFilter,
     team::TeamMember,
     workspace::Workspace,
 };
+
+/// The board filter each project remembers. It's stored per project, so opening another project shows
+/// that project's filter.
+pub trait ProjectFilterRepository {
+    /// The filter the project last saved. Values that no longer parse are left out, and the caller
+    /// prunes the rest against the project's current data.
+    fn load_filter(&self, project: ProjectId) -> RepoResult<TaskFilter>;
+    /// Replaces the project's saved filter. Saving the empty filter forgets the project's filter.
+    fn save_filter(&self, project: ProjectId, filter: &TaskFilter) -> RepoResult<()>;
+}
 
 /// App-wide settings. Only the active workspace is stored for now.
 pub trait SettingsRepository {

@@ -4,6 +4,7 @@
 //! record is validated on the way into an entity, so a bad row fails loudly.
 
 mod column;
+mod filter;
 mod project;
 pub(crate) mod settings;
 mod task;

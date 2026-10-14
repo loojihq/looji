@@ -18,6 +18,7 @@ mod status_visibility;
 mod task;
 mod task_event;
 mod task_fields;
+mod task_filter;
 mod task_move;
 mod team;
 mod time;
@@ -39,8 +40,8 @@ pub use project::{
     MAX_DESCRIPTION_CHARS, Project, ProjectRecord, clean_description, validate_project_name,
 };
 pub use repository::{
-    ColumnRepository, ProjectRepository, SettingsRepository, TaskRepository, TeamMemberRepository,
-    WorkspaceRepository,
+    ColumnRepository, ProjectFilterRepository, ProjectRepository, SettingsRepository,
+    TaskRepository, TeamMemberRepository, WorkspaceRepository,
 };
 pub use status::Status;
 pub use status_columns::{StatusColumn, status_columns};
@@ -51,6 +52,7 @@ pub use task_fields::{
     DueDate, EstimateError, MAX_TAG_CHARS, MAX_TAGS, Priority, TagError, normalize_tag,
     normalize_tags, parse_due_date, parse_estimate_hours, validate_title,
 };
+pub use task_filter::{TagMatch, TaskFilter};
 pub use task_move::TaskMove;
 pub use team::{
     MAX_MEMBER_NAME_CHARS, MEMBER_COLOUR_COUNT, MemberColour, TeamMember, TeamMemberRecord,
