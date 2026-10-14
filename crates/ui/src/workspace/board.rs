@@ -13,6 +13,7 @@ use super::card::{CalendarDate, CardDensity, CardView, task_card};
 use super::drag::Exit;
 use super::dragging::{DragSession, record_columns};
 use super::landing::{Slot, column_sequence, stack_tops};
+use super::task_form::Mode;
 use crate::theme::Theme;
 
 const HEADER_HEIGHT: Pixels = px(36.);
@@ -54,7 +55,14 @@ pub(super) fn render(
                         .text_size(theme.typography.heading)
                         .child(project.name().to_string()),
                 )
-                .child(column_toggle(project, theme, cx)),
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(theme.spacing.sm)
+                        .child(new_task_button(theme, cx))
+                        .child(column_toggle(project, theme, cx)),
+                ),
         )
         .when_some(drag.keyboard_notice(), |header, text| {
             header.child(
@@ -350,10 +358,16 @@ pub(super) fn card_view(task: &Task) -> CardView<'_> {
     CardView {
         id: task.id(),
         title: task.title(),
-        priority: None,
+        priority: task.priority().map(|priority| match priority {
+            looji_domain::Priority::Low => super::card::Priority::Low,
+            looji_domain::Priority::Medium => super::card::Priority::Medium,
+            looji_domain::Priority::High => super::card::Priority::High,
+        }),
         assignee: None,
         estimate_minutes: task.estimate().map(|estimate| estimate.minutes()),
-        due: None,
+        due: task
+            .due_on()
+            .and_then(|due| CalendarDate::new(due.year(), due.month(), due.day())),
     }
 }
 
@@ -493,5 +507,25 @@ fn column_toggle(
         .child(label)
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.request_column_visibility(Status::InReview, !shown, cx);
+        }))
+}
+
+/// The button that starts a new task in the first shown column.
+fn new_task_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+    div()
+        .id("new-task")
+        .flex_shrink_0()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        .child("+ New task")
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.open_task_dialog(Mode::Create, window, cx)
         }))
 }

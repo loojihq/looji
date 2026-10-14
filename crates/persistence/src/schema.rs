@@ -45,6 +45,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "manual_order",
         sql: include_str!("sql/0008_manual_order.sql"),
     },
+    Migration {
+        version: 9,
+        name: "task_fields",
+        sql: include_str!("sql/0009_task_fields.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -192,5 +197,48 @@ mod tests {
         let ids: Vec<&str> = order.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids, ["first", "second", "third"]);
         assert!(order.iter().all(|(_, key)| !key.ends_with('0')));
+    }
+
+    #[test]
+    fn existing_tasks_upgrade_with_no_priority_due_date_or_tags() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..8]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a00000001', 90, NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let (title, estimate, priority, due): (
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        ) = connection
+            .query_row(
+                "SELECT title, estimate_minutes, priority, due_on FROM tasks WHERE id = 't'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Write copy");
+        assert_eq!(estimate, Some(90));
+        assert_eq!(priority, None);
+        assert_eq!(due, None);
+        let tags: i64 = connection
+            .query_row("SELECT COUNT(*) FROM task_tags", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(tags, 0);
     }
 }

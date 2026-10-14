@@ -23,6 +23,10 @@ pub enum DomainError {
     UnknownStatus(String),
     #[error("'{0}' is not a valid id")]
     InvalidId(String),
+    #[error("'{0}' is not a valid priority")]
+    UnknownPriority(String),
+    #[error("'{0}' is not a due date. Use a real day in the form YYYY-MM-DD.")]
+    InvalidDueDate(String),
     #[error("the '{status}' column isn't shown on this project")]
     StatusNotVisible { status: String },
     #[error("'{key}' is not a valid position key")]

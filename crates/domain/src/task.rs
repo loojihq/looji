@@ -3,6 +3,7 @@ use crate::{
     ids::{ProjectId, TaskId, TeamMemberId},
     position::Position,
     status::Status,
+    task_fields::{DueDate, Priority},
     time::Timestamp,
     validation::trimmed_text,
 };
@@ -53,6 +54,9 @@ pub struct Task {
     position: Position,
     estimate: Option<Estimate>,
     assignee_id: Option<TeamMemberId>,
+    priority: Option<Priority>,
+    due_on: Option<DueDate>,
+    tags: Vec<String>,
     created_at: Timestamp,
     updated_at: Timestamp,
 }
@@ -74,6 +78,9 @@ impl Task {
             position,
             estimate: None,
             assignee_id: None,
+            priority: None,
+            due_on: None,
+            tags: Vec::new(),
             created_at: now,
             updated_at: now,
         })
@@ -105,6 +112,19 @@ impl Task {
 
     pub fn estimate(&self) -> Option<Estimate> {
         self.estimate
+    }
+
+    pub fn priority(&self) -> Option<Priority> {
+        self.priority
+    }
+
+    pub fn due_on(&self) -> Option<DueDate> {
+        self.due_on
+    }
+
+    /// The tags, sorted and without duplicates.
+    pub fn tags(&self) -> &[String] {
+        &self.tags
     }
 
     pub fn assignee_id(&self) -> Option<TeamMemberId> {
@@ -148,6 +168,30 @@ impl Task {
         Ok(())
     }
 
+    pub fn set_priority(&mut self, priority: Option<Priority>) {
+        self.priority = priority;
+        self.touch();
+    }
+
+    pub fn set_due_on(&mut self, due_on: Option<DueDate>) {
+        self.due_on = due_on;
+        self.touch();
+    }
+
+    /// Replaces the tags. They are sorted and de-duplicated, so the order given doesn't matter.
+    pub fn set_tags(&mut self, mut tags: Vec<String>) {
+        tags.sort();
+        tags.dedup();
+        self.tags = tags;
+        self.touch();
+    }
+
+    /// `None` clears the estimate.
+    pub fn set_estimate(&mut self, estimate: Option<Estimate>) {
+        self.estimate = estimate;
+        self.touch();
+    }
+
     pub fn assign(&mut self, assignee: Option<TeamMemberId>) {
         self.assignee_id = assignee;
         self.touch();
@@ -169,6 +213,9 @@ pub struct TaskRecord {
     pub position: Position,
     pub estimate_minutes: Option<i64>,
     pub assignee_id: Option<TeamMemberId>,
+    pub priority: Option<Priority>,
+    pub due_on: Option<DueDate>,
+    pub tags: Vec<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -189,6 +236,9 @@ impl TryFrom<TaskRecord> for Task {
                 .map(Estimate::from_minutes)
                 .transpose()?,
             assignee_id: record.assignee_id,
+            priority: record.priority,
+            due_on: record.due_on,
+            tags: record.tags,
             created_at: record.created_at,
             updated_at: record.updated_at,
         })
@@ -302,6 +352,9 @@ mod tests {
             position: Position::new("a0").unwrap(),
             estimate_minutes: None,
             assignee_id: None,
+            priority: None,
+            due_on: None,
+            tags: Vec::new(),
             created_at: Timestamp::from_unix_millis(0),
             updated_at: Timestamp::from_unix_millis(0),
         };

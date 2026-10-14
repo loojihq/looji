@@ -8,6 +8,7 @@ mod columns;
 mod delete;
 mod drag;
 mod dragging;
+mod fields;
 mod keyboard;
 mod landing;
 mod layout;
@@ -17,6 +18,8 @@ mod project_state;
 mod projects;
 mod sidebar;
 mod state;
+mod task_dialog;
+mod task_form;
 
 use delete::PendingDelete;
 use project_state::ProjectList;
@@ -69,6 +72,8 @@ pub struct WorkspaceView {
     pending_column: Option<columns::PendingColumn>,
     /// The card drag in progress, and the last drag's outcome.
     drag: dragging::DragSession,
+    /// The create or edit task dialog, while it's open.
+    task_dialog: Option<task_dialog::TaskDialog>,
 }
 
 impl WorkspaceView {
@@ -86,6 +91,7 @@ impl WorkspaceView {
                     project_dialog: None,
                     pending_column: None,
                     drag: dragging::DragSession::default(),
+                    task_dialog: None,
                 };
                 view.reload_projects(cx);
                 view
@@ -265,6 +271,9 @@ impl WorkspaceView {
         if self.key_pressed(event, cx) {
             return;
         }
+        if self.task_dialog.is_some() {
+            return self.task_dialog_key(event, cx);
+        }
         // Tab moves between cards and other controls, unless a dialog or a rename owns the keyboard.
         let modal = self.pending_column.is_some()
             || self.project_dialog.is_some()
@@ -403,6 +412,7 @@ impl Render for WorkspaceView {
                     .child(sidebar::render(self, cx))
                     .child(main_pane(header, body, &theme)),
             )
+            .children(task_dialog::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
             .children(delete_dialog)
             .children(project_dialog)

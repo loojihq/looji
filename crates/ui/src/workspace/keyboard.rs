@@ -315,6 +315,11 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The dialog owns the keys while it's open, even when a card behind it has focus.
+        if self.task_dialog.is_some() {
+            self.task_dialog_key(event, cx);
+            return cx.stop_propagation();
+        }
         let Some(key) = Key::from_name(&event.keystroke.key) else {
             return;
         };

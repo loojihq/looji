@@ -51,6 +51,8 @@ pub(super) struct DragSession {
     last_exit: Option<Exit>,
     /// The keyboard move in progress, if any.
     pub(super) keyboard: Hold,
+    /// A card the press opened, for the release to hand to the edit dialog.
+    pub(super) opened: Option<TaskId>,
     /// What the last keyboard step said. Shown on the board, and the text a screen reader would read.
     pub(super) keyboard_notice: Option<String>,
     /// Cancels a keyboard move if the window stops being active.
@@ -78,6 +80,7 @@ impl Default for DragSession {
             scrolling: false,
             last_exit: None,
             keyboard: Hold::Idle,
+            opened: None,
             keyboard_notice: None,
             keyboard_activation: None,
             card_focus: RefCell::default(),
@@ -417,7 +420,12 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn pointer_released(&mut self, event: &MouseUpEvent, window: &Window, cx: &mut Context<Self>) {
+    fn pointer_released(
+        &mut self,
+        event: &MouseUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.drag.activation.is_none() || event.button != MouseButton::Left {
             return;
         }
@@ -428,6 +436,10 @@ impl WorkspaceView {
             Input::Cancel(CancelReason::ReleasedOutside)
         };
         self.drive_drag(input, cx);
+        // A click on a card, with no drag, opens it for editing.
+        if let Some(task) = self.drag.opened.take() {
+            self.open_task_dialog(super::task_form::Mode::Edit(task), window, cx);
+        }
     }
 
     /// Escape cancels a drag. Returns whether the key was used. Keys go through the focused
@@ -466,7 +478,13 @@ impl WorkspaceView {
                     });
                 }));
             }
-            Command::OpenCard(task) => open_card(task),
+            Command::OpenCard(task) => {
+                // A click without a drag ends the press here. Clearing the drag's watch lets keys
+                // reach the rest of the app, such as Escape closing a dialog.
+                self.drag.opened = Some(task);
+                self.drag.activation = None;
+                self.drag.timer = None;
+            }
             Command::Lift(card) => {
                 self.drag.overlay_width = self
                     .drag
@@ -502,6 +520,3 @@ impl WorkspaceView {
         cx.notify();
     }
 }
-
-/// Opens a task's detail view. There's no detail view yet, so a click does nothing visible.
-fn open_card(_task: TaskId) {}
