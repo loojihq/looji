@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use looji_domain::{
-    DomainError, DueDate, Priority, ProjectId, RepoError, RepoResult, Task, TaskId, TaskRecord,
-    TaskRepository, TeamMemberId,
+    DomainError, DueDate, PageCursor, Priority, ProjectId, RepoError, RepoResult, Task, TaskId,
+    TaskPage, TaskQuery, TaskRecord, TaskRepository, TeamMemberId,
 };
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
@@ -12,10 +12,10 @@ use super::{
 };
 use crate::SqliteStore;
 
-const TASK_COLUMNS: &str = "id, project_id, title, description, status, position, \
+pub(super) const TASK_COLUMNS: &str = "id, project_id, title, description, status, position, \
      estimate_minutes, assignee_id, created_at, updated_at, priority, due_on";
 
-fn read_task(row: &Row<'_>) -> RepoResult<TaskRecord> {
+pub(super) fn read_task(row: &Row<'_>) -> RepoResult<TaskRecord> {
     let priority: Option<String> = get(row, 10)?;
     let due_on: Option<String> = get(row, 11)?;
     Ok(TaskRecord {
@@ -37,7 +37,7 @@ fn read_task(row: &Row<'_>) -> RepoResult<TaskRecord> {
 }
 
 /// The tags of the tasks a query selects, keyed by task id. `sql` selects `task_id, tag`.
-fn load_tags(
+pub(super) fn load_tags(
     connection: &Connection,
     sql: &str,
     params: impl rusqlite::Params,
@@ -108,6 +108,16 @@ impl TaskRepository for SqliteStore {
     }
 
     /// Reads the tags from the tasks, so a tag that its last task dropped is no longer returned.
+    fn list_page(
+        &self,
+        project: ProjectId,
+        query: &TaskQuery,
+        after: Option<&PageCursor>,
+        limit: usize,
+    ) -> RepoResult<TaskPage> {
+        super::task_list::list_page(&self.connection, project, query, after, limit)
+    }
+
     fn tags_in_use(
         &self,
         project: ProjectId,

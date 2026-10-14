@@ -108,6 +108,7 @@ fn configure(connection: &Connection) -> Result<()> {
     connection.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
     // Wait for another connection's write instead of failing with SQLITE_BUSY.
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    repositories::task_list::register_functions(connection)?;
     Ok(())
 }
 

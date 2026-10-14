@@ -102,6 +102,7 @@ impl WorkspaceView {
             panel.history = history.into_iter().rev().collect();
             panel.error = None;
         }
+        self.refresh_list(cx);
         cx.notify();
         Ok(())
     }

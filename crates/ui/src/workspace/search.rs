@@ -21,10 +21,7 @@ const SNIPPET_AFTER: usize = 60;
 /// The query split into lowercase terms. Empty when the query has no words in it, which means no
 /// filtering.
 pub fn terms(query: &str) -> Vec<String> {
-    query
-        .split_whitespace()
-        .map(|term| term.to_lowercase())
-        .collect()
+    looji_domain::search_terms(query)
 }
 
 /// Lowercased text, with each byte of it mapped back to the original text's characters.
@@ -86,11 +83,9 @@ fn merge(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
 
 /// Whether a task matches: each term must appear in its title, its description, or a tag.
 pub fn matches(task: &Task, terms: &[String]) -> bool {
-    terms.iter().all(|term| {
-        contains(task.title(), term)
-            || contains(task.description(), term)
-            || task.tags().iter().any(|tag| contains(tag, term))
-    })
+    terms
+        .iter()
+        .all(|term| looji_domain::term_matches(task, term))
 }
 
 /// A short piece of the description around its first match, with the matches in it marked.

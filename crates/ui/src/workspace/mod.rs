@@ -14,6 +14,7 @@ mod filter_bar;
 mod keyboard;
 mod landing;
 mod layout;
+mod list_view;
 mod members;
 mod moves;
 mod panel;
@@ -99,6 +100,9 @@ pub struct WorkspaceView {
     search_query: String,
     search_focused: bool,
     search_debounce: search::Debounce,
+    /// Whether the board area shows the board or the list, and the list's paging state.
+    view_mode: list_view::ViewMode,
+    task_list: list_view::ListState,
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
@@ -131,6 +135,8 @@ impl WorkspaceView {
                     search_query: String::new(),
                     search_focused: false,
                     search_debounce: search::Debounce::default(),
+                    view_mode: list_view::ViewMode::default(),
+                    task_list: list_view::ListState::default(),
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
@@ -444,11 +450,16 @@ impl Render for WorkspaceView {
             None => self.list.active().name().to_string(),
         };
         let body = projects::content(self, &theme, cx);
-        let team = self
-            .projects
-            .active_id()
-            .is_some()
-            .then(|| team_dialog::open_button(&theme, cx).into_any_element());
+        let team = self.projects.active_id().is_some().then(|| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .child(list_view::switch(self, &theme, cx))
+                .child(team_dialog::open_button(&theme, cx))
+                .into_any_element()
+        });
         let delete_dialog = self
             .pending_delete
             .clone()

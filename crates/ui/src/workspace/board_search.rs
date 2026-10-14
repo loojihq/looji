@@ -81,6 +81,7 @@ impl WorkspaceView {
         }
         self.search_query = query;
         self.cancel_keyboard_if_hidden(cx);
+        self.list_query_changed(cx);
         cx.notify();
     }
 

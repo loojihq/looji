@@ -10,6 +10,7 @@ use crate::{
     project::Project,
     task::Task,
     task_filter::TaskFilter,
+    task_query::{PageCursor, TaskPage, TaskQuery},
     team::TeamMember,
     workspace::Workspace,
 };
@@ -66,6 +67,15 @@ pub trait TaskRepository {
         prefix: &str,
         limit: usize,
     ) -> RepoResult<Vec<String>>;
+    /// One page of the tasks that match `query` in `project`, in position order, after `after` (or from the
+    /// start). Fetches `limit` tasks, and says whether more follow. The total is counted in the same read.
+    fn list_page(
+        &self,
+        project: ProjectId,
+        query: &TaskQuery,
+        after: Option<&PageCursor>,
+        limit: usize,
+    ) -> RepoResult<TaskPage>;
 }
 
 pub trait ColumnRepository {

@@ -192,6 +192,7 @@ impl WorkspaceView {
         }
         self.save_project_filter(cx);
         self.cancel_keyboard_if_hidden(cx);
+        self.list_query_changed(cx);
         cx.notify();
     }
 
@@ -222,6 +223,7 @@ impl WorkspaceView {
         self.filter.clear();
         self.filter_menu = None;
         self.save_project_filter(cx);
+        self.list_query_changed(cx);
         cx.notify();
     }
 

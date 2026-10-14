@@ -70,6 +70,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "project_filters",
         sql: include_str!("sql/0013_project_filters.sql"),
     },
+    Migration {
+        version: 14,
+        name: "task_list_index",
+        sql: include_str!("sql/0014_task_list_index.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -361,5 +366,44 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tags, ["design doc", "web"]);
+    }
+
+    #[test]
+    fn a_database_from_before_the_list_keeps_its_tasks_and_gets_the_position_index_with_the_id() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..13]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t1', 'p', 'First', '', 'todo', 'a0', NULL, NULL, 0, 0),
+                            ('t2', 'p', 'Second', '', 'done', 'a1', NULL, NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "the rebuild keeps every task");
+        let sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'tasks_by_project_position'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.contains("position, id"),
+            "the index ends in the id: {sql}"
+        );
     }
 }

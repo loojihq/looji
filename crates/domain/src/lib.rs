@@ -20,6 +20,7 @@ mod task_event;
 mod task_fields;
 mod task_filter;
 mod task_move;
+mod task_query;
 mod team;
 mod time;
 mod validation;
@@ -54,6 +55,10 @@ pub use task_fields::{
 };
 pub use task_filter::{TagMatch, TaskFilter};
 pub use task_move::TaskMove;
+pub use task_query::{
+    PAGE_SIZE, PageCursor, TaskPage, TaskQuery, contains_ignoring_case, lowercase, search_terms,
+    term_matches,
+};
 pub use team::{
     MAX_MEMBER_NAME_CHARS, MEMBER_COLOUR_COUNT, MemberColour, TeamMember, TeamMemberRecord,
     display_labels, initials, validate_member_name,

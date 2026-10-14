@@ -8,7 +8,7 @@ use looji_domain::{
 };
 
 use super::{
-    WorkspaceView, board, board_search, filter_bar,
+    WorkspaceView, board, board_search, filter_bar, list_view,
     project_state::{ProjectList, load_board},
     store, typed_text,
 };
@@ -46,6 +46,7 @@ impl WorkspaceView {
     /// Reloads the projects of the active workspace and selects the first one.
     pub(super) fn reload_projects(&mut self, cx: &mut Context<Self>) {
         self.reset_search();
+        self.reset_list_position();
         let workspace = self.list.active_workspace_id();
         match ProjectList::for_workspace(store(cx), workspace) {
             Ok(projects) => self.projects = projects,
@@ -73,10 +74,12 @@ impl WorkspaceView {
         self.close_panel_if_gone(cx);
         self.close_tag_editors_if_gone();
         self.prune_project_filter(cx);
+        self.refresh_list(cx);
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.reset_search();
+        self.reset_list_position();
         self.projects.select(id);
         self.load_project_filter(cx);
         self.reload_board(cx);
@@ -287,13 +290,24 @@ pub(super) fn content(
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
-            let cards = board::card_context(view);
-            // The board draws only the cards the filters and the search leave visible, in their order.
-            let shown = board_search::shown_tasks(view);
             let filters = filter_bar::bar(view, theme, cx);
-            let search = board_search::bar(view, shown.len(), view.board.len(), theme, cx);
-            let notice = filter_bar::empty_notice(view, shown.len(), theme, cx);
-            let column = board::render(project, &shown, &cards, &view.drag, theme, cx);
+            // The board and the list read the same query, so the counts in the bar agree with both.
+            let (column, shown, notice) = match view.view_mode {
+                list_view::ViewMode::Board => {
+                    let cards = board::card_context(view);
+                    let shown = board_search::shown_tasks(view);
+                    let notice = filter_bar::empty_notice(view, shown.len(), theme, cx);
+                    let column = board::render(project, &shown, &cards, &view.drag, theme, cx)
+                        .into_any_element();
+                    (column, shown.len(), notice)
+                }
+                list_view::ViewMode::List => (
+                    list_view::render(view, theme, cx),
+                    view.task_list.total as usize,
+                    None,
+                ),
+            };
+            let search = board_search::bar(view, shown, view.board.len(), theme, cx);
             div()
                 .flex()
                 .flex_col()
