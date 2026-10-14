@@ -7,14 +7,15 @@
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, Priority, Status, Task, TaskEvent, TaskEventKind, TaskId, Timestamp,
+    DomainError, Priority, Status, Task, TaskEvent, TaskEventKind, TaskId, TeamMemberId, Timestamp,
     changed_fields,
 };
 
 use super::board::status_label;
-use super::card::civil_from_days;
+use super::card::{civil_from_days, tooltip};
 use super::drag::DropResult;
-use super::fields::{field, segment, text_box};
+use super::fields::{field, member_mark, segment, text_box};
+use super::members;
 use super::{WorkspaceView, store, typed_text};
 use crate::theme::Theme;
 
@@ -70,6 +71,38 @@ pub(super) fn format_time(at: Timestamp) -> String {
         minutes / 60,
         minutes % 60
     )
+}
+
+/// The assignee as the panel shows them: the same mark and label as the dialog's list, with the full
+/// name and ID in a tooltip. A member who has been removed says so rather than showing a stale name.
+fn assignee_row(
+    assignee: Option<TeamMemberId>,
+    entries: &[members::Entry],
+    theme: &Theme,
+) -> AnyElement {
+    let Some(id) = assignee else {
+        return div()
+            .text_color(theme.palette.text_secondary)
+            .child("Assignee: Unassigned")
+            .into_any_element();
+    };
+    match entries.iter().find(|entry| entry.id == id) {
+        Some(entry) => div()
+            .id("panel-assignee")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.spacing.sm)
+            .tooltip(tooltip(members::tooltip(entry)))
+            .child("Assignee:")
+            .child(member_mark(&entry.initials, entry.colour, px(22.), theme))
+            .child(entry.label.clone())
+            .into_any_element(),
+        None => div()
+            .text_color(theme.palette.danger)
+            .child("Assignee: no longer on the team")
+            .into_any_element(),
+    }
 }
 
 fn priority_label(priority: Option<Priority>) -> &'static str {
@@ -486,7 +519,11 @@ pub(super) fn render(
                 .child(format!("Estimate: {estimate}"))
                 .child(format!("Due: {due}"))
                 .child(format!("Tags: {tags}"))
-                .child("Assignee: Unassigned"),
+                .child(assignee_row(
+                    task.assignee_id(),
+                    &members::entries(&view.members),
+                    theme,
+                )),
             theme,
         ))
         .child(

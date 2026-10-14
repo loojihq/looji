@@ -45,6 +45,9 @@ pub fn changed_fields(before: &Task, after: &Task) -> Vec<&'static str> {
     if before.tags() != after.tags() {
         changed.push("tags");
     }
+    if before.assignee_id() != after.assignee_id() {
+        changed.push("assignee");
+    }
     changed
 }
 
@@ -52,7 +55,11 @@ pub fn changed_fields(before: &Task, after: &Task) -> Vec<&'static str> {
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use crate::{
-        ids::ProjectId, position::Position, status::Status, task::Estimate, task::Task,
+        ids::{ProjectId, TeamMemberId},
+        position::Position,
+        status::Status,
+        task::Estimate,
+        task::Task,
         task_event::changed_fields,
     };
 
@@ -92,5 +99,14 @@ mod tests {
         let mut after = before.clone();
         after.set_status(Status::Done);
         assert!(changed_fields(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn an_assignee_change_is_named_including_being_cleared() {
+        let before = task();
+        let mut assigned = before.clone();
+        assigned.assign(Some(TeamMemberId::new()));
+        assert_eq!(changed_fields(&before, &assigned), ["assignee"]);
+        assert_eq!(changed_fields(&assigned, &before), ["assignee"]);
     }
 }

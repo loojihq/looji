@@ -3,8 +3,26 @@
 //! panel can use the same ones.
 
 use gpui::{prelude::*, *};
+use looji_domain::MemberColour;
 
 use crate::theme::Theme;
+
+/// A team member's mark: their initials on their palette colour. The colour tells members apart
+/// when two share a name, and the initials are the text the eye reads first.
+pub fn member_mark(initials: &str, colour: MemberColour, size: Pixels, theme: &Theme) -> Div {
+    let pair = theme.palette.avatars[colour.index()];
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(size)
+        .rounded_full()
+        .bg(pair.background)
+        .text_color(pair.text)
+        .text_size(theme.typography.caption)
+        .child(initials.to_string())
+}
 
 /// A labelled field: the label above the input, and the error below it when there is one.
 pub fn field(label: &str, error: Option<&str>, body: impl IntoElement, theme: &Theme) -> Div {

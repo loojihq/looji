@@ -55,6 +55,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_events",
         sql: include_str!("sql/0010_task_events.sql"),
     },
+    Migration {
+        version: 11,
+        name: "project_team_members",
+        sql: include_str!("sql/0011_team_members.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -245,5 +250,71 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM task_tags", [], |row| row.get(0))
             .unwrap();
         assert_eq!(tags, 0);
+    }
+
+    #[test]
+    fn tasks_assigned_to_the_old_workspace_members_upgrade_unassigned_and_keep_their_data() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..10]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO team_members (id, workspace_id, name, created_at, updated_at)
+                     VALUES ('m', 'w', 'Dana', 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a0', 90, 'm', 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let (title, estimate, assignee): (String, Option<i64>, Option<String>) = connection
+            .query_row(
+                "SELECT title, estimate_minutes, assignee_id FROM tasks WHERE id = 't'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Write copy");
+        assert_eq!(estimate, Some(90));
+        assert_eq!(assignee, None, "existing tasks start unassigned");
+        let members: i64 = connection
+            .query_row("SELECT COUNT(*) FROM team_members", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            members, 0,
+            "the workspace-scoped rows have no project to move to"
+        );
+    }
+
+    #[test]
+    fn a_member_colour_outside_the_palette_is_refused_by_storage() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, MIGRATIONS).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        let inserted = connection.execute(
+            "INSERT INTO team_members (id, project_id, name, colour, created_at, updated_at)
+             VALUES ('m', 'p', 'Dana', 6, 0, 0)",
+            [],
+        );
+        assert!(inserted.is_err());
     }
 }

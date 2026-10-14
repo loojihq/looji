@@ -6,7 +6,7 @@
 //! Required: the title. Everything else is optional. Blank estimate and due date mean none.
 
 use looji_domain::{
-    DueDate, Estimate, Priority, Task, TaskId, normalize_tags, parse_due_date,
+    DueDate, Estimate, Priority, Task, TaskId, TeamMemberId, normalize_tags, parse_due_date,
     parse_estimate_hours, validate_title,
 };
 
@@ -23,16 +23,18 @@ pub enum Field {
     Title,
     Description,
     Priority,
+    Assignee,
     Estimate,
     Due,
     Tags,
 }
 
 impl Field {
-    const ORDER: [Field; 6] = [
+    const ORDER: [Field; 7] = [
         Field::Title,
         Field::Description,
         Field::Priority,
+        Field::Assignee,
         Field::Estimate,
         Field::Due,
         Field::Tags,
@@ -62,6 +64,8 @@ pub struct Values {
     pub title: String,
     pub description: String,
     pub priority: Option<Priority>,
+    /// The member the task is assigned to. `None` is Unassigned.
+    pub assignee: Option<TeamMemberId>,
     pub estimate: String,
     pub due: String,
     /// Committed tags, as chips.
@@ -94,6 +98,7 @@ pub struct Validated {
     pub title: String,
     pub description: String,
     pub priority: Option<Priority>,
+    pub assignee: Option<TeamMemberId>,
     pub estimate: Option<Estimate>,
     pub due: Option<DueDate>,
     pub tags: Vec<String>,
@@ -122,6 +127,7 @@ impl TaskForm {
             title: task.title().to_string(),
             description: task.description().to_string(),
             priority: task.priority(),
+            assignee: task.assignee_id(),
             estimate: task
                 .estimate()
                 .map(|estimate| format_hours(estimate.minutes()))
@@ -192,6 +198,7 @@ impl TaskForm {
             title: title?,
             description: self.values.description.trim().to_string(),
             priority: self.values.priority,
+            assignee: self.values.assignee,
             estimate: estimate?,
             due: due?,
             tags: tags?,
@@ -231,7 +238,7 @@ impl TaskForm {
                 }
                 return;
             }
-            Field::Priority => return,
+            Field::Priority | Field::Assignee => return,
         }
         self.errors = Errors::default();
     }
@@ -259,7 +266,7 @@ impl TaskForm {
                     self.values.tag_draft.pop();
                 }
             }
-            Field::Priority => {}
+            Field::Priority | Field::Assignee => {}
         }
     }
 
@@ -303,6 +310,26 @@ impl TaskForm {
         self.values.priority = next.map(|index| Priority::ALL[index]);
     }
 
+    /// Moves the assignee one step along [Unassigned, then each member in the order given], without
+    /// wrapping. An assignee who is no longer in the list (removed since the dialog opened) counts as
+    /// Unassigned for the step, so the keyboard can always move on. Until the user moves, the save
+    /// still reports that member as gone.
+    pub fn step_assignee(&mut self, members: &[TeamMemberId], forward: bool) {
+        let options: Vec<Option<TeamMemberId>> = std::iter::once(None)
+            .chain(members.iter().copied().map(Some))
+            .collect();
+        let current = options
+            .iter()
+            .position(|option| *option == self.values.assignee)
+            .unwrap_or(0);
+        let next = if forward {
+            (current + 1).min(options.len() - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+        self.values.assignee = options[next];
+    }
+
     pub fn focus_next(&mut self) {
         self.active = self.active.next();
     }
@@ -328,7 +355,7 @@ pub fn format_hours(minutes: u32) -> String {
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
-    use looji_domain::{Estimate, Position, Priority, ProjectId, Status, Task};
+    use looji_domain::{Estimate, Position, Priority, ProjectId, Status, Task, TeamMemberId};
 
     use super::{Field, Mode, TaskForm, format_hours};
 
@@ -528,5 +555,70 @@ mod tests {
         form.focus(Field::Tags);
         form.backspace();
         assert_eq!(form.values.tags, ["a"]);
+    }
+
+    #[test]
+    fn the_assignee_steps_through_unassigned_then_each_member_without_wrapping() {
+        let (first, second) = (TeamMemberId::new(), TeamMemberId::new());
+        let members = [first, second];
+        let mut form = filled();
+
+        form.step_assignee(&members, false);
+        assert_eq!(form.values.assignee, None, "nothing is before Unassigned");
+        form.step_assignee(&members, true);
+        assert_eq!(form.values.assignee, Some(first));
+        form.step_assignee(&members, true);
+        form.step_assignee(&members, true);
+        assert_eq!(
+            form.values.assignee,
+            Some(second),
+            "no wrap past the last member"
+        );
+        form.step_assignee(&members, false);
+        assert_eq!(form.values.assignee, Some(first));
+    }
+
+    #[test]
+    fn a_removed_assignee_steps_from_unassigned_so_the_keyboard_can_move_on() {
+        let kept = TeamMemberId::new();
+        let mut form = filled();
+        form.values.assignee = Some(TeamMemberId::new());
+
+        form.step_assignee(&[kept], true);
+
+        assert_eq!(form.values.assignee, Some(kept));
+    }
+
+    #[test]
+    fn the_assignee_is_validated_with_the_task_and_changing_it_makes_the_form_dirty() {
+        let member = TeamMemberId::new();
+        let mut form = filled();
+        assert_eq!(form.validate().unwrap().assignee, None);
+
+        form.values.assignee = Some(member);
+
+        assert!(form.is_dirty());
+        assert_eq!(form.validate().unwrap().assignee, Some(member));
+    }
+
+    #[test]
+    fn a_task_opens_with_its_assignee_and_tab_reaches_the_field() {
+        let member = TeamMemberId::new();
+        let mut task = Task::new(
+            ProjectId::new(),
+            "Write copy",
+            Status::Todo,
+            Position::new("a0").unwrap(),
+        )
+        .unwrap();
+        task.assign(Some(member));
+
+        let mut form = TaskForm::edit(&task);
+        assert_eq!(form.values.assignee, Some(member));
+        assert!(!form.is_dirty());
+
+        form.focus(Field::Priority);
+        form.focus_next();
+        assert_eq!(form.active, Field::Assignee);
     }
 }

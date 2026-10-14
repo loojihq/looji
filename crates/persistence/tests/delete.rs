@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use looji_domain::{
-    Column, ColumnRepository, DEFAULT_WORKSPACE_NAME, Position, Project, ProjectRepository,
-    SettingsRepository, Status, Task, TaskRepository, TeamMember, TeamMemberRepository, Workspace,
-    WorkspaceId, WorkspaceRepository,
+    Column, ColumnRepository, DEFAULT_WORKSPACE_NAME, MemberColour, Position, Project,
+    ProjectRepository, SettingsRepository, Status, Task, TaskRepository, TeamMember,
+    TeamMemberRepository, Workspace, WorkspaceId, WorkspaceRepository,
 };
 use looji_persistence::{
     Connection, DeleteError, SqliteStore, open_database, workspace_scoped_tables,
@@ -24,8 +24,6 @@ fn position(key: &str) -> Position {
 fn seed(store: &SqliteStore, name: &str) -> Seeded {
     let workspace = Workspace::new(name).unwrap();
     WorkspaceRepository::save(store, &workspace).unwrap();
-    let member = TeamMember::new(workspace.id(), "Dana").unwrap();
-    TeamMemberRepository::save(store, &member).unwrap();
 
     let mut project_ids = Vec::new();
     let mut task_ids = Vec::new();
@@ -38,6 +36,9 @@ fn seed(store: &SqliteStore, name: &str) -> Seeded {
 
         let mut task = Task::new(project.id(), "Write it", Status::Todo, position("a0")).unwrap();
         if index == 0 {
+            let member =
+                TeamMember::new(project.id(), "Dana", MemberColour::for_new_member(0)).unwrap();
+            TeamMemberRepository::save(store, &member).unwrap();
             task.assign(Some(member.id()));
         }
         TaskRepository::save(store, &task).unwrap();
@@ -137,7 +138,8 @@ fn deleting_a_workspace_removes_every_row_it_owns() {
     assert_eq!(
         count_where(
             &connection,
-            "SELECT COUNT(*) FROM team_members WHERE workspace_id = ?1",
+            "SELECT COUNT(*) FROM team_members
+             WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
             &key
         ),
         0

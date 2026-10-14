@@ -52,7 +52,10 @@ pub use task_fields::{
     normalize_tags, parse_due_date, parse_estimate_hours, validate_title,
 };
 pub use task_move::TaskMove;
-pub use team::{TeamMember, TeamMemberRecord};
+pub use team::{
+    MAX_MEMBER_NAME_CHARS, MEMBER_COLOUR_COUNT, MemberColour, TeamMember, TeamMemberRecord,
+    display_labels, initials, validate_member_name,
+};
 pub use time::Timestamp;
 pub use workspace::{
     DEFAULT_WORKSPACE_NAME, Workspace, WorkspaceRecord, next_untitled_name, validate_name,

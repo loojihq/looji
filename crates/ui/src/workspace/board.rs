@@ -8,11 +8,12 @@ use looji_domain::{Position, TaskRepository};
 use looji_domain::{Project, Status, StatusColumn, Task, TaskId, status_columns};
 
 use super::WorkspaceView;
-use super::card::{CalendarDate, CardDensity, CardView, task_card};
+use super::card::{AssigneeMark, CalendarDate, CardDensity, CardView, task_card};
 #[cfg(debug_assertions)]
 use super::drag::Exit;
 use super::dragging::{DragSession, record_columns};
 use super::landing::{Slot, column_sequence, stack_tops};
+use super::members;
 use super::task_form::Mode;
 use crate::theme::Theme;
 
@@ -28,6 +29,7 @@ const SHIFT_DURATION: Duration = Duration::from_millis(150);
 pub(super) fn render(
     project: &Project,
     tasks: &[Task],
+    members: &[members::Entry],
     drag: &DragSession,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
@@ -91,12 +93,9 @@ pub(super) fn render(
                     &drag.layout,
                     columns.iter().map(|column| column.status).collect(),
                 ))
-                .children(
-                    columns
-                        .iter()
-                        .enumerate()
-                        .map(|(index, column)| column_view(index, column, theme, today, drag, cx)),
-                ),
+                .children(columns.iter().enumerate().map(|(index, column)| {
+                    column_view(index, column, members, theme, today, drag, cx)
+                })),
         );
     #[cfg(debug_assertions)]
     let root = root.child(debug_controls(theme, cx, drag.last_exit()));
@@ -106,6 +105,7 @@ pub(super) fn render(
 fn column_view(
     index: usize,
     column: &StatusColumn<'_>,
+    members: &[members::Entry],
     theme: &Theme,
     today: CalendarDate,
     drag: &DragSession,
@@ -122,7 +122,7 @@ fn column_view(
         .border_1()
         .border_color(theme.palette.border)
         .child(header(column, theme))
-        .child(body(index, column, theme, today, drag, cx))
+        .child(body(index, column, members, theme, today, drag, cx))
 }
 
 fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
@@ -154,6 +154,7 @@ fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
 fn body(
     index: usize,
     column: &StatusColumn<'_>,
+    members: &[members::Entry],
     theme: &Theme,
     today: CalendarDate,
     drag: &DragSession,
@@ -240,7 +241,7 @@ fn body(
                         .expect("the sequence only holds this column's tasks");
                     let focus = drag.focus_handle(*id, cx);
                     shifted(
-                        card_slot(task, today, theme, dragged, &focus, cx),
+                        card_slot(task, members, today, theme, dragged, &focus, cx),
                         key,
                         offset,
                     )
@@ -303,6 +304,7 @@ fn placeholder(height: f32, theme: &Theme) -> Div {
 /// placeholder has taken its place.
 fn card_slot(
     task: &Task,
+    members: &[members::Entry],
     today: CalendarDate,
     theme: &Theme,
     dragged: Option<TaskId>,
@@ -329,7 +331,7 @@ fn card_slot(
             }),
         )
         .child(task_card(
-            card_view(task),
+            card_view(task, members),
             CardDensity::Compact,
             today,
             theme,
@@ -354,7 +356,9 @@ fn drop_zone(index: usize, theme: &Theme) -> impl IntoElement {
         .child("No tasks")
 }
 
-pub(super) fn card_view(task: &Task) -> CardView<'_> {
+/// The card for a task. A task whose assignee isn't in `members` shows as unassigned, since it can't
+/// be named.
+pub(super) fn card_view<'a>(task: &'a Task, members: &[members::Entry]) -> CardView<'a> {
     CardView {
         id: task.id(),
         title: task.title(),
@@ -363,7 +367,14 @@ pub(super) fn card_view(task: &Task) -> CardView<'_> {
             looji_domain::Priority::Medium => super::card::Priority::Medium,
             looji_domain::Priority::High => super::card::Priority::High,
         }),
-        assignee: None,
+        assignee: task
+            .assignee_id()
+            .and_then(|id| members.iter().find(|entry| entry.id == id))
+            .map(|entry| AssigneeMark {
+                initials: entry.initials.clone(),
+                label: entry.label.clone(),
+                colour: entry.colour,
+            }),
         estimate_minutes: task.estimate().map(|estimate| estimate.minutes()),
         due: task
             .due_on()

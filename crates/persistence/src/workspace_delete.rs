@@ -23,11 +23,11 @@ const WORKSPACE_SCOPED: &[(&str, &str)] = &[
         "board_columns",
         "DELETE FROM board_columns WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
     ),
-    ("projects", "DELETE FROM projects WHERE workspace_id = ?1"),
     (
         "team_members",
-        "DELETE FROM team_members WHERE workspace_id = ?1",
+        "DELETE FROM team_members WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
     ),
+    ("projects", "DELETE FROM projects WHERE workspace_id = ?1"),
 ];
 
 /// Names of every table that holds workspace data, in deletion order.

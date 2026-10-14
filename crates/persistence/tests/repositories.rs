@@ -1,7 +1,7 @@
 use looji_domain::{
-    Column, ColumnRepository, DomainError, Position, Project, ProjectId, ProjectRepository,
-    RepoError, Status, Task, TaskId, TaskRepository, TeamMember, TeamMemberRepository, Workspace,
-    WorkspaceRepository,
+    Column, ColumnRepository, DomainError, MemberColour, Position, Project, ProjectId,
+    ProjectRepository, RepoError, Status, Task, TaskId, TaskRepository, TeamMember,
+    TeamMemberRepository, Workspace, WorkspaceRepository,
 };
 use looji_persistence::{Connection, SqliteStore};
 use tempfile::TempDir;
@@ -27,8 +27,8 @@ fn project(store: &SqliteStore, workspace: &Workspace) -> Project {
     project
 }
 
-fn member(store: &SqliteStore, workspace: &Workspace) -> TeamMember {
-    let member = TeamMember::new(workspace.id(), "Dana").unwrap();
+fn member(store: &SqliteStore, project: &Project) -> TeamMember {
+    let member = TeamMember::new(project.id(), "Dana", MemberColour::for_new_member(0)).unwrap();
     TeamMemberRepository::save(store, &member).unwrap();
     member
 }
@@ -90,7 +90,8 @@ fn project_round_trips() {
 fn team_member_round_trips() {
     let store = store();
     let workspace = workspace(&store);
-    let original = TeamMember::new(workspace.id(), "Dana").unwrap();
+    let project = project(&store, &workspace);
+    let original = TeamMember::new(project.id(), "Dana", MemberColour::for_new_member(2)).unwrap();
 
     TeamMemberRepository::save(&store, &original).unwrap();
 
@@ -99,7 +100,7 @@ fn team_member_round_trips() {
         Some(original.clone())
     );
     assert_eq!(
-        TeamMemberRepository::list_for_workspace(&store, workspace.id()).unwrap(),
+        TeamMemberRepository::list_for_project(&store, project.id()).unwrap(),
         vec![original]
     );
 }
@@ -131,7 +132,7 @@ fn task_with_every_field_round_trips() {
     let store = store();
     let workspace = workspace(&store);
     let project = project(&store, &workspace);
-    let assignee = member(&store, &workspace);
+    let assignee = member(&store, &project);
 
     let mut original = Task::new(
         project.id(),
@@ -205,7 +206,7 @@ fn deleting_a_workspace_removes_its_projects_tasks_columns_and_members() {
     let store = store();
     let workspace = workspace(&store);
     let project = project(&store, &workspace);
-    let member = member(&store, &workspace);
+    let member = member(&store, &project);
     let task = task(&store, &project, "Goes with the workspace");
     let column = Column::new(project.id(), Status::Todo, "Todo", position("a0"), true).unwrap();
     ColumnRepository::save(&store, &column).unwrap();
@@ -233,23 +234,6 @@ fn deleting_a_workspace_removes_its_projects_tasks_columns_and_members() {
             .unwrap()
             .is_none()
     );
-}
-
-#[test]
-fn deleting_an_assignee_leaves_the_task_unassigned() {
-    let store = store();
-    let workspace = workspace(&store);
-    let project = project(&store, &workspace);
-    let member = member(&store, &workspace);
-    let mut task = task(&store, &project, "Assigned");
-    task.assign(Some(member.id()));
-    TaskRepository::save(&store, &task).unwrap();
-
-    TeamMemberRepository::delete(&store, member.id()).unwrap();
-
-    let loaded = TaskRepository::find(&store, task.id()).unwrap().unwrap();
-    assert_eq!(loaded.assignee_id(), None);
-    assert_eq!(loaded.title(), "Assigned");
 }
 
 #[test]

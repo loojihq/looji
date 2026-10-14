@@ -12,6 +12,7 @@ mod fields;
 mod keyboard;
 mod landing;
 mod layout;
+mod members;
 mod moves;
 mod panel;
 mod preferences_panel;
@@ -21,6 +22,7 @@ mod sidebar;
 mod state;
 mod task_dialog;
 mod task_form;
+mod team_dialog;
 
 use delete::PendingDelete;
 use project_state::ProjectList;
@@ -28,8 +30,8 @@ use projects::ProjectDialog;
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, RepoError, SettingsRepository, Task, Workspace, WorkspaceId, WorkspaceRepository,
-    next_untitled_name, validate_name,
+    DomainError, RepoError, SettingsRepository, Task, TeamMember, Workspace, WorkspaceId,
+    WorkspaceRepository, next_untitled_name, validate_name,
 };
 use looji_persistence::icons::{IconError, import_icon};
 
@@ -67,6 +69,9 @@ pub struct WorkspaceView {
     projects: ProjectList,
     /// The tasks of the selected project. Empty when no project is selected.
     board: Vec<Task>,
+    /// The team of the selected project, in the order they were added. Empty when no project is
+    /// selected.
+    members: Vec<TeamMember>,
     /// The create-project dialog, while it's open.
     project_dialog: Option<ProjectDialog>,
     /// A column hide waiting for confirmation.
@@ -75,6 +80,8 @@ pub struct WorkspaceView {
     drag: dragging::DragSession,
     /// The create or edit task dialog, while it's open.
     task_dialog: Option<task_dialog::TaskDialog>,
+    /// The team dialog, while it's open.
+    team_dialog: Option<team_dialog::TeamDialog>,
     /// The task detail panel beside the board, while a task is open in it.
     panel: Option<panel::PanelState>,
 }
@@ -91,10 +98,12 @@ impl WorkspaceView {
                     pending_delete: None,
                     projects: ProjectList::empty(),
                     board: Vec::new(),
+                    members: Vec::new(),
                     project_dialog: None,
                     pending_column: None,
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
+                    team_dialog: None,
                     panel: None,
                 };
                 view.reload_projects(cx);
@@ -278,6 +287,9 @@ impl WorkspaceView {
         if self.task_dialog.is_some() {
             return self.task_dialog_key(event, cx);
         }
+        if self.team_dialog.is_some() {
+            return self.team_dialog_key(event, cx);
+        }
         if self.panel.is_some() && self.panel_key(event, window, cx) {
             return;
         }
@@ -387,6 +399,11 @@ impl Render for WorkspaceView {
             None => self.list.active().name().to_string(),
         };
         let body = projects::content(self, &theme, cx);
+        let team = self
+            .projects
+            .active_id()
+            .is_some()
+            .then(|| team_dialog::open_button(&theme, cx).into_any_element());
         let delete_dialog = self
             .pending_delete
             .clone()
@@ -419,12 +436,14 @@ impl Render for WorkspaceView {
                     .child(sidebar::render(self, cx))
                     .child(main_pane(
                         header,
+                        team,
                         body,
                         panel::render(self, &theme, cx),
                         &theme,
                     )),
             )
             .children(task_dialog::overlay(self, &theme, cx))
+            .children(team_dialog::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
             .children(delete_dialog)
             .children(project_dialog)
@@ -436,6 +455,7 @@ impl Render for WorkspaceView {
 
 fn main_pane(
     header: String,
+    trailing: Option<AnyElement>,
     body: AnyElement,
     side: Option<AnyElement>,
     theme: &Theme,
@@ -449,13 +469,16 @@ fn main_pane(
         .child(
             div()
                 .flex()
+                .flex_row()
                 .items_center()
+                .gap(theme.spacing.sm)
                 .h(px(40.))
                 .px(theme.spacing.lg)
                 .border_b_1()
                 .border_color(theme.palette.border)
                 .text_size(theme.typography.title)
-                .child(header),
+                .child(div().flex_1().min_w_0().truncate().child(header))
+                .children(trailing),
         )
         .child(
             div()

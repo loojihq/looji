@@ -19,6 +19,7 @@ use super::card::{CalendarDate, CardDensity, task_card};
 use super::drag::{CancelReason, Command, Drag, Exit, Input};
 use super::keyboard::Hold;
 use super::layout::{BoardLayout, CardSlot, ColumnSlot, Point as DragPoint, Rect};
+use super::members;
 use crate::theme::Theme;
 
 /// How often the scroll loop runs while a column is being scrolled.
@@ -260,7 +261,7 @@ pub(super) fn overlay(view: &WorkspaceView, theme: &Theme) -> Option<AnyElement>
             .rounded(theme.radius.sm)
             .shadow(theme.elevation.overlay.clone())
             .child(task_card(
-                card_view(task),
+                card_view(task, &members::entries(&view.members)),
                 CardDensity::Compact,
                 today,
                 theme,

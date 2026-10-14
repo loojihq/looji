@@ -8,7 +8,7 @@ use looji_domain::{
 };
 
 use super::{
-    WorkspaceView, board,
+    WorkspaceView, board, members,
     project_state::{ProjectList, load_board},
     store, typed_text,
 };
@@ -56,8 +56,10 @@ impl WorkspaceView {
         self.reload_board(cx);
     }
 
-    /// Loads the board for the selected project. Nothing is loaded when no project is selected.
+    /// Loads the board and the team for the selected project. Nothing is loaded when no project is
+    /// selected.
     pub(super) fn reload_board(&mut self, cx: &mut Context<Self>) {
+        self.reload_members(cx);
         self.board = match self.projects.active_id() {
             Some(project) => load_board(store(cx), project).unwrap_or_else(|err| {
                 self.status = Some(format!("Could not load the board: {err}"));
@@ -279,7 +281,8 @@ pub(super) fn content(
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
-            board::render(project, &view.board, &view.drag, theme, cx).into_any_element()
+            let team = members::entries(&view.members);
+            board::render(project, &view.board, &team, &view.drag, theme, cx).into_any_element()
         }
     }
 }

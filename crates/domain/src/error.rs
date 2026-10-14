@@ -41,6 +41,12 @@ pub enum DomainError {
     DescriptionTooLong { max: usize },
     #[error("'{file_name}' is not a valid icon file name")]
     InvalidIconFile { file_name: String },
+    #[error("that team member no longer exists")]
+    UnknownMember,
+    #[error("that team member belongs to another project")]
+    MemberFromOtherProject,
+    #[error("'{0}' is not a member colour")]
+    UnknownColour(i64),
 }
 
 /// A repository could not load or save an entity.
@@ -54,6 +60,10 @@ pub enum RepoError {
     /// Stored data exists but no longer satisfies the domain rules.
     #[error("stored data is invalid: {0}")]
     Invalid(#[from] DomainError),
+    /// A write was refused because it breaks a rule that depends on stored data, such as assigning
+    /// a member who was removed or who belongs to another project.
+    #[error("{0}")]
+    Rejected(DomainError),
 }
 
 pub type RepoResult<T> = Result<T, RepoError>;

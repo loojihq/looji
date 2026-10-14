@@ -7,11 +7,13 @@
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, Position, Priority, Status, Task, TaskEventKind, TaskRepository, after,
-    changed_fields,
+    DomainError, Position, Priority, RepoError, Status, Task, TaskEventKind, TaskRepository,
+    TeamMember, TeamMemberId, after, changed_fields,
 };
 
-use super::fields::{chip, field, segment, text_box};
+use super::card::tooltip;
+use super::fields::{chip, field, member_mark, segment, text_box};
+use super::members;
 use super::task_form::{Field, Mode, TaskForm, Validated};
 use super::{WorkspaceView, store, typed_text};
 use crate::theme::Theme;
@@ -21,6 +23,8 @@ pub(super) struct TaskDialog {
     pub form: TaskForm,
     /// The discard prompt is showing over the dialog.
     pub confirming: bool,
+    /// The assignee list is open under its field.
+    pub assignee_open: bool,
     pub status: Status,
 }
 
@@ -55,9 +59,12 @@ impl WorkspaceView {
                     .or_else(|| visible.first().copied())
             })
             .unwrap_or(Status::Todo);
+        // Refresh the members on open, so the list is current even if the team changed since.
+        self.reload_members(cx);
         self.task_dialog = Some(TaskDialog {
             form,
             confirming: false,
+            assignee_open: false,
             status,
         });
         self.focus_handle.focus(window);
@@ -68,6 +75,7 @@ impl WorkspaceView {
     pub(super) fn task_dialog_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
+        let member_ids: Vec<TeamMemberId> = self.members.iter().map(TeamMember::id).collect();
         let Some(dialog) = self.task_dialog.as_mut() else {
             return;
         };
@@ -80,19 +88,26 @@ impl WorkspaceView {
         }
         let form = &mut dialog.form;
         match key {
+            // Escape closes the assignee list first, so it doesn't take the whole dialog with it.
+            "escape" if dialog.assignee_open => dialog.assignee_open = false,
             "escape" => return self.request_task_dialog_close(cx),
             "enter" if modifier => return self.save_task_dialog(cx),
             "enter" => {
                 if form.active == Field::Tags {
                     form.commit_tag();
+                } else if form.active == Field::Assignee {
+                    dialog.assignee_open = !dialog.assignee_open;
                 }
             }
+            "left" if form.active == Field::Assignee => form.step_assignee(&member_ids, false),
+            "right" if form.active == Field::Assignee => form.step_assignee(&member_ids, true),
             "tab" => {
                 if event.keystroke.modifiers.shift {
                     form.focus_previous();
                 } else {
                     form.focus_next();
                 }
+                dialog.assignee_open = false;
             }
             "backspace" => form.backspace(),
             "left" if form.active == Field::Priority => form.step_priority(false),
@@ -126,6 +141,11 @@ impl WorkspaceView {
 
     fn focus_task_field(&mut self, field: Field, cx: &mut Context<Self>) {
         if let Some(dialog) = self.task_dialog.as_mut() {
+            // Clicking another field closes the assignee list. Its own field leaves it to the
+            // toggle, which runs after this press.
+            if field != Field::Assignee {
+                dialog.assignee_open = false;
+            }
             dialog.form.focus(field);
             cx.notify();
         }
@@ -156,12 +176,33 @@ impl WorkspaceView {
                 self.reload_board(cx);
             }
             Err(message) => {
+                // The failure may be a member removed since the dialog opened, so the list is
+                // reloaded and the removed member drops out of the choices.
+                self.reload_members(cx);
                 if let Some(dialog) = self.task_dialog.as_mut() {
                     dialog.form.save_error = Some(message);
                 }
             }
         }
         cx.notify();
+    }
+
+    /// Picks an assignee from the list, or Unassigned, and closes the list.
+    fn choose_task_assignee(&mut self, assignee: Option<TeamMemberId>, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.task_dialog.as_mut() {
+            dialog.form.values.assignee = assignee;
+            dialog.form.focus(Field::Assignee);
+            dialog.assignee_open = false;
+            cx.notify();
+        }
+    }
+
+    fn toggle_task_assignee_list(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.task_dialog.as_mut() {
+            dialog.form.focus(Field::Assignee);
+            dialog.assignee_open = !dialog.assignee_open;
+            cx.notify();
+        }
     }
 
     /// The one write path for both modes. Create makes a new task at the end of its column. Edit
@@ -210,11 +251,20 @@ impl WorkspaceView {
                 }
             }
         };
-        store.save_task_recording(&task, &event).map_err(|err| {
-            // The detail goes to the log, and the user sees a plain message.
-            eprintln!("could not save task {}: {err}", task.id().as_uuid());
-            "Could not save the task. Your edits are still here, so try again.".to_string()
-        })
+        store
+            .save_task_recording(&task, &event)
+            .map_err(|err| match err {
+                RepoError::Rejected(DomainError::UnknownMember) => {
+                    "That team member was removed. Pick someone else or Unassigned, then save."
+                        .to_string()
+                }
+                RepoError::Rejected(rule) => format!("{rule}."),
+                err => {
+                    // The detail goes to the log, and the user sees a plain message.
+                    eprintln!("could not save task {}: {err}", task.id().as_uuid());
+                    "Could not save the task. Your edits are still here, so try again.".to_string()
+                }
+            })
     }
 }
 
@@ -224,6 +274,7 @@ fn apply(task: &mut Task, valid: &Validated) -> Result<(), DomainError> {
     task.set_description(valid.description.clone());
     task.set_estimate(valid.estimate);
     task.set_priority(valid.priority);
+    task.assign(valid.assignee);
     task.set_due_on(valid.due);
     task.set_tags(valid.tags.clone());
     Ok(())
@@ -349,9 +400,19 @@ pub(super) fn overlay(
         .child(field(
             "Assignee",
             None,
-            div()
-                .text_color(theme.palette.text_secondary)
-                .child("Unassigned. Team members arrive with the team task."),
+            focusable(
+                "field-assignee",
+                Field::Assignee,
+                assignee_dropdown(
+                    values.assignee,
+                    dialog.assignee_open,
+                    active == Field::Assignee,
+                    &members::entries(&view.members),
+                    theme,
+                    cx,
+                ),
+                cx,
+            ),
             theme,
         ))
         .child(field(
@@ -417,8 +478,142 @@ fn focusable(
         .child(body)
 }
 
+/// The assignee dropdown: the current choice, and when open, the choices under it. The first choice is
+/// Unassigned, then each member, shown with the same mark and label as on the card.
+fn assignee_dropdown(
+    selected: Option<TeamMemberId>,
+    open: bool,
+    active: bool,
+    entries: &[members::Entry],
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> Div {
+    let chosen = selected.and_then(|id| entries.iter().find(|entry| entry.id == id));
+    let shown = match (selected, chosen) {
+        (None, _) => div()
+            .text_color(theme.palette.text_secondary)
+            .child("Unassigned")
+            .into_any_element(),
+        (Some(_), Some(entry)) => div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.spacing.sm)
+            .child(member_mark(&entry.initials, entry.colour, px(22.), theme))
+            .child(entry.label.clone())
+            .into_any_element(),
+        // The member was removed after the dialog opened. The choice stays visible, so the save's
+        // message has something to point at.
+        (Some(_), None) => div()
+            .text_color(theme.palette.danger)
+            .child("No longer on the team. Pick someone else.")
+            .into_any_element(),
+    };
+    let trigger = div()
+        .id("task-assignee-toggle")
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .min_h(px(32.))
+        .px(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(if active {
+            theme.palette.accent
+        } else {
+            theme.palette.border_control
+        })
+        .bg(theme.palette.surface)
+        .text_size(theme.typography.body)
+        .cursor_pointer()
+        .child(shown)
+        .child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(if open { "Close" } else { "Change" }),
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_task_assignee_list(cx)));
+
+    let mut column = div().flex().flex_col().gap(theme.spacing.xs).child(trigger);
+    if open {
+        let mut options = div()
+            .id("assignee-options")
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.xs)
+            .p(theme.spacing.xs)
+            .max_h(px(180.))
+            .overflow_y_scroll()
+            .rounded(theme.radius.md)
+            .border_1()
+            .border_color(theme.palette.border_control)
+            .bg(theme.palette.surface_raised);
+        options = options.child(assignee_option(
+            0,
+            None,
+            None,
+            selected.is_none(),
+            theme,
+            cx,
+        ));
+        for (index, entry) in entries.iter().enumerate() {
+            options = options.child(assignee_option(
+                index + 1,
+                Some(entry.id),
+                Some(entry),
+                selected == Some(entry.id),
+                theme,
+                cx,
+            ));
+        }
+        column = column.child(options);
+    }
+    column
+}
+
+/// One choice in the assignee list. A member's row has their mark, and a tooltip with the full name
+/// and the ID that tells same-named members apart.
+fn assignee_option(
+    index: usize,
+    choice: Option<TeamMemberId>,
+    entry: Option<&members::Entry>,
+    selected: bool,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> Stateful<Div> {
+    let row = div()
+        .id(("assignee-option", index as u64))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.sm)
+        .cursor_pointer()
+        .when(selected, |row| row.bg(theme.palette.surface_selected))
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        .on_click(
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_task_assignee(choice, cx)),
+        );
+    match entry {
+        Some(entry) => row
+            .tooltip(tooltip(members::tooltip(entry)))
+            .child(member_mark(&entry.initials, entry.colour, px(22.), theme))
+            .child(entry.label.clone()),
+        None => row.child("Unassigned"),
+    }
+}
+
 /// A dialog button. The primary one is the action the dialog is for.
-fn button(id: &'static str, label: &str, primary: bool, theme: &Theme) -> Stateful<Div> {
+pub(super) fn button(
+    id: impl Into<ElementId>,
+    label: &str,
+    primary: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
     let base = div()
         .id(id)
         .px(theme.spacing.md)

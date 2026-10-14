@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use looji_domain::{
-    DueDate, Priority, ProjectId, RepoResult, Task, TaskId, TaskRecord, TaskRepository,
-    TeamMemberId,
+    DomainError, DueDate, Priority, ProjectId, RepoError, RepoResult, Task, TaskId, TaskRecord,
+    TaskRepository, TeamMemberId,
 };
-use rusqlite::{Connection, Row, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use super::{
     execute, get, id_text, query_all, query_one, read_id, read_optional_id, read_position,
@@ -112,6 +112,9 @@ impl TaskRepository for SqliteStore {
 /// and by the writes that also record history, so both commit together.
 pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResult<()> {
     let id = id_text(task.id().as_uuid());
+    if let Some(member) = task.assignee_id() {
+        check_assignee(transaction, member, task.project_id())?;
+    }
     transaction
         .execute(
             "INSERT INTO tasks (id, project_id, title, description, status, position,
@@ -158,4 +161,26 @@ pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResu
             .map_err(storage)?;
     }
     Ok(())
+}
+
+/// An assignee must still exist and must belong to the task's project. This runs inside the write's
+/// transaction, so a member removed a moment ago is refused rather than saved.
+fn check_assignee(
+    transaction: &Transaction<'_>,
+    member: TeamMemberId,
+    project: ProjectId,
+) -> RepoResult<()> {
+    let owner: Option<String> = transaction
+        .query_row(
+            "SELECT project_id FROM team_members WHERE id = ?1",
+            params![id_text(member.as_uuid())],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    match owner {
+        None => Err(RepoError::Rejected(DomainError::UnknownMember)),
+        Some(owner) if owner == id_text(project.as_uuid()) => Ok(()),
+        Some(_) => Err(RepoError::Rejected(DomainError::MemberFromOtherProject)),
+    }
 }

@@ -56,8 +56,15 @@ pub trait ColumnRepository {
 }
 
 pub trait TeamMemberRepository {
+    /// Adds a member, or saves a rename. A member's project and colour are fixed once it's added,
+    /// so a save never changes them.
     fn save(&self, member: &TeamMember) -> RepoResult<()>;
     fn find(&self, id: TeamMemberId) -> RepoResult<Option<TeamMember>>;
-    fn list_for_workspace(&self, workspace: WorkspaceId) -> RepoResult<Vec<TeamMember>>;
-    fn delete(&self, id: TeamMemberId) -> RepoResult<()>;
+    /// In the order they were added, which keeps their name suffixes stable.
+    fn list_for_project(&self, project: ProjectId) -> RepoResult<Vec<TeamMember>>;
+    /// How many tasks are assigned to the member.
+    fn assigned_task_count(&self, id: TeamMemberId) -> RepoResult<u64>;
+    /// Removes the member, and unassigns its tasks in the same transaction. The tasks stay. Returns
+    /// how many tasks were unassigned.
+    fn remove(&self, id: TeamMemberId) -> RepoResult<u64>;
 }

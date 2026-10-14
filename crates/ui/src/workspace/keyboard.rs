@@ -328,6 +328,10 @@ impl WorkspaceView {
             self.task_dialog_key(event, cx);
             return cx.stop_propagation();
         }
+        if self.team_dialog.is_some() {
+            self.team_dialog_key(event, cx);
+            return cx.stop_propagation();
+        }
         let Some(key) = Key::from_name(&event.keystroke.key) else {
             return;
         };

@@ -1,11 +1,11 @@
 //! The task card: one task on the board. Display only. Drag, selection, and editing wrap it later.
 //!
-//! The card takes a [`CardView`] rather than a domain `Task`, because priority, due dates, and
-//! assignee names aren't in the domain yet. The board fills in what exists and leaves the rest
-//! `None`. Every field the card can show is already wired, so each one lights up once it's stored.
+//! The card takes a [`CardView`] rather than a domain `Task`, so the board can fill it in from the
+//! task and its team. Every field the card can show is wired, and a field the task doesn't have is
+//! left `None`.
 
 use gpui::{prelude::*, *};
-use looji_domain::{TaskId, Timestamp};
+use looji_domain::{MemberColour, TaskId, Timestamp};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::{ActiveTheme, Theme};
@@ -112,10 +112,18 @@ pub struct CardView<'a> {
     pub id: TaskId,
     pub title: &'a str,
     pub priority: Option<Priority>,
-    /// The assignee's full name. Initials are derived from it.
-    pub assignee: Option<&'a str>,
+    pub assignee: Option<AssigneeMark>,
     pub estimate_minutes: Option<u32>,
     pub due: Option<CalendarDate>,
+}
+
+/// The assignee as the card shows them: initials on the member's colour, with the label in the
+/// tooltip. The colour tells two members with the same name apart, and the label gives the suffix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssigneeMark {
+    pub initials: String,
+    pub label: String,
+    pub colour: MemberColour,
 }
 
 /// Builds a card for `view`. A function rather than a `RenderOnce` type, because `IntoElement`
@@ -382,19 +390,26 @@ fn footer(
                 .child(div().min_w(px(36.)).child(estimate))
                 .child(div().min_w(px(52.)).truncate().child(due)),
         )
-        .child(assignee_badge(view.assignee, avatar, theme))
+        .child(assignee_badge(view.assignee.as_ref(), avatar, theme))
 }
 
-/// The assignee circle. With no assignee it's a neutral grey circle with "?", labelled
-/// "Unassigned", rather than an error-looking mark.
-fn assignee_badge(assignee: Option<&str>, size: Pixels, theme: &Theme) -> impl IntoElement + use<> {
+/// The assignee circle: the member's initials on their colour. With no assignee it's a neutral grey
+/// circle with "?", labelled "Unassigned", rather than an error-looking mark.
+fn assignee_badge(
+    assignee: Option<&AssigneeMark>,
+    size: Pixels,
+    theme: &Theme,
+) -> impl IntoElement + use<> {
     let (text, label, background, foreground) = match assignee {
-        Some(name) => (
-            initials(name).unwrap_or_else(|| "?".to_string()),
-            name.to_string(),
-            theme.palette.surface_selected,
-            theme.palette.text_primary,
-        ),
+        Some(mark) => {
+            let pair = theme.palette.avatars[mark.colour.index()];
+            (
+                mark.initials.clone(),
+                mark.label.clone(),
+                pair.background,
+                pair.text,
+            )
+        }
         None => (
             "?".to_string(),
             "Unassigned".to_string(),
@@ -402,7 +417,10 @@ fn assignee_badge(assignee: Option<&str>, size: Pixels, theme: &Theme) -> impl I
             theme.palette.text_secondary,
         ),
     };
-    let id = ("assignee", assignee.map_or(0, |name| name.len() as u64 + 1));
+    let id = (
+        "assignee",
+        assignee.map_or(0, |mark| mark.label.len() as u64 + 1),
+    );
     div()
         .id(id)
         .flex_shrink_0()
@@ -419,7 +437,9 @@ fn assignee_badge(assignee: Option<&str>, size: Pixels, theme: &Theme) -> impl I
 }
 
 /// A tooltip that shows one line of text.
-fn tooltip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+pub(super) fn tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text: SharedString = text.into();
     move |_, cx| cx.new(|_| TooltipText(text.clone())).into()
 }
@@ -439,20 +459,6 @@ impl Render for TooltipText {
             .text_size(theme.typography.caption)
             .child(self.0.clone())
     }
-}
-
-/// Up to two initials from a name: the first character of the first and last words, uppercased.
-/// `None` for an empty or blank name. Works on characters, so accented, CJK, and emoji names are
-/// safe.
-pub fn initials(name: &str) -> Option<String> {
-    let words: Vec<&str> = name.split_whitespace().collect();
-    let first = words.first()?.graphemes(true).next()?;
-    let last = words.last()?.graphemes(true).next()?;
-    let mut text = first.to_uppercase();
-    if words.len() > 1 {
-        text.push_str(&last.to_uppercase());
-    }
-    Some(text)
 }
 
 /// A duration in minutes, shown in hours: `6h`, `1.5h`, `0.75h`. `None` for zero, which means no
@@ -553,7 +559,11 @@ pub(super) fn gallery(theme: &Theme) -> impl IntoElement + use<> {
                             id: TaskId::from_uuid(uuid::Uuid::from_u128(index as u128 + 1)),
                             title,
                             priority: *priority,
-                            assignee: *assignee,
+                            assignee: assignee.map(|name| AssigneeMark {
+                                initials: looji_domain::initials(name),
+                                label: name.to_string(),
+                                colour: MemberColour::for_new_member(index),
+                            }),
                             estimate_minutes: *estimate,
                             due: *due,
                         },
@@ -581,7 +591,7 @@ mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use gpui::px;
 
-    use super::{CalendarDate, civil_from_days, cut_lines, format_due, format_estimate, initials};
+    use super::{CalendarDate, civil_from_days, cut_lines, format_due, format_estimate};
 
     /// Ten pixels per character, so widths are easy to reason about.
     fn measure(text: &str) -> gpui::Pixels {
@@ -628,43 +638,6 @@ mod tests {
     #[test]
     fn leading_spaces_are_dropped() {
         assert_eq!(cut_lines("   Fix", px(100.), 1, measure), ["Fix"]);
-    }
-
-    #[test]
-    fn initials_of_one_word_is_one_letter() {
-        assert_eq!(initials("dana"), Some("D".to_string()));
-    }
-
-    #[test]
-    fn initials_are_first_and_last_word() {
-        assert_eq!(initials("Ana María López"), Some("AL".to_string()));
-    }
-
-    #[test]
-    fn initials_ignore_leading_and_trailing_spaces() {
-        assert_eq!(initials("   dana   kim  "), Some("DK".to_string()));
-    }
-
-    #[test]
-    fn empty_and_blank_names_have_no_initials() {
-        assert_eq!(initials(""), None);
-        assert_eq!(initials("   \t "), None);
-    }
-
-    #[test]
-    fn accented_initials_keep_the_whole_letter() {
-        assert_eq!(initials("Émile Zola"), Some("ÉZ".to_string()));
-    }
-
-    #[test]
-    fn cjk_names_do_not_panic_and_give_one_character() {
-        assert_eq!(initials("田中太郎"), Some("田".to_string()));
-        assert_eq!(initials("田中 太郎"), Some("田太".to_string()));
-    }
-
-    #[test]
-    fn emoji_are_kept_whole() {
-        assert_eq!(initials("🚀 Launch"), Some("🚀L".to_string()));
     }
 
     #[test]
