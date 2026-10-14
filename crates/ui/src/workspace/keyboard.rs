@@ -315,6 +315,14 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // While a panel field is being typed in, the keys belong to the panel, so the card lets them through.
+        if self
+            .panel
+            .as_ref()
+            .is_some_and(|panel| panel.draft.is_some())
+        {
+            return;
+        }
         // The dialog owns the keys while it's open, even when a card behind it has focus.
         if self.task_dialog.is_some() {
             self.task_dialog_key(event, cx);

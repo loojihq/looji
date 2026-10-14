@@ -16,6 +16,7 @@ mod status;
 mod status_columns;
 mod status_visibility;
 mod task;
+mod task_event;
 mod task_fields;
 mod task_move;
 mod team;
@@ -45,6 +46,7 @@ pub use status::Status;
 pub use status_columns::{StatusColumn, status_columns};
 pub use status_visibility::{check_hideable, resolve_visible_status, visible_statuses};
 pub use task::{Estimate, Task, TaskRecord};
+pub use task_event::{TaskEvent, TaskEventKind, changed_fields};
 pub use task_fields::{
     DueDate, EstimateError, MAX_TAG_CHARS, MAX_TAGS, Priority, TagError, normalize_tag,
     normalize_tags, parse_due_date, parse_estimate_hours, validate_title,

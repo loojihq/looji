@@ -6,7 +6,10 @@
 //! dialog. Tab moves between fields and never reaches the board behind.
 
 use gpui::{prelude::*, *};
-use looji_domain::{DomainError, Position, Priority, Status, Task, TaskRepository, after};
+use looji_domain::{
+    DomainError, Position, Priority, Status, Task, TaskEventKind, TaskRepository, after,
+    changed_fields,
+};
 
 use super::fields::{chip, field, segment, text_box};
 use super::task_form::{Field, Mode, TaskForm, Validated};
@@ -193,8 +196,21 @@ impl WorkspaceView {
                 Err(err) => return Err(format!("Could not load the task: {err}")),
             },
         };
+        let before = task.clone();
         apply(&mut task, valid).map_err(|err| err.to_string())?;
-        TaskRepository::save(store, &task).map_err(|err| {
+        let event = match mode {
+            Mode::Create => TaskEventKind::Created,
+            Mode::Edit(_) => {
+                let fields = changed_fields(&before, &task);
+                if fields.is_empty() {
+                    return Ok(());
+                }
+                TaskEventKind::Edited {
+                    fields: fields.into_iter().map(str::to_string).collect(),
+                }
+            }
+        };
+        store.save_task_recording(&task, &event).map_err(|err| {
             // The detail goes to the log, and the user sees a plain message.
             eprintln!("could not save task {}: {err}", task.id().as_uuid());
             "Could not save the task. Your edits are still here, so try again.".to_string()

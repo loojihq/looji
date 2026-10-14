@@ -13,6 +13,7 @@ mod keyboard;
 mod landing;
 mod layout;
 mod moves;
+mod panel;
 mod preferences_panel;
 mod project_state;
 mod projects;
@@ -74,6 +75,8 @@ pub struct WorkspaceView {
     drag: dragging::DragSession,
     /// The create or edit task dialog, while it's open.
     task_dialog: Option<task_dialog::TaskDialog>,
+    /// The task detail panel beside the board, while a task is open in it.
+    panel: Option<panel::PanelState>,
 }
 
 impl WorkspaceView {
@@ -92,6 +95,7 @@ impl WorkspaceView {
                     pending_column: None,
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
+                    panel: None,
                 };
                 view.reload_projects(cx);
                 view
@@ -274,6 +278,9 @@ impl WorkspaceView {
         if self.task_dialog.is_some() {
             return self.task_dialog_key(event, cx);
         }
+        if self.panel.is_some() && self.panel_key(event, window, cx) {
+            return;
+        }
         // Tab moves between cards and other controls, unless a dialog or a rename owns the keyboard.
         let modal = self.pending_column.is_some()
             || self.project_dialog.is_some()
@@ -410,7 +417,12 @@ impl Render for WorkspaceView {
                     .flex_1()
                     .min_h_0()
                     .child(sidebar::render(self, cx))
-                    .child(main_pane(header, body, &theme)),
+                    .child(main_pane(
+                        header,
+                        body,
+                        panel::render(self, &theme, cx),
+                        &theme,
+                    )),
             )
             .children(task_dialog::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
@@ -422,7 +434,12 @@ impl Render for WorkspaceView {
     }
 }
 
-fn main_pane(header: String, body: AnyElement, theme: &Theme) -> impl IntoElement {
+fn main_pane(
+    header: String,
+    body: AnyElement,
+    side: Option<AnyElement>,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -440,7 +457,15 @@ fn main_pane(header: String, body: AnyElement, theme: &Theme) -> impl IntoElemen
                 .text_size(theme.typography.title)
                 .child(header),
         )
-        .child(body)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_1()
+                .min_h_0()
+                .child(div().flex_1().min_w_0().min_h_0().child(body))
+                .children(side),
+        )
 }
 
 /// The text a keystroke types. The space key can arrive without `key_char`, so it's

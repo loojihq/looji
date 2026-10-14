@@ -66,6 +66,7 @@ impl WorkspaceView {
             None => Vec::new(),
         };
         self.cancel_keyboard_if_gone(cx);
+        self.close_panel_if_gone(cx);
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {

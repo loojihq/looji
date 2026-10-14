@@ -7,6 +7,7 @@ mod column;
 mod project;
 pub(crate) mod settings;
 mod task;
+pub(crate) mod task_history;
 pub(crate) mod task_move;
 mod team;
 mod workspace;

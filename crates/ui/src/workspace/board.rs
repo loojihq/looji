@@ -473,6 +473,7 @@ impl WorkspaceView {
         match TaskRepository::delete(super::store(cx), id) {
             Ok(()) => {
                 self.board.pop();
+                self.close_panel_if_gone(cx);
             }
             Err(err) => self.status = Some(format!("Could not delete the task: {err}")),
         }

@@ -438,7 +438,7 @@ impl WorkspaceView {
         self.drive_drag(input, cx);
         // A click on a card, with no drag, opens it for editing.
         if let Some(task) = self.drag.opened.take() {
-            self.open_task_dialog(super::task_form::Mode::Edit(task), window, cx);
+            self.open_panel(task, cx);
         }
     }
 

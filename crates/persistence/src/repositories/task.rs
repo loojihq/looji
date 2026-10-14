@@ -4,7 +4,7 @@ use looji_domain::{
     DueDate, Priority, ProjectId, RepoResult, Task, TaskId, TaskRecord, TaskRepository,
     TeamMemberId,
 };
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, Row, Transaction, params};
 
 use super::{
     execute, get, id_text, query_all, query_one, read_id, read_optional_id, read_position,
@@ -55,53 +55,8 @@ fn load_tags(
 impl TaskRepository for SqliteStore {
     /// Writes the task and replaces its tags in one transaction, so a task never has half its tags.
     fn save(&self, task: &Task) -> RepoResult<()> {
-        let id = id_text(task.id().as_uuid());
         let transaction = self.connection.unchecked_transaction().map_err(storage)?;
-        transaction
-            .execute(
-                "INSERT INTO tasks (id, project_id, title, description, status, position,
-                                    estimate_minutes, assignee_id, priority, due_on,
-                                    created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-                 ON CONFLICT (id) DO UPDATE SET
-                     project_id = excluded.project_id,
-                     title = excluded.title,
-                     description = excluded.description,
-                     status = excluded.status,
-                     position = excluded.position,
-                     estimate_minutes = excluded.estimate_minutes,
-                     assignee_id = excluded.assignee_id,
-                     priority = excluded.priority,
-                     due_on = excluded.due_on,
-                     updated_at = excluded.updated_at",
-                params![
-                    id,
-                    id_text(task.project_id().as_uuid()),
-                    task.title(),
-                    task.description(),
-                    task.status().as_str(),
-                    task.position().as_str(),
-                    task.estimate()
-                        .map(|estimate| i64::from(estimate.minutes())),
-                    task.assignee_id().map(|id| id_text(id.as_uuid())),
-                    task.priority().map(Priority::as_str),
-                    task.due_on().map(|due| due.to_string()),
-                    task.created_at().unix_millis(),
-                    task.updated_at().unix_millis(),
-                ],
-            )
-            .map_err(storage)?;
-        transaction
-            .execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])
-            .map_err(storage)?;
-        for tag in task.tags() {
-            transaction
-                .execute(
-                    "INSERT INTO task_tags (task_id, tag) VALUES (?1, ?2)",
-                    params![id, tag],
-                )
-                .map_err(storage)?;
-        }
+        write_task(&transaction, task)?;
         transaction.commit().map_err(storage)
     }
 
@@ -151,4 +106,56 @@ impl TaskRepository for SqliteStore {
             params![id_text(id.as_uuid())],
         )
     }
+}
+
+/// Writes a task and its tags inside a transaction the caller owns. Used by [`TaskRepository::save`]
+/// and by the writes that also record history, so both commit together.
+pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResult<()> {
+    let id = id_text(task.id().as_uuid());
+    transaction
+        .execute(
+            "INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, priority, due_on,
+                                    created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT (id) DO UPDATE SET
+                     project_id = excluded.project_id,
+                     title = excluded.title,
+                     description = excluded.description,
+                     status = excluded.status,
+                     position = excluded.position,
+                     estimate_minutes = excluded.estimate_minutes,
+                     assignee_id = excluded.assignee_id,
+                     priority = excluded.priority,
+                     due_on = excluded.due_on,
+                     updated_at = excluded.updated_at",
+            params![
+                id,
+                id_text(task.project_id().as_uuid()),
+                task.title(),
+                task.description(),
+                task.status().as_str(),
+                task.position().as_str(),
+                task.estimate()
+                    .map(|estimate| i64::from(estimate.minutes())),
+                task.assignee_id().map(|id| id_text(id.as_uuid())),
+                task.priority().map(Priority::as_str),
+                task.due_on().map(|due| due.to_string()),
+                task.created_at().unix_millis(),
+                task.updated_at().unix_millis(),
+            ],
+        )
+        .map_err(storage)?;
+    transaction
+        .execute("DELETE FROM task_tags WHERE task_id = ?1", params![id])
+        .map_err(storage)?;
+    for tag in task.tags() {
+        transaction
+            .execute(
+                "INSERT INTO task_tags (task_id, tag) VALUES (?1, ?2)",
+                params![id, tag],
+            )
+            .map_err(storage)?;
+    }
+    Ok(())
 }

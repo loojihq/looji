@@ -50,6 +50,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_fields",
         sql: include_str!("sql/0009_task_fields.sql"),
     },
+    Migration {
+        version: 10,
+        name: "task_events",
+        sql: include_str!("sql/0010_task_events.sql"),
+    },
 ];
 
 #[cfg(test)]
