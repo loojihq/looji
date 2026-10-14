@@ -4,9 +4,13 @@
 //! task and its team. Every field the card can show is wired, and a field the task doesn't have is
 //! left `None`.
 
+use std::ops::Range;
+
 use gpui::{prelude::*, *};
 use looji_domain::{MemberColour, TaskId, Timestamp};
 use unicode_segmentation::UnicodeSegmentation;
+
+use super::search::Hits;
 
 use crate::theme::{ActiveTheme, Theme};
 
@@ -117,6 +121,8 @@ pub struct CardView<'a> {
     pub due: Option<CalendarDate>,
     /// The task's tags, in stored form.
     pub tags: Vec<String>,
+    /// Where the board search matched this card. `None` when no search is running.
+    pub search: Option<Hits>,
 }
 
 /// The assignee as the card shows them: initials on the member's colour, with the label in the
@@ -171,17 +177,41 @@ fn card_layout(
         .border_color(theme.palette.border)
         .text_size(theme.typography.body)
         .child(title_row(view, density, theme))
-        .children(tag_row(&view.tags, theme))
+        .children(snippet_row(view.search.as_ref(), theme))
+        .children(tag_row(&view.tags, view.search.as_ref(), theme))
         .child(footer(view, today, avatar, theme))
         .children(extra)
 }
 
 /// Up to three tags as small chips, then how many more there are. Read-only: the editor is on the
 /// card while it's open.
-fn tag_row(tags: &[String], theme: &Theme) -> Option<Div> {
+/// The description around a match, when a search matched the description. The card doesn't show
+/// descriptions, so without this a card could match for no visible reason.
+fn snippet_row(hits: Option<&Hits>, theme: &Theme) -> Option<Div> {
+    let snippet = hits?.snippet.as_ref()?;
+    let highlight = theme.palette.accent.opacity(0.35);
+    let spans = snippet.ranges.iter().map(|range| {
+        (
+            range.clone(),
+            HighlightStyle {
+                background_color: Some(highlight),
+                ..Default::default()
+            },
+        )
+    });
+    Some(
+        div()
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child(StyledText::new(snippet.text.clone()).with_highlights(spans)),
+    )
+}
+
+fn tag_row(tags: &[String], hits: Option<&Hits>, theme: &Theme) -> Option<Div> {
     if tags.is_empty() {
         return None;
     }
+    let matched = |index: usize| hits.is_some_and(|hits| hits.tags.get(index) == Some(&true));
     let mut row = div()
         .flex()
         .flex_row()
@@ -189,12 +219,17 @@ fn tag_row(tags: &[String], theme: &Theme) -> Option<Div> {
         .gap(theme.spacing.xs)
         .text_size(theme.typography.caption)
         .text_color(theme.palette.text_secondary);
-    for tag in tags.iter().take(3) {
+    for (index, tag) in tags.iter().enumerate().take(3) {
+        let chip = if matched(index) {
+            theme.palette.accent.opacity(0.35)
+        } else {
+            theme.palette.surface_selected
+        };
         row = row.child(
             div()
                 .px(theme.spacing.xs)
                 .rounded(theme.radius.sm)
-                .bg(theme.palette.surface_selected)
+                .bg(chip)
                 .text_color(theme.palette.text_primary)
                 .child(tag.clone()),
         );
@@ -214,6 +249,12 @@ fn title_row(view: &CardView<'_>, density: CardDensity, theme: &Theme) -> impl I
     let title = div().flex_1().min_w_0().overflow_hidden().child(TitleText {
         text: view.title.to_string().into(),
         lines,
+        highlights: view
+            .search
+            .as_ref()
+            .map(|hits| hits.title.clone())
+            .unwrap_or_default(),
+        highlight: theme.palette.accent.opacity(0.35),
     });
     // The marker sits beside the title in a flex row, which gives the title a definite width.
     div()
@@ -231,7 +272,13 @@ fn title_row(view: &CardView<'_>, density: CardDensity, theme: &Theme) -> impl I
 struct TitleText {
     text: SharedString,
     lines: usize,
+    /// Where the search matched, as byte ranges of `text`. Empty when there's no search.
+    highlights: Vec<Range<usize>>,
+    highlight: Hsla,
 }
+
+/// One painted line of the title, with the x ranges its matches cover.
+type TitleLine = (ShapedLine, Vec<(Pixels, Pixels)>);
 
 impl IntoElement for TitleText {
     type Element = Self;
@@ -244,7 +291,7 @@ impl IntoElement for TitleText {
 impl Element for TitleText {
     /// The line height, needed again when painting.
     type RequestLayoutState = Pixels;
-    type PrepaintState = Vec<ShapedLine>;
+    type PrepaintState = Vec<TitleLine>;
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -276,7 +323,7 @@ impl Element for TitleText {
         _line_height: &mut Pixels,
         window: &mut Window,
         _cx: &mut App,
-    ) -> Vec<ShapedLine> {
+    ) -> Vec<TitleLine> {
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let measure = |text: &str| {
@@ -285,13 +332,27 @@ impl Element for TitleText {
                 .layout_line(text, font_size, &[style.to_run(text.len())], None)
                 .width
         };
-        cut_lines(&self.text, bounds.size.width, self.lines, measure)
+        cut_spans(&self.text, bounds.size.width, self.lines, measure)
             .into_iter()
-            .map(|line| {
+            .map(|(start, line)| {
+                let end = start + line.len();
                 let runs = [style.to_run(line.len())];
-                window
+                let shaped = window
                     .text_system()
-                    .shape_line(line.into(), font_size, &runs, None)
+                    .shape_line(line.into(), font_size, &runs, None);
+                // A match is painted where it falls on this line. A line cut with an ellipsis
+                // keeps the matches before the cut.
+                let spans = self
+                    .highlights
+                    .iter()
+                    .filter(|range| range.end > start && range.start < end)
+                    .map(|range| {
+                        let from = range.start.max(start) - start;
+                        let to = range.end.min(end) - start;
+                        (shaped.x_for_index(from), shaped.x_for_index(to))
+                    })
+                    .collect();
+                (shaped, spans)
             })
             .collect()
     }
@@ -302,12 +363,20 @@ impl Element for TitleText {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         line_height: &mut Pixels,
-        lines: &mut Vec<ShapedLine>,
+        lines: &mut Vec<TitleLine>,
         window: &mut Window,
         cx: &mut App,
     ) {
-        for (index, line) in lines.iter().enumerate() {
+        for (index, (line, spans)) in lines.iter().enumerate() {
             let origin = bounds.origin + point(px(0.), *line_height * index as f32);
+            // The highlights go under the text, so they're painted first.
+            for (from, to) in spans {
+                let area = Bounds::new(
+                    origin + point(*from, px(0.)),
+                    size(*to - *from, *line_height),
+                );
+                window.paint_quad(fill(area, self.highlight));
+            }
             let _ = line.paint(origin, *line_height, window, cx);
         }
     }
@@ -316,21 +385,24 @@ impl Element for TitleText {
 /// Splits `text` into at most `max_lines` lines that each fit `width`. Lines break at a space
 /// when there is one, otherwise between graphemes. If text is left over, the last line ends in
 /// "…". `measure` gives the width of a string, so this stays pure and testable.
-fn cut_lines(
+/// Each line with the byte offset in `text` where it starts. The highlights are placed by that offset.
+fn cut_spans(
     text: &str,
     width: Pixels,
     max_lines: usize,
     measure: impl Fn(&str) -> Pixels,
-) -> Vec<String> {
+) -> Vec<(usize, String)> {
     let mut lines = Vec::new();
     let mut rest = text.trim_start();
     while !rest.is_empty() {
+        // Every rest is a suffix of the text, so its start is the text length less its own.
+        let start = text.len() - rest.len();
         if measure(rest) <= width {
-            lines.push(rest.to_string());
+            lines.push((start, rest.to_string()));
             break;
         }
         if lines.len() + 1 == max_lines {
-            lines.push(fit_with_ellipsis(rest, width, &measure));
+            lines.push((start, fit_with_ellipsis(rest, width, &measure)));
             break;
         }
         let end = fitting_end(rest, width, &measure);
@@ -338,10 +410,23 @@ fn cut_lines(
             .rfind(char::is_whitespace)
             .filter(|&index| index > 0)
             .unwrap_or(end);
-        lines.push(rest[..break_at].trim_end().to_string());
+        lines.push((start, rest[..break_at].trim_end().to_string()));
         rest = rest[break_at..].trim_start();
     }
     lines
+}
+
+#[cfg(test)]
+fn cut_lines(
+    text: &str,
+    width: Pixels,
+    max_lines: usize,
+    measure: impl Fn(&str) -> Pixels,
+) -> Vec<String> {
+    cut_spans(text, width, max_lines, measure)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect()
 }
 
 /// The byte offset where the longest grapheme prefix of `text` that fits `width` ends. Always at
@@ -604,6 +689,7 @@ pub(super) fn gallery(theme: &Theme) -> impl IntoElement + use<> {
                             estimate_minutes: *estimate,
                             due: *due,
                             tags: Vec::new(),
+                            search: None,
                         },
                         density,
                         today,

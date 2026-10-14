@@ -23,7 +23,7 @@ impl WorkspaceView {
             project.id(),
             drop.from,
             drop.status,
-            drop.index,
+            self.full_drop_index(&drop),
             &project.visible_statuses(),
         ) {
             Ok(mv) => mv,

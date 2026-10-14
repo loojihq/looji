@@ -3,6 +3,7 @@
 mod autoscroll;
 mod avatar;
 mod board;
+mod board_search;
 mod card;
 mod columns;
 mod delete;
@@ -18,6 +19,7 @@ mod panel;
 mod preferences_panel;
 mod project_state;
 mod projects;
+mod search;
 mod sidebar;
 mod state;
 mod task_dialog;
@@ -90,6 +92,12 @@ pub struct WorkspaceView {
     tag_edit: Option<task_edit::TagEdit>,
     /// The card whose priority and tag editor is open.
     card_editing: Option<TaskId>,
+    /// The board search: what is typed, the query the board filters by, and whether the field has
+    /// the keyboard.
+    search_draft: String,
+    search_query: String,
+    search_focused: bool,
+    search_debounce: search::Debounce,
 }
 
 impl WorkspaceView {
@@ -113,6 +121,10 @@ impl WorkspaceView {
                     panel: None,
                     tag_edit: None,
                     card_editing: None,
+                    search_draft: String::new(),
+                    search_query: String::new(),
+                    search_focused: false,
+                    search_debounce: search::Debounce::default(),
                 };
                 view.reload_projects(cx);
                 view
@@ -289,6 +301,14 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The search field takes its keys first, so shortcuts and card moves don't fire while typing.
+        if self.search_focused && self.search_key(event, window, cx) {
+            return;
+        }
+        let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key == "f" && (modifiers.control || modifiers.platform) {
+            return self.focus_search(window, cx);
+        }
         if self.key_pressed(event, cx) {
             return;
         }
@@ -435,7 +455,10 @@ impl Render for WorkspaceView {
             // A press anywhere that isn't an editor ends the tag input. Editors stop their presses.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| this.blur_tag_editor(cx)),
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.blur_tag_editor(cx);
+                    this.blur_search(cx);
+                }),
             )
             .flex()
             .flex_col()

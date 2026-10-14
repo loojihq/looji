@@ -14,6 +14,7 @@ use super::drag::Exit;
 use super::dragging::{DragSession, record_columns};
 use super::landing::{Slot, column_sequence, stack_tops};
 use super::members;
+use super::search;
 use super::task_edit::TagEdit;
 use super::task_editors;
 use super::task_form::Mode;
@@ -224,7 +225,7 @@ fn body(
         .p(theme.spacing.xs);
 
     let content = if sequence.is_empty() {
-        content.child(drop_zone(index, theme))
+        content.child(drop_zone(index, !cards.terms.is_empty(), theme))
     } else {
         let items = sequence.iter().enumerate().map(|(position, slot)| {
             let offset = earlier
@@ -333,7 +334,7 @@ fn card_slot(
             }),
         )
         .child(task_card(
-            card_view(task, &cards.members),
+            card_view(task, cards),
             CardDensity::Compact,
             today,
             theme,
@@ -410,10 +411,23 @@ pub(super) struct CardContext {
     pub members: Vec<members::Entry>,
     pub editing: Option<TaskId>,
     pub tag_edit: Option<TagEdit>,
+    /// The search terms in use. Empty when nothing is being searched.
+    pub terms: Vec<String>,
+}
+
+/// What the cards draw from the view, built fresh for each render so it can't go stale.
+pub(super) fn card_context(view: &WorkspaceView) -> CardContext {
+    CardContext {
+        members: members::entries(&view.members),
+        editing: view.card_editing,
+        tag_edit: view.tag_edit.clone(),
+        terms: search::terms(&view.search_query),
+    }
 }
 
 /// The empty-column target. It keeps its height and has a stable ID, so drag can find it later.
-fn drop_zone(index: usize, theme: &Theme) -> impl IntoElement {
+/// While a search is running, an empty column says so, since its cards may be hidden.
+fn drop_zone(index: usize, searching: bool, theme: &Theme) -> impl IntoElement {
     div()
         .id(("drop-zone", index as u64))
         .flex()
@@ -427,12 +441,13 @@ fn drop_zone(index: usize, theme: &Theme) -> impl IntoElement {
         .border_color(theme.palette.border_control)
         .text_size(theme.typography.caption)
         .text_color(theme.palette.text_secondary)
-        .child("No tasks")
+        .child(if searching { "No matches" } else { "No tasks" })
 }
 
 /// The card for a task. A task whose assignee isn't in `members` shows as unassigned, since it can't
 /// be named.
-pub(super) fn card_view<'a>(task: &'a Task, members: &[members::Entry]) -> CardView<'a> {
+pub(super) fn card_view<'a>(task: &'a Task, cards: &CardContext) -> CardView<'a> {
+    let members = &cards.members;
     CardView {
         id: task.id(),
         title: task.title(),
@@ -454,6 +469,7 @@ pub(super) fn card_view<'a>(task: &'a Task, members: &[members::Entry]) -> CardV
             .due_on()
             .and_then(|due| CalendarDate::new(due.year(), due.month(), due.day())),
         tags: task.tags().to_vec(),
+        search: (!cards.terms.is_empty()).then(|| search::hits(task, &cards.terms)),
     }
 }
 

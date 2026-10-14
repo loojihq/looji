@@ -8,9 +8,9 @@ use looji_domain::{
 };
 
 use super::{
-    WorkspaceView, board, members,
+    WorkspaceView, board, board_search,
     project_state::{ProjectList, load_board},
-    store, typed_text,
+    search, store, typed_text,
 };
 use crate::theme::Theme;
 
@@ -45,6 +45,7 @@ impl ProjectDialog {
 impl WorkspaceView {
     /// Reloads the projects of the active workspace and selects the first one.
     pub(super) fn reload_projects(&mut self, cx: &mut Context<Self>) {
+        self.reset_search();
         let workspace = self.list.active_workspace_id();
         match ProjectList::for_workspace(store(cx), workspace) {
             Ok(projects) => self.projects = projects,
@@ -73,6 +74,7 @@ impl WorkspaceView {
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
+        self.reset_search();
         self.projects.select(id);
         self.reload_board(cx);
         cx.notify();
@@ -282,12 +284,20 @@ pub(super) fn content(
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
-            let cards = board::CardContext {
-                members: members::entries(&view.members),
-                editing: view.card_editing,
-                tag_edit: view.tag_edit.clone(),
-            };
-            board::render(project, &view.board, &cards, &view.drag, theme, cx).into_any_element()
+            let cards = board::card_context(view);
+            // The board draws only the cards the search leaves visible, in their order. A query that
+            // matches nothing is shown as such, rather than as an empty board.
+            let shown = search::visible(&view.board, &cards.terms);
+            let bar = board_search::bar(view, shown.len(), view.board.len(), theme, cx);
+            let column = board::render(project, &shown, &cards, &view.drag, theme, cx);
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .min_h_0()
+                .child(bar)
+                .child(div().flex_1().min_h_0().child(column))
+                .into_any_element()
         }
     }
 }
