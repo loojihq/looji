@@ -332,6 +332,10 @@ impl WorkspaceView {
             self.team_dialog_key(event, cx);
             return cx.stop_propagation();
         }
+        // A tag being typed on a card takes the keys, so Enter, Backspace, and arrows edit the tag.
+        if self.tag_edit.is_some() && self.tag_key(event, cx) {
+            return cx.stop_propagation();
+        }
         let Some(key) = Key::from_name(&event.keystroke.key) else {
             return;
         };

@@ -6,16 +6,14 @@
 //! says so. A draft the user was typing is logged rather than thrown away silently.
 
 use gpui::{prelude::*, *};
-use looji_domain::{
-    DomainError, Priority, Status, Task, TaskEvent, TaskEventKind, TaskId, TeamMemberId, Timestamp,
-    changed_fields,
-};
+use looji_domain::{Status, Task, TaskEvent, TaskEventKind, TaskId, TeamMemberId, Timestamp};
 
 use super::board::status_label;
 use super::card::{civil_from_days, tooltip};
 use super::drag::DropResult;
 use super::fields::{field, member_mark, segment, text_box};
 use super::members;
+use super::task_editors;
 use super::{WorkspaceView, store, typed_text};
 use crate::theme::Theme;
 
@@ -105,15 +103,6 @@ fn assignee_row(
     }
 }
 
-fn priority_label(priority: Option<Priority>) -> &'static str {
-    match priority {
-        None => "None",
-        Some(Priority::Low) => "Low",
-        Some(Priority::Medium) => "Medium",
-        Some(Priority::High) => "High",
-    }
-}
-
 impl WorkspaceView {
     /// Opens the panel for a task on the board, with its history.
     pub(super) fn open_panel(&mut self, task: TaskId, cx: &mut Context<Self>) {
@@ -185,54 +174,6 @@ impl WorkspaceView {
         self.board.iter().find(|task| task.id() == panel.task)
     }
 
-    /// Writes an edit to the task, with its history entry, and updates the board's copy in place.
-    /// Nothing is re-read for the board, so the card changes at once.
-    fn edit_panel_task(
-        &mut self,
-        apply: impl FnOnce(&mut Task) -> Result<(), DomainError>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(panel) = self.panel.as_ref() else {
-            return false;
-        };
-        let Some(index) = self.board.iter().position(|task| task.id() == panel.task) else {
-            return false;
-        };
-        let before = self.board[index].clone();
-        let mut after = before.clone();
-        if let Err(err) = apply(&mut after) {
-            self.set_panel_error(err.to_string(), cx);
-            return false;
-        }
-        let fields = changed_fields(&before, &after);
-        if fields.is_empty() {
-            return true;
-        }
-        let fields: Vec<String> = fields.into_iter().map(str::to_string).collect();
-        let event = TaskEventKind::Edited { fields };
-        match store(cx).save_task_recording(&after, &event) {
-            Ok(()) => {
-                let task = after.id();
-                replace_task(&mut self.board, after);
-                let history = store(cx).task_history(task).unwrap_or_default();
-                if let Some(panel) = self.panel.as_mut() {
-                    panel.history = history.into_iter().rev().collect();
-                    panel.error = None;
-                }
-                true
-            }
-            Err(err) => {
-                eprintln!("could not save task {}: {err}", before.id().as_uuid());
-                self.set_panel_error(
-                    "Could not save that change. Your text is still here, so try again."
-                        .to_string(),
-                    cx,
-                );
-                false
-            }
-        }
-    }
-
     fn set_panel_error(&mut self, message: String, cx: &mut Context<Self>) {
         if let Some(panel) = self.panel.as_mut() {
             panel.error = Some(message);
@@ -240,14 +181,19 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Commits the draft: an empty title is refused and the draft stays, so nothing is lost.
+    /// Commits the draft: an empty title is refused and the draft stays, so nothing is lost. The
+    /// write goes through the same path as every other edit.
     fn commit_draft(&mut self, cx: &mut Context<Self>) {
-        let Some(draft) = self.panel.as_ref().and_then(|panel| panel.draft.clone()) else {
+        let Some(panel) = self.panel.as_ref() else {
             return;
         };
-        let saved = match draft.field {
-            DraftField::Title => self.edit_panel_task(|task| task.rename(&draft.text), cx),
-            DraftField::Description => self.edit_panel_task(
+        let (task, Some(draft)) = (panel.task, panel.draft.clone()) else {
+            return;
+        };
+        let result = match draft.field {
+            DraftField::Title => self.edit_task(task, |task| task.rename(&draft.text), cx),
+            DraftField::Description => self.edit_task(
+                task,
                 |task| {
                     task.set_description(draft.text.trim().to_string());
                     Ok(())
@@ -255,20 +201,14 @@ impl WorkspaceView {
                 cx,
             ),
         };
-        if saved && let Some(panel) = self.panel.as_mut() {
-            panel.draft = None;
+        match result {
+            Ok(()) => {
+                if let Some(panel) = self.panel.as_mut() {
+                    panel.draft = None;
+                }
+            }
+            Err(message) => self.set_panel_error(message, cx),
         }
-        cx.notify();
-    }
-
-    fn set_panel_priority(&mut self, priority: Option<Priority>, cx: &mut Context<Self>) {
-        self.edit_panel_task(
-            |task| {
-                task.set_priority(priority);
-                Ok(())
-            },
-            cx,
-        );
         cx.notify();
     }
 
@@ -385,25 +325,8 @@ pub(super) fn render(
         );
     }
 
-    let mut priorities = div().flex().flex_row().gap(theme.spacing.xs);
-    for (index, value) in [
-        None,
-        Some(Priority::Low),
-        Some(Priority::Medium),
-        Some(Priority::High),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        priorities = priorities.child(
-            segment(task.priority() == value, theme)
-                .id(("panel-priority", index as u64))
-                .child(priority_label(value))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.set_panel_priority(value, cx)
-                })),
-        );
-    }
+    let priorities = task_editors::priority_picker("panel", task, theme, cx);
+    let tag_editor = task_editors::tag_editor("panel", task, view.tag_edit.as_ref(), theme, cx);
 
     let estimate = task
         .estimate()
@@ -413,12 +336,6 @@ pub(super) fn render(
         .due_on()
         .map(|due| due.to_string())
         .unwrap_or_else(|| "No due date".to_string());
-    let tags = if task.tags().is_empty() {
-        "No tags".to_string()
-    } else {
-        task.tags().join(", ")
-    };
-
     let mut history = div().flex().flex_col().gap(theme.spacing.xs);
     if panel.history.is_empty() {
         history = history.child(
@@ -518,7 +435,6 @@ pub(super) fn render(
                 .gap(theme.spacing.xs)
                 .child(format!("Estimate: {estimate}"))
                 .child(format!("Due: {due}"))
-                .child(format!("Tags: {tags}"))
                 .child(assignee_row(
                     task.assignee_id(),
                     &members::entries(&view.members),
@@ -526,6 +442,7 @@ pub(super) fn render(
                 )),
             theme,
         ))
+        .child(field("Tags", None, tag_editor, theme))
         .child(
             div()
                 .flex()

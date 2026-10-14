@@ -115,6 +115,8 @@ pub struct CardView<'a> {
     pub assignee: Option<AssigneeMark>,
     pub estimate_minutes: Option<u32>,
     pub due: Option<CalendarDate>,
+    /// The task's tags, in stored form.
+    pub tags: Vec<String>,
 }
 
 /// The assignee as the card shows them: initials on the member's colour, with the label in the
@@ -128,13 +130,16 @@ pub struct AssigneeMark {
 
 /// Builds a card for `view`. A function rather than a `RenderOnce` type, because `IntoElement`
 /// needs `'static` data and the view borrows the task.
+/// `extra` is drawn at the foot of the card, inside its border. The board uses it for the card's
+/// editor. Nothing is drawn there otherwise.
 pub fn task_card(
     view: CardView<'_>,
     density: CardDensity,
     today: CalendarDate,
     theme: &Theme,
+    extra: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
-    card_layout(&view, density, today, theme)
+    card_layout(&view, density, today, theme, extra)
 }
 
 /// The one layout both densities share. Density changes spacing and line count, nothing else.
@@ -143,6 +148,7 @@ fn card_layout(
     density: CardDensity,
     today: CalendarDate,
     theme: &Theme,
+    extra: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
     let (padding, gap, avatar) = match density {
         CardDensity::Compact => (theme.spacing.xs, theme.spacing.xs, px(20.)),
@@ -165,7 +171,38 @@ fn card_layout(
         .border_color(theme.palette.border)
         .text_size(theme.typography.body)
         .child(title_row(view, density, theme))
+        .children(tag_row(&view.tags, theme))
         .child(footer(view, today, avatar, theme))
+        .children(extra)
+}
+
+/// Up to three tags as small chips, then how many more there are. Read-only: the editor is on the
+/// card while it's open.
+fn tag_row(tags: &[String], theme: &Theme) -> Option<Div> {
+    if tags.is_empty() {
+        return None;
+    }
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(theme.spacing.xs)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary);
+    for tag in tags.iter().take(3) {
+        row = row.child(
+            div()
+                .px(theme.spacing.xs)
+                .rounded(theme.radius.sm)
+                .bg(theme.palette.surface_selected)
+                .text_color(theme.palette.text_primary)
+                .child(tag.clone()),
+        );
+    }
+    if tags.len() > 3 {
+        row = row.child(format!("+{}", tags.len() - 3));
+    }
+    Some(row)
 }
 
 fn title_row(view: &CardView<'_>, density: CardDensity, theme: &Theme) -> impl IntoElement + use<> {
@@ -566,10 +603,12 @@ pub(super) fn gallery(theme: &Theme) -> impl IntoElement + use<> {
                             }),
                             estimate_minutes: *estimate,
                             due: *due,
+                            tags: Vec::new(),
                         },
                         density,
                         today,
                         theme,
+                        None,
                     )
                 },
             ))

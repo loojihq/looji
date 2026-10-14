@@ -14,6 +14,8 @@ use super::drag::Exit;
 use super::dragging::{DragSession, record_columns};
 use super::landing::{Slot, column_sequence, stack_tops};
 use super::members;
+use super::task_edit::TagEdit;
+use super::task_editors;
 use super::task_form::Mode;
 use crate::theme::Theme;
 
@@ -29,7 +31,7 @@ const SHIFT_DURATION: Duration = Duration::from_millis(150);
 pub(super) fn render(
     project: &Project,
     tasks: &[Task],
-    members: &[members::Entry],
+    cards: &CardContext,
     drag: &DragSession,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
@@ -94,7 +96,7 @@ pub(super) fn render(
                     columns.iter().map(|column| column.status).collect(),
                 ))
                 .children(columns.iter().enumerate().map(|(index, column)| {
-                    column_view(index, column, members, theme, today, drag, cx)
+                    column_view(index, column, cards, theme, today, drag, cx)
                 })),
         );
     #[cfg(debug_assertions)]
@@ -105,7 +107,7 @@ pub(super) fn render(
 fn column_view(
     index: usize,
     column: &StatusColumn<'_>,
-    members: &[members::Entry],
+    cards: &CardContext,
     theme: &Theme,
     today: CalendarDate,
     drag: &DragSession,
@@ -122,7 +124,7 @@ fn column_view(
         .border_1()
         .border_color(theme.palette.border)
         .child(header(column, theme))
-        .child(body(index, column, members, theme, today, drag, cx))
+        .child(body(index, column, cards, theme, today, drag, cx))
 }
 
 fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
@@ -154,7 +156,7 @@ fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
 fn body(
     index: usize,
     column: &StatusColumn<'_>,
-    members: &[members::Entry],
+    cards: &CardContext,
     theme: &Theme,
     today: CalendarDate,
     drag: &DragSession,
@@ -241,7 +243,7 @@ fn body(
                         .expect("the sequence only holds this column's tasks");
                     let focus = drag.focus_handle(*id, cx);
                     shifted(
-                        card_slot(task, members, today, theme, dragged, &focus, cx),
+                        card_slot(task, cards, today, theme, dragged, &focus, cx),
                         key,
                         offset,
                     )
@@ -304,7 +306,7 @@ fn placeholder(height: f32, theme: &Theme) -> Div {
 /// placeholder has taken its place.
 fn card_slot(
     task: &Task,
-    members: &[members::Entry],
+    cards: &CardContext,
     today: CalendarDate,
     theme: &Theme,
     dragged: Option<TaskId>,
@@ -331,11 +333,83 @@ fn card_slot(
             }),
         )
         .child(task_card(
-            card_view(task, members),
+            card_view(task, &cards.members),
             CardDensity::Compact,
             today,
             theme,
+            Some(card_editor(task, cards, theme, cx)),
         ))
+}
+
+/// The foot of a card: its editor while it's open, otherwise an "Edit" link that opens it. The
+/// editor's presses are contained, so a press here never starts a drag of the card.
+fn card_editor(
+    task: &Task,
+    cards: &CardContext,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let id = task.id();
+    if cards.editing != Some(id) {
+        return div()
+            .flex()
+            .flex_row()
+            .justify_end()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .id(("card-edit", 0_u64))
+                    .px(theme.spacing.xs)
+                    .cursor_pointer()
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.text_secondary)
+                    .child("Edit")
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.open_card_editor(id, window, cx)
+                    })),
+            )
+            .into_any_element();
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(task_editors::priority_picker(
+            "card-priority",
+            task,
+            theme,
+            cx,
+        ))
+        .child(task_editors::tag_editor(
+            "card-tags",
+            task,
+            cards.tag_edit.as_ref(),
+            theme,
+            cx,
+        ))
+        .child(
+            div().flex().flex_row().justify_end().child(
+                div()
+                    .id(("card-done", 0_u64))
+                    .px(theme.spacing.sm)
+                    .cursor_pointer()
+                    .text_size(theme.typography.caption)
+                    .child("Done")
+                    .on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.close_card_editor(cx)),
+                    ),
+            ),
+        )
+        .into_any_element()
+}
+
+/// What the cards need from the view beyond their own task: the team, and the card editor that's
+/// open, if any.
+pub(super) struct CardContext {
+    pub members: Vec<members::Entry>,
+    pub editing: Option<TaskId>,
+    pub tag_edit: Option<TagEdit>,
 }
 
 /// The empty-column target. It keeps its height and has a stable ID, so drag can find it later.
@@ -379,6 +453,7 @@ pub(super) fn card_view<'a>(task: &'a Task, members: &[members::Entry]) -> CardV
         due: task
             .due_on()
             .and_then(|due| CalendarDate::new(due.year(), due.month(), due.day())),
+        tags: task.tags().to_vec(),
     }
 }
 

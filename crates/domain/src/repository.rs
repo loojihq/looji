@@ -47,6 +47,14 @@ pub trait TaskRepository {
     fn find(&self, id: TaskId) -> RepoResult<Option<Task>>;
     fn list_for_project(&self, project: ProjectId) -> RepoResult<Vec<Task>>;
     fn delete(&self, id: TaskId) -> RepoResult<()>;
+    /// The tags that tasks in `project` have right now, sorted, starting with `prefix`, and at most
+    /// `limit`. It's read from the tasks themselves, so a tag that no task uses is never suggested.
+    fn tags_in_use(
+        &self,
+        project: ProjectId,
+        prefix: &str,
+        limit: usize,
+    ) -> RepoResult<Vec<String>>;
 }
 
 pub trait ColumnRepository {

@@ -7,6 +7,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use unicode_normalization::UnicodeNormalization;
+
 use crate::{error::DomainError, task::Estimate, validation::MAX_TEXT_CHARS};
 
 /// How many tags one task can have.
@@ -181,9 +183,18 @@ impl fmt::Display for TagError {
     }
 }
 
-/// Checks one tag and returns it in stored form: trimmed and lowercase.
+/// Checks one tag and returns it in stored form. Every entry point uses this one rule, so a tag typed
+/// in the dialog, on a card, or in the panel is stored the same way. Runs of whitespace become one
+/// space. The text is put in composed Unicode form, so an accented letter typed as one character
+/// and as a letter plus an accent are the same tag. Then it's lowercased.
 pub fn normalize_tag(text: &str) -> Result<String, TagError> {
-    let tag = text.trim().to_lowercase();
+    let spaced = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let tag: String = spaced
+        .nfc()
+        .collect::<String>()
+        .to_lowercase()
+        .nfc()
+        .collect();
     if tag.is_empty() {
         return Err(TagError::Empty);
     }
@@ -338,12 +349,37 @@ mod tests {
     #[test]
     fn tags_are_trimmed_lowercased_and_checked() {
         assert_eq!(normalize_tag("  Design ").unwrap(), "design");
+        assert_eq!(normalize_tag(" Foo Bar ").unwrap(), "foo bar");
         assert_eq!(normalize_tag("  "), Err(TagError::Empty));
+        assert_eq!(normalize_tag(""), Err(TagError::Empty));
         assert_eq!(normalize_tag("a,b"), Err(TagError::ContainsComma));
         assert_eq!(
             normalize_tag(&"x".repeat(MAX_TAG_CHARS + 1)),
             Err(TagError::TooLong { max: MAX_TAG_CHARS })
         );
+    }
+
+    #[test]
+    fn tags_that_differ_only_in_case_or_spacing_are_the_same_tag() {
+        assert_eq!(normalize_tag("FOO").unwrap(), normalize_tag("foo").unwrap());
+        assert_eq!(
+            normalize_tag("foo   bar").unwrap(),
+            normalize_tag("Foo Bar").unwrap()
+        );
+    }
+
+    #[test]
+    fn composed_and_decomposed_accents_are_the_same_tag() {
+        // "é" as one character, and as "e" followed by a combining acute accent.
+        let composed = normalize_tag("caf\u{e9}").unwrap();
+        let decomposed = normalize_tag("cafe\u{301}").unwrap();
+        assert_eq!(composed, decomposed);
+        assert_eq!(composed, "caf\u{e9}");
+    }
+
+    #[test]
+    fn unicode_capitals_are_lowercased() {
+        assert_eq!(normalize_tag("ÉCOLE").unwrap(), "école");
     }
 
     #[test]

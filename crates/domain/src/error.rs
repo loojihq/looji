@@ -47,6 +47,8 @@ pub enum DomainError {
     MemberFromOtherProject,
     #[error("'{0}' is not a member colour")]
     UnknownColour(i64),
+    #[error("{0}")]
+    Tag(crate::task_fields::TagError),
 }
 
 /// A repository could not load or save an entity.

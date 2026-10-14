@@ -60,6 +60,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "project_team_members",
         sql: include_str!("sql/0011_team_members.sql"),
     },
+    Migration {
+        version: 12,
+        name: "normalised_tags",
+        sql: include_str!("sql/0012_normalise_tags.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -316,5 +321,40 @@ mod tests {
             [],
         );
         assert!(inserted.is_err());
+    }
+
+    #[test]
+    fn existing_tags_are_normalised_and_duplicates_merge() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..11]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a0', NULL, NULL, 0, 0);
+                 INSERT INTO task_tags (task_id, tag) VALUES
+                     ('t', 'Web'), ('t', ' web '), ('t', 'web'),
+                     ('t', 'Design  Doc'), ('t', 'design doc'), ('t', '   ');",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let mut statement = connection
+            .prepare("SELECT tag FROM task_tags WHERE task_id = 't' ORDER BY tag")
+            .unwrap();
+        let tags: Vec<String> = statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(tags, ["design doc", "web"]);
     }
 }

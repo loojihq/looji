@@ -8,4 +8,5 @@ publish.workspace = true
 [dependencies]
 thiserror = "2"
 uuid = { version = "1.28.0", features = ["v4"] }
+unicode-normalization = "0.1"
 unicode-segmentation = "1.13.3"

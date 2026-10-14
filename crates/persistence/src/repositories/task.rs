@@ -106,6 +106,34 @@ impl TaskRepository for SqliteStore {
             params![id_text(id.as_uuid())],
         )
     }
+
+    /// Reads the tags from the tasks, so a tag that its last task dropped is no longer returned.
+    fn tags_in_use(
+        &self,
+        project: ProjectId,
+        prefix: &str,
+        limit: usize,
+    ) -> RepoResult<Vec<String>> {
+        // The prefix is matched literally: LIKE's wildcards and the escape character are escaped.
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        query_all(
+            &self.connection,
+            "SELECT DISTINCT task_tags.tag
+             FROM task_tags JOIN tasks ON tasks.id = task_tags.task_id
+             WHERE tasks.project_id = ?1 AND task_tags.tag LIKE ?2 ESCAPE '\\'
+             ORDER BY task_tags.tag
+             LIMIT ?3",
+            params![
+                id_text(project.as_uuid()),
+                format!("{escaped}%"),
+                i64::try_from(limit).unwrap_or(i64::MAX),
+            ],
+            |row| get(row, 0),
+        )
+    }
 }
 
 /// Writes a task and its tags inside a transaction the caller owns. Used by [`TaskRepository::save`]

@@ -21,6 +21,8 @@ mod projects;
 mod sidebar;
 mod state;
 mod task_dialog;
+mod task_edit;
+mod task_editors;
 mod task_form;
 mod team_dialog;
 
@@ -30,7 +32,7 @@ use projects::ProjectDialog;
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, RepoError, SettingsRepository, Task, TeamMember, Workspace, WorkspaceId,
+    DomainError, RepoError, SettingsRepository, Task, TaskId, TeamMember, Workspace, WorkspaceId,
     WorkspaceRepository, next_untitled_name, validate_name,
 };
 use looji_persistence::icons::{IconError, import_icon};
@@ -84,6 +86,10 @@ pub struct WorkspaceView {
     team_dialog: Option<team_dialog::TeamDialog>,
     /// The task detail panel beside the board, while a task is open in it.
     panel: Option<panel::PanelState>,
+    /// The tag being typed for a task, while the tag input has the keyboard.
+    tag_edit: Option<task_edit::TagEdit>,
+    /// The card whose priority and tag editor is open.
+    card_editing: Option<TaskId>,
 }
 
 impl WorkspaceView {
@@ -105,6 +111,8 @@ impl WorkspaceView {
                     task_dialog: None,
                     team_dialog: None,
                     panel: None,
+                    tag_edit: None,
+                    card_editing: None,
                 };
                 view.reload_projects(cx);
                 view
@@ -290,6 +298,9 @@ impl WorkspaceView {
         if self.team_dialog.is_some() {
             return self.team_dialog_key(event, cx);
         }
+        if self.tag_edit.is_some() && self.tag_key(event, cx) {
+            return;
+        }
         if self.panel.is_some() && self.panel_key(event, window, cx) {
             return;
         }
@@ -421,6 +432,11 @@ impl Render for WorkspaceView {
             .id("workspace")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
+            // A press anywhere that isn't an editor ends the tag input. Editors stop their presses.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| this.blur_tag_editor(cx)),
+            )
             .flex()
             .flex_col()
             .size_full()

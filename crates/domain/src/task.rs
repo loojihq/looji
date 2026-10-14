@@ -3,7 +3,7 @@ use crate::{
     ids::{ProjectId, TaskId, TeamMemberId},
     position::Position,
     status::Status,
-    task_fields::{DueDate, Priority},
+    task_fields::{DueDate, MAX_TAGS, Priority, TagError, normalize_tag},
     time::Timestamp,
     validation::trimmed_text,
 };
@@ -186,6 +186,31 @@ impl Task {
         self.touch();
     }
 
+    /// Adds one tag in stored form. A tag the task already has changes nothing, so "Web" after "web"
+    /// is not a change. Leaves the task unchanged if the tag is invalid or the task is full.
+    pub fn add_tag(&mut self, tag: &str) -> Result<(), DomainError> {
+        let tag = normalize_tag(tag).map_err(DomainError::Tag)?;
+        if self.tags.contains(&tag) {
+            return Ok(());
+        }
+        if self.tags.len() >= MAX_TAGS {
+            return Err(DomainError::Tag(TagError::TooMany { max: MAX_TAGS }));
+        }
+        self.tags.push(tag);
+        self.tags.sort();
+        self.touch();
+        Ok(())
+    }
+
+    /// Removes one tag by its stored form. A tag the task doesn't have changes nothing.
+    pub fn remove_tag(&mut self, tag: &str) {
+        let before = self.tags.len();
+        self.tags.retain(|existing| existing != tag);
+        if self.tags.len() != before {
+            self.touch();
+        }
+    }
+
     /// `None` clears the estimate.
     pub fn set_estimate(&mut self, estimate: Option<Estimate>) {
         self.estimate = estimate;
@@ -292,6 +317,42 @@ mod tests {
         let mut task = sample_task();
         assert_eq!(task.rename("   ").unwrap_err(), DomainError::EmptyTitle);
         assert_eq!(task.title(), "Write the board");
+    }
+
+    #[test]
+    fn added_tags_are_normalised_and_a_repeat_changes_nothing() {
+        let mut task = sample_task();
+        task.add_tag("  Web  Design ").unwrap();
+        task.add_tag("WEB design").unwrap();
+        assert_eq!(task.tags(), ["web design"]);
+    }
+
+    #[test]
+    fn a_blank_or_comma_tag_is_refused_and_leaves_the_task_alone() {
+        let mut task = sample_task();
+        assert!(task.add_tag("   ").is_err());
+        assert!(task.add_tag("a,b").is_err());
+        assert!(task.tags().is_empty());
+    }
+
+    #[test]
+    fn a_task_full_of_tags_refuses_another() {
+        let mut task = sample_task();
+        for n in 0..crate::task_fields::MAX_TAGS {
+            task.add_tag(&format!("tag{n}")).unwrap();
+        }
+        assert!(task.add_tag("one more").is_err());
+        assert_eq!(task.tags().len(), crate::task_fields::MAX_TAGS);
+    }
+
+    #[test]
+    fn removing_a_tag_drops_only_that_tag() {
+        let mut task = sample_task();
+        task.add_tag("alpha").unwrap();
+        task.add_tag("beta").unwrap();
+        task.remove_tag("alpha");
+        task.remove_tag("missing");
+        assert_eq!(task.tags(), ["beta"]);
     }
 
     #[test]

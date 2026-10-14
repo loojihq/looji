@@ -69,6 +69,7 @@ impl WorkspaceView {
         };
         self.cancel_keyboard_if_gone(cx);
         self.close_panel_if_gone(cx);
+        self.close_tag_editors_if_gone();
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
@@ -281,8 +282,12 @@ pub(super) fn content(
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
-            let team = members::entries(&view.members);
-            board::render(project, &view.board, &team, &view.drag, theme, cx).into_any_element()
+            let cards = board::CardContext {
+                members: members::entries(&view.members),
+                editing: view.card_editing,
+                tag_edit: view.tag_edit.clone(),
+            };
+            board::render(project, &view.board, &cards, &view.drag, theme, cx).into_any_element()
         }
     }
 }

@@ -265,6 +265,7 @@ pub(super) fn overlay(view: &WorkspaceView, theme: &Theme) -> Option<AnyElement>
                 CardDensity::Compact,
                 today,
                 theme,
+                None,
             ))
             .into_any_element(),
     )
