@@ -17,6 +17,7 @@ use super::autoscroll::{EDGE_ZONE, Ramp, advance, edge_velocity};
 use super::board::card_view;
 use super::card::{CalendarDate, CardDensity, task_card};
 use super::drag::{CancelReason, Command, Drag, Exit, Input};
+use super::keyboard::Hold;
 use super::layout::{BoardLayout, CardSlot, ColumnSlot, Point as DragPoint, Rect};
 use crate::theme::Theme;
 
@@ -25,7 +26,7 @@ const SCROLL_TICK: Duration = Duration::from_millis(16);
 
 /// The drag state owned by the workspace view.
 pub(super) struct DragSession {
-    session: Drag,
+    pub(super) session: Drag,
     /// The long-press timer. Dropping it cancels the timer.
     timer: Option<Task<()>>,
     /// Ends the drag if the window stops being active. Dropped when the drag ends.
@@ -48,6 +49,14 @@ pub(super) struct DragSession {
     scrolling: bool,
     #[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
     last_exit: Option<Exit>,
+    /// The keyboard move in progress, if any.
+    pub(super) keyboard: Hold,
+    /// What the last keyboard step said. Shown on the board, and the text a screen reader would read.
+    pub(super) keyboard_notice: Option<String>,
+    /// Cancels a keyboard move if the window stops being active.
+    pub(super) keyboard_activation: Option<Subscription>,
+    /// One focus handle per card, kept by task id, so focus follows a card when it moves.
+    card_focus: RefCell<Vec<(TaskId, FocusHandle)>>,
 }
 
 impl Default for DragSession {
@@ -68,6 +77,10 @@ impl Default for DragSession {
             scroll_task: None,
             scrolling: false,
             last_exit: None,
+            keyboard: Hold::Idle,
+            keyboard_notice: None,
+            keyboard_activation: None,
+            card_focus: RefCell::default(),
         }
     }
 }
@@ -88,8 +101,25 @@ impl DragSession {
     }
 
     /// The card being dragged, once it has lifted. The board dims its slot.
+    /// The card being dragged or held. Set only while it is lifted or held, so the board dims it
+    /// then, and nothing else.
     pub(super) fn dragged(&self) -> Option<TaskId> {
-        self.session.lifted_at().map(|(card, _)| card)
+        self.session.source().map(|source| source.task)
+    }
+
+    /// The focus handle of a card. Created the first time the card is drawn, then kept.
+    pub(super) fn focus_handle(&self, task: TaskId, cx: &App) -> FocusHandle {
+        let mut handles = self.card_focus.borrow_mut();
+        if let Some((_, handle)) = handles.iter().find(|(id, _)| *id == task) {
+            return handle.clone();
+        }
+        let handle = cx.focus_handle().tab_stop(true).tab_index(0);
+        handles.push((task, handle.clone()));
+        handle
+    }
+
+    pub(super) fn keyboard_notice(&self) -> Option<&str> {
+        self.keyboard_notice.as_deref()
     }
 
     #[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
@@ -411,7 +441,7 @@ impl WorkspaceView {
     }
 
     /// Re-reads the cards from their columns' scroll state, so the drag sees what is on screen.
-    fn refresh_layout(&self) {
+    pub(super) fn refresh_layout(&self) {
         let mut layout = self.drag.layout.borrow_mut();
         refresh_cards(&mut layout, |status| self.drag.scroll_handle(status));
     }

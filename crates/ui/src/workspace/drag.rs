@@ -404,6 +404,21 @@ impl Drag {
         exit
     }
 
+    /// Shows a keyboard hold on the board, with the same source and landing a mouse drag uses, so
+    /// the dimmed card and the placeholder come out identical.
+    pub fn show_hold(&mut self, source: Source, landing: Landing) {
+        if self.landing != Some(landing) {
+            self.previous = self.landing;
+        }
+        self.source = Some(source);
+        self.landing = Some(landing);
+    }
+
+    /// Ends a keyboard hold without writing anything.
+    pub fn clear_hold(&mut self) {
+        self.clear();
+    }
+
     fn clear(&mut self) {
         self.source = None;
         self.landing = None;
@@ -412,7 +427,7 @@ impl Drag {
 }
 
 /// The source of a card: its column and its position there. `None` if it isn't on the board.
-fn source_of(task: TaskId, layout: &BoardLayout) -> Option<Source> {
+pub(super) fn source_of(task: TaskId, layout: &BoardLayout) -> Option<Source> {
     let slot = layout.card(task)?;
     let index = layout
         .cards

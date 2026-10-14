@@ -56,6 +56,14 @@ pub(super) fn render(
                 )
                 .child(column_toggle(project, theme, cx)),
         )
+        .when_some(drag.keyboard_notice(), |header, text| {
+            header.child(
+                div()
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.text_secondary)
+                    .child(text.to_string()),
+            )
+        })
         .when_some(project.description(), |header, text| {
             header.child(
                 div()
@@ -222,7 +230,12 @@ fn body(
                         .iter()
                         .find(|task| task.id() == *id)
                         .expect("the sequence only holds this column's tasks");
-                    shifted(card_slot(task, today, theme, dragged, cx), key, offset)
+                    let focus = drag.focus_handle(*id, cx);
+                    shifted(
+                        card_slot(task, today, theme, dragged, &focus, cx),
+                        key,
+                        offset,
+                    )
                 }
                 Slot::Placeholder => shifted(placeholder(placeholder_height, theme), key, offset),
             }
@@ -249,7 +262,10 @@ fn body(
 ///
 /// The item sits inside a plain wrapper, and only the item moves. The wrapper keeps its place in
 /// the layout, so the paint callbacks still record the resting positions the drop reads.
-fn shifted(element: Div, key: SharedString, offset: f32) -> Div {
+fn shifted<E>(element: E, key: SharedString, offset: f32) -> Div
+where
+    E: IntoElement + Styled + 'static,
+{
     let item = if offset.abs() < 0.5 {
         element.into_any_element()
     } else {
@@ -282,10 +298,21 @@ fn card_slot(
     today: CalendarDate,
     theme: &Theme,
     dragged: Option<TaskId>,
+    focus: &FocusHandle,
     cx: &mut Context<WorkspaceView>,
-) -> Div {
+) -> Stateful<Div> {
     let id = task.id();
     div()
+        .id(("card", id.as_uuid().as_u128() as u64))
+        .track_focus(focus)
+        .tab_index(0)
+        .rounded(theme.radius.sm)
+        .border_1()
+        .border_color(theme.palette.surface_raised)
+        .focus(|style| style.border_color(theme.palette.accent))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            this.card_key(id, event, window, cx)
+        }))
         .when(dragged == Some(id), |slot| slot.opacity(0.4))
         .on_mouse_down(
             MouseButton::Left,
@@ -330,7 +357,7 @@ pub(super) fn card_view(task: &Task) -> CardView<'_> {
     }
 }
 
-fn status_label(status: Status) -> &'static str {
+pub(super) fn status_label(status: Status) -> &'static str {
     match status {
         Status::Backlog => "Backlog",
         Status::Todo => "To do",

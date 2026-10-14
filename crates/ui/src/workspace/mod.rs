@@ -8,6 +8,7 @@ mod columns;
 mod delete;
 mod drag;
 mod dragging;
+mod keyboard;
 mod landing;
 mod layout;
 mod moves;
@@ -72,8 +73,8 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn open_window(cx: &mut App, list: WorkspaceList) -> Result<WindowHandle<Self>> {
-        cx.open_window(window_options(cx), |_, cx| {
-            cx.new(|cx| {
+        cx.open_window(window_options(cx), |window, cx| {
+            let view = cx.new(|cx| {
                 let mut view = Self {
                     focus_handle: cx.focus_handle(),
                     list,
@@ -88,7 +89,11 @@ impl WorkspaceView {
                 };
                 view.reload_projects(cx);
                 view
-            })
+            });
+            // Focus starts on the workspace, so keys reach it, including Tab for the board.
+            let focus = view.read(cx).focus_handle.clone();
+            focus.focus(window);
+            view
         })
     }
 
@@ -256,8 +261,30 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.key_pressed(event, cx) {
+            return;
+        }
+        // Tab moves between cards and other controls, unless a dialog or a rename owns the keyboard.
+        let modal = self.pending_column.is_some()
+            || self.project_dialog.is_some()
+            || self.pending_delete.is_some()
+            || self.rename.is_some();
+        if self.drag.keyboard != keyboard::Hold::Idle {
+            if let Some(key) = keyboard::Key::from_name(&event.keystroke.key)
+                && self.keyboard_key(None, key, window, cx)
+            {
+                cx.stop_propagation();
+            }
+            return;
+        }
+        if event.keystroke.key == "tab" && !modal {
+            if event.keystroke.modifiers.shift {
+                window.focus_prev();
+            } else {
+                window.focus_next();
+            }
+            cx.notify();
             return;
         }
         if self.pending_column.is_some() {
