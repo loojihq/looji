@@ -25,6 +25,13 @@ pub enum PathCheck {
     NotAGitRepository,
     /// The folder exists but can't be read. The reason is the system's message, which doesn't contain file contents.
     Unreadable(String),
+    /// The path is in a WSL distribution that isn't installed under that name.
+    DistroNotFound { distro: String },
+    /// The path is in a WSL distribution that is installed but stopped. Reading it would start the distribution
+    /// without asking, so looji doesn't read it. The user starts it on purpose.
+    DistroStopped { distro: String },
+    /// `wsl.exe` couldn't be run, or it failed, so the distribution's state is unknown.
+    WslUnavailable(String),
 }
 
 impl fmt::Display for PathCheck {
@@ -45,6 +52,18 @@ impl fmt::Display for PathCheck {
             PathCheck::Unreadable(reason) => write!(
                 f,
                 "looji can't read that folder ({reason}). Check that you have access to it."
+            ),
+            PathCheck::DistroNotFound { distro } => write!(
+                f,
+                "There is no WSL distribution named {distro}. Check the name in the path."
+            ),
+            PathCheck::DistroStopped { distro } => write!(
+                f,
+                "The WSL distribution {distro} is stopped. Start it to check this folder."
+            ),
+            PathCheck::WslUnavailable(reason) => write!(
+                f,
+                "looji can't ask WSL about this folder ({reason}). Check that WSL is installed."
             ),
         }
     }
@@ -144,6 +163,13 @@ mod tests {
             PathCheck::NotADirectory,
             PathCheck::NotAGitRepository,
             PathCheck::Unreadable("access denied".to_string()),
+            PathCheck::DistroNotFound {
+                distro: "Ubuntu".to_string(),
+            },
+            PathCheck::DistroStopped {
+                distro: "Ubuntu".to_string(),
+            },
+            PathCheck::WslUnavailable("not found".to_string()),
         ]
         .iter()
         .map(ToString::to_string)

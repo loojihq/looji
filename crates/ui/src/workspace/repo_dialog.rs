@@ -12,7 +12,7 @@ use looji_domain::{
     CodeSourceError, CodeSourceRepository, CodeSourceStatus, PathCheck, ProjectId,
     clean_path_input, status_for,
 };
-use looji_persistence::repo_folder::check_repo_folder;
+use looji_persistence::{repo_folder::check_repo_folder, wsl::start_distro};
 
 use super::fields::text_box;
 use super::task_dialog::button;
@@ -44,6 +44,8 @@ pub(super) struct RepoDialog {
     pub project: ProjectId,
     pub draft: String,
     pub error: Option<String>,
+    /// The WSL distribution the last attempt found stopped, so the dialog can offer to start it.
+    pub stopped: Option<String>,
 }
 
 impl RepoDialog {
@@ -52,6 +54,7 @@ impl RepoDialog {
             project,
             draft: String::new(),
             error: None,
+            stopped: None,
         }
     }
 }
@@ -205,6 +208,7 @@ impl WorkspaceView {
         if let Some(dialog) = self.repo_dialog.as_mut() {
             dialog.draft = path.clone();
             dialog.error = None;
+            dialog.stopped = None;
         }
         let folder = path.clone();
         cx.spawn(async move |this, cx| {
@@ -256,6 +260,13 @@ impl WorkspaceView {
                 }
             },
             Err(reason) => {
+                let stopped = match &reason {
+                    PathCheck::DistroStopped { distro } => Some(distro.clone()),
+                    _ => None,
+                };
+                if let Some(dialog) = self.repo_dialog.as_mut() {
+                    dialog.stopped = stopped;
+                }
                 self.set_repo_error(reason.to_string(), cx);
                 self.refresh_code_source(cx);
             }
@@ -290,6 +301,46 @@ impl WorkspaceView {
             }
         }
         cx.notify();
+    }
+
+    /// Starts a stopped WSL distribution. Only the Start button calls this, since starting one is the user's choice.
+    /// The folder is checked again once WSL answers.
+    fn start_wsl_distro(&mut self, distro: String, cx: &mut Context<Self>) {
+        let Some(project) = self.repo_dialog.as_ref().map(|dialog| dialog.project) else {
+            return;
+        };
+        let check = self.next_check();
+        self.code_source = Some(Source {
+            project,
+            check,
+            shown: Shown::Checking,
+        });
+        if let Some(dialog) = self.repo_dialog.as_mut() {
+            dialog.error = None;
+        }
+        cx.spawn(async move |this, cx| {
+            let name = distro.clone();
+            let started = cx
+                .background_executor()
+                .spawn(async move { start_distro(&distro) })
+                .await;
+            let _ = this.update(cx, |view, cx| view.finish_start(&name, started, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_start(&mut self, distro: &str, started: Result<(), String>, cx: &mut Context<Self>) {
+        match started {
+            Ok(()) => {
+                if let Some(dialog) = self.repo_dialog.as_mut() {
+                    dialog.stopped = None;
+                }
+            }
+            Err(reason) => self.set_repo_error(format!("Could not start {distro}: {reason}"), cx),
+        }
+        // Checked again either way, so the badge shows what WSL reports now.
+        self.refresh_code_source(cx);
     }
 
     fn set_repo_error(&mut self, message: String, cx: &mut Context<Self>) {
@@ -371,7 +422,23 @@ pub(super) fn overlay(
     };
     let broken = matches!(shown, Shown::Known(CodeSourceStatus::Broken { .. }));
 
+    // A stopped distribution is offered for starting, from either a failed connect or a broken saved folder.
+    let stopped = dialog.stopped.clone().or_else(|| match &shown {
+        Shown::Known(CodeSourceStatus::Broken {
+            reason: PathCheck::DistroStopped { distro },
+            ..
+        }) => Some(distro.clone()),
+        _ => None,
+    });
+
     let mut actions = div().flex().flex_row().gap(theme.spacing.sm).justify_end();
+    if let Some(distro) = stopped {
+        actions = actions.child(
+            button("repo-start", &format!("Start {distro}"), true, theme).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| this.start_wsl_distro(distro.clone(), cx),
+            )),
+        );
+    }
     if stored.is_some() {
         actions = actions.child(
             button("repo-disconnect", "Disconnect", false, theme)

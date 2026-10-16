@@ -9,6 +9,7 @@ mod schema;
 mod status_visibility;
 mod store;
 mod workspace_delete;
+pub mod wsl;
 
 pub use workspace_delete::{
     DeleteError, DeletedWorkspace, WorkspaceSummary, workspace_scoped_tables,
