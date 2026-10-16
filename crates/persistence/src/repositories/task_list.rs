@@ -2,14 +2,19 @@
 //! count is the number of tasks the page is drawn from. Both run in one read transaction, so a write
 //! between them can't make the total disagree with the rows.
 //!
-//! Pages are keyset pages: each starts after the sort key of the last row of the one before, so a row
-//! moved or inserted before the cursor doesn't shift the pages after it.
+//! Pages are keyset pages. Each starts after the sort value and id of the last row of the one before, so
+//! a row moved or inserted before the cursor doesn't shift the pages after it.
+//!
+//! Sorting is in SQL, so a page is the right slice of the whole sorted list, not of the rows loaded so far.
+//! Every sort is ordered by its value and then by the task id, so rows that share a value are never split
+//! unevenly across pages. An empty value is `NULL`, and the ordering puts those rows last in both
+//! directions.
 
 use looji_domain::{
-    DomainError, PAGE_SIZE, PageCursor, Priority, ProjectId, RepoResult, TagMatch, Task, TaskPage,
-    TaskQuery,
+    DomainError, ListSort, PAGE_SIZE, PageCursor, Priority, ProjectId, RepoResult, SortColumn,
+    SortDirection, SortValue, TagMatch, Task, TaskPage, TaskQuery, TaskRecord,
 };
-use rusqlite::{Connection, functions::FunctionFlags, params_from_iter, types::Value};
+use rusqlite::{Connection, Row, functions::FunctionFlags, params_from_iter, types::Value};
 
 use super::task::{TASK_COLUMNS, load_tags, read_task};
 use super::{id_text, query_all, storage};
@@ -33,6 +38,32 @@ pub(crate) fn register_functions(connection: &Connection) -> rusqlite::Result<()
 /// `count` placeholders, comma separated.
 fn marks(count: usize) -> String {
     vec!["?"; count].join(", ")
+}
+
+/// The database expression a sort orders by. Each one is fixed here, so no text from the user or from
+/// storage is ever part of the SQL. Priority and status are ranked, so they sort in their own order rather
+/// than alphabetically. An empty value is `NULL`.
+fn sort_expression(column: SortColumn) -> &'static str {
+    match column {
+        SortColumn::Manual => "tasks.position",
+        SortColumn::Title => "tasks.title",
+        SortColumn::Status => {
+            "CASE tasks.status WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1 \
+             WHEN 'in_progress' THEN 2 WHEN 'in_review' THEN 3 WHEN 'done' THEN 4 END"
+        }
+        SortColumn::Priority => {
+            "CASE tasks.priority WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END"
+        }
+        SortColumn::Assignee => {
+            "(SELECT team_members.name FROM team_members WHERE team_members.id = tasks.assignee_id)"
+        }
+        // A task with several tags sorts by the first of them, alphabetically.
+        SortColumn::Tags => {
+            "(SELECT MIN(task_tags.tag) FROM task_tags WHERE task_tags.task_id = tasks.id)"
+        }
+        SortColumn::DueDate => "tasks.due_on",
+        SortColumn::Estimate => "tasks.estimate_minutes",
+    }
 }
 
 /// The WHERE clause for a query in a project, and the values its placeholders take, in order. Each
@@ -141,7 +172,32 @@ fn query_clause(project: ProjectId, query: &TaskQuery) -> (String, Vec<Value>) {
     (sql, values)
 }
 
-/// The statement for one page: the rows after the cursor, in position order, one more than the page
+/// A sort value as a database value, for a cursor's placeholder.
+fn value_of(value: &SortValue) -> Value {
+    match value {
+        SortValue::Text(text) => Value::Text(text.clone()),
+        SortValue::Integer(number) => Value::Integer(*number),
+    }
+}
+
+/// The database value a stored sort key reads as. Only text and whole numbers are sort values, and a `NULL`
+/// means the task has no value for the field.
+fn sort_value_of(value: Value) -> Option<SortValue> {
+    match value {
+        Value::Text(text) => Some(SortValue::Text(text)),
+        Value::Integer(number) => Some(SortValue::Integer(number)),
+        _ => None,
+    }
+}
+
+/// A task row, with the sort value the page was ordered by, which the next cursor needs.
+fn read_with_key(row: &Row<'_>) -> RepoResult<(TaskRecord, Option<SortValue>)> {
+    let record = read_task(row)?;
+    let key: Value = row.get(12).map_err(storage)?;
+    Ok((record, sort_value_of(key)))
+}
+
+/// The statement for one page: the rows after the cursor, in the query's order, one more than the page
 /// holds, so the extra row says whether another page follows.
 fn page_statement(
     project: ProjectId,
@@ -150,18 +206,61 @@ fn page_statement(
     limit: usize,
 ) -> (String, Vec<Value>) {
     let (clause, mut values) = query_clause(project, query);
-    let mut sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE {clause}");
-    if let Some(cursor) = after {
-        sql.push_str(" AND (tasks.position, tasks.id) > (?, ?)");
-        values.push(Value::Text(cursor.position.as_str().to_string()));
-        values.push(Value::Text(id_text(cursor.id.as_uuid())));
+    let expression = sort_expression(query.sort.column);
+    let mut sql =
+        format!("SELECT {TASK_COLUMNS}, {expression} AS sort_key FROM tasks WHERE {clause}");
+
+    if query.sort.column == SortColumn::Manual {
+        if let Some(cursor) = after {
+            sql.push_str(" AND (tasks.position, tasks.id) > (?, ?)");
+            values.push(cursor.value.as_ref().map_or(Value::Null, value_of));
+            values.push(Value::Text(id_text(cursor.id.as_uuid())));
+        }
+        sql.push_str(" ORDER BY tasks.position COLLATE BINARY, tasks.id");
+    } else {
+        let direction = sort_direction_sql(query.sort);
+        if let Some(cursor) = after {
+            match &cursor.value {
+                // The page ended in the empty values, which all come last, so only later ids remain.
+                None => {
+                    sql.push_str(&format!(" AND ({expression}) IS NULL AND tasks.id > ?"));
+                    values.push(Value::Text(id_text(cursor.id.as_uuid())));
+                }
+                // Everything after a value is either a larger (or, descending, smaller) value, an equal value
+                // with a later id, or an empty value.
+                Some(value) => {
+                    let after_value = match query.sort.direction {
+                        SortDirection::Ascending => ">",
+                        SortDirection::Descending => "<",
+                    };
+                    sql.push_str(&format!(
+                        " AND (({expression}) IS NULL OR ({expression}) {after_value} ? \
+                         OR (({expression}) = ? AND tasks.id > ?))"
+                    ));
+                    values.push(value_of(value));
+                    values.push(value_of(value));
+                    values.push(Value::Text(id_text(cursor.id.as_uuid())));
+                }
+            }
+        }
+        // Empty values come last in both directions, then the values in order, then the id to break ties.
+        sql.push_str(&format!(
+            " ORDER BY ({expression}) IS NULL, ({expression}) {direction}, tasks.id"
+        ));
     }
-    sql.push_str(" ORDER BY tasks.position COLLATE BINARY, tasks.id LIMIT ?");
+    sql.push_str(" LIMIT ?");
     values.push(Value::Integer(i64::try_from(limit + 1).unwrap_or(i64::MAX)));
     (sql, values)
 }
 
-/// One page of tasks, with the total, read in one transaction.
+fn sort_direction_sql(sort: ListSort) -> &'static str {
+    match sort.direction {
+        SortDirection::Ascending => "ASC",
+        SortDirection::Descending => "DESC",
+    }
+}
+
+/// One page of tasks, with the total and the cursor for the next page, read in one transaction.
 pub(super) fn list_page(
     connection: &Connection,
     project: ProjectId,
@@ -181,14 +280,23 @@ pub(super) fn list_page(
         .map_err(storage)?;
 
     let (sql, values) = page_statement(project, query, after, limit);
-    let mut records = query_all(
+    let mut rows = query_all(
         &transaction,
         &sql,
         params_from_iter(values.iter()),
-        read_task,
+        read_with_key,
     )?;
-    let has_next = records.len() > limit;
-    records.truncate(limit);
+    let has_next = rows.len() > limit;
+    rows.truncate(limit);
+    let next = if has_next {
+        rows.last().map(|(record, value)| PageCursor {
+            value: value.clone(),
+            id: record.id,
+        })
+    } else {
+        None
+    };
+    let mut records: Vec<TaskRecord> = rows.into_iter().map(|(record, _)| record).collect();
 
     if !records.is_empty() {
         let keys: Vec<String> = records
@@ -218,13 +326,14 @@ pub(super) fn list_page(
     Ok(TaskPage {
         tasks,
         has_next,
+        next,
         total: u64::try_from(total).unwrap_or(0),
     })
 }
 
 impl SqliteStore {
-    /// The query plan for a page of the list, one line per step. A diagnostic: it checks that a page
-    /// walks the position index and doesn't sort the rows itself.
+    /// The query plan for a page of the list, one line per step. A diagnostic: it checks how a page walks
+    /// the position index, and that the manual order doesn't sort the rows itself.
     pub fn list_page_query_plan(
         &self,
         project: ProjectId,

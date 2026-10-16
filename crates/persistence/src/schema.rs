@@ -75,6 +75,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_list_index",
         sql: include_str!("sql/0014_task_list_index.sql"),
     },
+    Migration {
+        version: 15,
+        name: "project_list_view",
+        sql: include_str!("sql/0015_project_list_view.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -405,5 +410,48 @@ mod tests {
             sql.contains("position, id"),
             "the index ends in the id: {sql}"
         );
+    }
+
+    #[test]
+    fn a_database_from_before_list_settings_keeps_its_tasks_and_gets_the_table() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..14]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a0', 30, NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let title: String = connection
+            .query_row("SELECT title FROM tasks WHERE id = 't'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(title, "Write copy", "existing tasks are kept");
+        let table: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'project_list_view'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table, 1, "the settings table exists");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM project_list_view", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "a project with no saved settings has no row");
     }
 }

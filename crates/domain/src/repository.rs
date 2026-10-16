@@ -97,3 +97,14 @@ pub trait TeamMemberRepository {
     /// how many tasks were unassigned.
     fn remove(&self, id: TeamMemberId) -> RepoResult<u64>;
 }
+
+/// The list settings each project remembers: the sort, and the columns shown. A project that has never
+/// saved them gets the defaults.
+pub trait ListViewRepository {
+    fn load_list_view(&self, project: ProjectId) -> RepoResult<crate::list_view::ListView>;
+    fn save_list_view(
+        &self,
+        project: ProjectId,
+        view: &crate::list_view::ListView,
+    ) -> RepoResult<()>;
+}

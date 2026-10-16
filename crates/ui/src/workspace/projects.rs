@@ -56,6 +56,7 @@ impl WorkspaceView {
             }
         }
         self.load_project_filter(cx);
+        self.load_list_settings(cx);
         self.reload_board(cx);
     }
 
@@ -82,6 +83,7 @@ impl WorkspaceView {
         self.reset_list_position();
         self.projects.select(id);
         self.load_project_filter(cx);
+        self.load_list_settings(cx);
         self.reload_board(cx);
         cx.notify();
     }

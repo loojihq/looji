@@ -103,6 +103,9 @@ pub struct WorkspaceView {
     /// Whether the board area shows the board or the list, and the list's paging state.
     view_mode: list_view::ViewMode,
     task_list: list_view::ListState,
+    /// The sort and the shown columns of the selected project's list, and whether the column picker is open.
+    list_settings: looji_domain::ListView,
+    list_columns_open: bool,
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
@@ -137,6 +140,8 @@ impl WorkspaceView {
                     search_debounce: search::Debounce::default(),
                     view_mode: list_view::ViewMode::default(),
                     task_list: list_view::ListState::default(),
+                    list_settings: looji_domain::ListView::default(),
+                    list_columns_open: false,
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
@@ -484,6 +489,7 @@ impl Render for WorkspaceView {
                     this.blur_tag_editor(cx);
                     this.blur_search(cx);
                     this.filter_menu = None;
+                    this.list_columns_open = false;
                 }),
             )
             .flex()

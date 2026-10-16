@@ -3063,6 +3063,7 @@ dependencies = [
  "image",
  "looji-domain",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
