@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 looji-domain.workspace = true
 looji-persistence.workspace = true
+looji-ai.workspace = true
 gpui.workspace = true
 unicode-segmentation = "1.13.3"
 uuid = "1.28.0"

@@ -8,6 +8,7 @@
 pub mod anthropic;
 mod error;
 pub mod fake;
+pub mod generation;
 mod key;
 pub mod key_store;
 pub mod models;
@@ -21,6 +22,7 @@ use std::sync::{Arc, OnceLock};
 pub use error::AiError;
 pub use key::ApiKey;
 pub use provider::{ChatProvider, EventStream};
+pub use tokio_util::sync::CancellationToken;
 pub use types::{ChatEvent, ChatMessage, ChatRequest, ChatRole, Usage};
 
 /// The runtime every provider's network work runs on. It's created on first use and lives for the process.

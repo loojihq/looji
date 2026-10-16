@@ -3326,6 +3326,7 @@ name = "looji-ui"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "looji-ai",
  "looji-domain",
  "looji-persistence",
  "unicode-segmentation",

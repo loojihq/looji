@@ -158,9 +158,20 @@ fn check_content(sections: &[PlanSection], tasks: &[PlanTask]) -> Result<(), Pla
 impl PlanDraft {
     /// A new draft for a prompt. It starts generating, and nothing has been received yet.
     pub fn start(project: ProjectId, prompt: &str, at: Timestamp) -> Result<Self, PlanDraftError> {
+        Self::start_as(PlanDraftId::new(), project, prompt, at)
+    }
+
+    /// A new draft under an id chosen by the caller. The wizard names the draft before it exists, so it can record
+    /// which draft is running.
+    pub fn start_as(
+        id: PlanDraftId,
+        project: ProjectId,
+        prompt: &str,
+        at: Timestamp,
+    ) -> Result<Self, PlanDraftError> {
         Ok(Self {
             parts: PlanDraftParts {
-                id: PlanDraftId::new(),
+                id,
                 project_id: project,
                 prompt: clean_prompt(prompt)?,
                 state: DraftState::Generating,

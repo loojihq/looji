@@ -11,6 +11,7 @@ mod ids;
 mod list_view;
 mod ordering;
 mod plan_draft;
+mod plan_wizard;
 mod position;
 pub mod preferences;
 mod project;
@@ -49,6 +50,9 @@ pub use ordering::{
 };
 pub use plan_draft::{
     DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanSection, PlanTask,
+};
+pub use plan_wizard::{
+    Generation, MAX_GOAL_CHARS, PlanWizard, WizardError, WizardPhase, validate_goal,
 };
 pub use position::Position;
 pub use preferences::{
