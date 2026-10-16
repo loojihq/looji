@@ -32,6 +32,7 @@ mod working_schedule;
 mod working_time;
 mod workload;
 mod workspace;
+mod zone;
 
 pub use activity::{ActivityKind, TaskActivity};
 pub use board::{Column, ColumnRecord};
@@ -92,3 +93,4 @@ pub use workload::{OVERLOAD_PERCENT, Owner, WorkloadReport, WorkloadRow, workloa
 pub use workspace::{
     DEFAULT_WORKSPACE_NAME, Workspace, WorkspaceRecord, next_untitled_name, validate_name,
 };
+pub use zone::{Zone, ZoneError, local_to_timestamp, timestamp_to_local, work_start};
