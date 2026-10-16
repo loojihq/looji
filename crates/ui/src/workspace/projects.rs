@@ -74,6 +74,7 @@ impl WorkspaceView {
         };
         self.cancel_keyboard_if_gone(cx);
         self.close_panel_if_gone(cx);
+        self.close_plan_drafts_if_gone();
         self.close_tag_editors_if_gone();
         self.prune_project_filter(cx);
         self.refresh_list(cx);

@@ -162,6 +162,14 @@ impl PlanWizard {
         &self.phase
     }
 
+    /// A wizard showing a plan that's already ready. Used for a draft reopened from the list, which shows the review
+    /// straight away.
+    pub fn finished(today: DueDate) -> Self {
+        let mut wizard = Self::new(today, None);
+        wizard.phase = WizardPhase::Done;
+        wizard
+    }
+
     /// The goal's problem, when it has one. Shown next to the field.
     pub fn goal_problem(&self) -> Option<WizardError> {
         validate_goal(&self.goal).err()

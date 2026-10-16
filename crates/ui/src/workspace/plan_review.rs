@@ -125,7 +125,15 @@ fn now() -> Timestamp {
 impl WorkspaceView {
     /// Starts an edit on one piece of the plan. An edit already open is saved first. If that fails, it stays
     /// open with its error, and the new one doesn't start.
-    pub(super) fn begin_plan_edit(&mut self, target: Target, cx: &mut Context<Self>) {
+    pub(super) fn begin_plan_edit(
+        &mut self,
+        target: Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The text box is drawn in this dialog, so the keyboard goes to the workspace rather than to a control
+        // that may no longer be on screen.
+        self.focus_handle.focus(window);
         if self.reject_if_published(cx) {
             return;
         }
@@ -343,12 +351,14 @@ impl WorkspaceView {
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };
+        let mut published = false;
         match outcome {
             Ok(Some(publication)) => {
                 if let Ok(Some(updated)) = PlanDraftRepository::find(store(cx), id) {
                     dialog.draft = Some(updated);
                 }
                 dialog.notice = Some(publish_message(&publication));
+                published = true;
             }
             Ok(None) => dialog.notice = Some("This plan is no longer stored.".to_string()),
             Err(RepoError::Rejected(err)) => dialog.notice = Some(err.to_string()),
@@ -357,6 +367,11 @@ impl WorkspaceView {
                     "Could not publish the plan, so nothing was added: {err}"
                 ))
             }
+        }
+        // The published tasks are on the board now. The board only reloads when its project changes, so reload it
+        // here, or the Backlog would show nothing until the user switched away and back.
+        if published {
+            self.reload_board(cx);
         }
         cx.notify();
     }
@@ -492,11 +507,9 @@ fn editable(
         .rounded(theme.radius.sm)
         .hover(|style| style.bg(theme.palette.surface_hover))
         .child(display)
-        .on_click(
-            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.begin_plan_edit(target.clone(), cx)
-            }),
-        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.begin_plan_edit(target.clone(), window, cx)
+        }))
         .into_any_element()
 }
 
@@ -548,15 +561,20 @@ fn publish_row(dialog: &PlanWizardDialog, theme: &Theme, cx: &mut Context<Worksp
             .text_color(theme.palette.text_secondary)
             .child("A task whose title the backlog already has is skipped."),
     )
-    .child(
-        button(
+    .child({
+        // An empty plan has nothing to publish, and publishing it would still mark the plan as published.
+        let publish = button(
             "review-publish",
             &format!("Publish {count} {noun} to the backlog"),
             true,
             theme,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.publish_plan(cx))),
-    )
+        );
+        if count == 0 {
+            publish.opacity(0.5).cursor_default()
+        } else {
+            publish.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.publish_plan(cx)))
+        }
+    })
 }
 
 /// The mark on a part a person wrote or changed by hand. Refining that part asks first.
@@ -574,8 +592,9 @@ fn refine_button(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    button(id, "Refine", false, theme)
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_refine(target, cx)))
+    button(id, "Refine", false, theme).on_click(
+        cx.listener(move |this, _: &ClickEvent, window, cx| this.open_refine(target, window, cx)),
+    )
 }
 
 /// The review, drawn over the window in place of the wizard's form. Nothing is drawn when the wizard isn't open.
@@ -704,7 +723,15 @@ pub(super) fn overlay(
         .flex_col()
         .gap(theme.spacing.sm)
         .child(section_heading(
-            format!("Backlog ({} tasks)", draft.tasks().len()),
+            format!(
+                "Backlog ({} {})",
+                draft.tasks().len(),
+                if draft.tasks().len() == 1 {
+                    "task"
+                } else {
+                    "tasks"
+                }
+            ),
             theme,
         ));
     if draft.tasks().is_empty() {

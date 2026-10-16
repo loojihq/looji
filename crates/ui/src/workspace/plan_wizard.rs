@@ -449,7 +449,7 @@ impl WorkspaceView {
 
     /// Resumes an interrupted draft. Its earlier text moves to the recovered field, and a new generation starts from
     /// its goal, with the team and date now in the wizard.
-    fn resume_interrupted_plan(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn resume_interrupted_plan(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };
@@ -580,11 +580,6 @@ impl WorkspaceView {
             Some(Control::Date) => {
                 self.edit_plan_text(Control::Date, &event.keystroke, modifier, cx)
             }
-            Some(Control::Team) if matches!(key, "enter" | "space") => self.cycle_plan_team(cx),
-            Some(Control::Primary) if matches!(key, "enter" | "space") => {
-                self.primary_plan_action(window, cx)
-            }
-            Some(Control::Close) if key == "enter" => self.request_plan_close(window, cx),
             _ => {}
         }
     }

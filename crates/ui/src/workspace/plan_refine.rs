@@ -167,7 +167,13 @@ impl PlanWizardDialog {
 
 impl WorkspaceView {
     /// Opens the refinement form under one part. Nothing changes until the instruction is sent.
-    pub(super) fn open_refine(&mut self, target: RefineTarget, cx: &mut Context<Self>) {
+    pub(super) fn open_refine(
+        &mut self,
+        target: RefineTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_handle.focus(window);
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };

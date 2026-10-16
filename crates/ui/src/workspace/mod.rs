@@ -18,6 +18,7 @@ mod list_view;
 mod members;
 mod moves;
 mod panel;
+mod plan_drafts;
 mod plan_refine;
 mod plan_review;
 mod plan_wizard;
@@ -101,6 +102,8 @@ pub struct WorkspaceView {
     schedule_focus: Vec<FocusHandle>,
     /// The planning wizard, while it's open, and one focus handle for each of its controls.
     plan_wizard: Option<plan_wizard::PlanWizardDialog>,
+    /// The planning drafts of the selected project, while their list is open.
+    plan_drafts: Option<plan_drafts::PlanDraftsDialog>,
     plan_focus: Vec<FocusHandle>,
     /// The task detail panel beside the board, while a task is open in it.
     panel: Option<panel::PanelState>,
@@ -164,6 +167,7 @@ impl WorkspaceView {
                     team_dialog: None,
                     schedule_dialog: None,
                     plan_wizard: None,
+                    plan_drafts: None,
                     plan_focus: (0..plan_wizard::CONTROLS.len())
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
@@ -400,6 +404,9 @@ impl WorkspaceView {
         if self.task_dialog.is_some() {
             return self.task_dialog_key(event, cx);
         }
+        if self.plan_drafts.is_some() && event.keystroke.key == "escape" {
+            return self.close_plan_drafts(cx);
+        }
         if self.plan_wizard.is_some() {
             return self.plan_wizard_key(event, window, cx);
         }
@@ -531,6 +538,7 @@ impl Render for WorkspaceView {
                 .items_center()
                 .gap(theme.spacing.sm)
                 .child(list_view::switch(self, &theme, cx))
+                .child(plan_drafts::open_button(&theme, cx))
                 .child(plan_wizard::open_button(&theme, cx))
                 .child(schedule_dialog::open_button(&theme, cx))
                 .child(team_dialog::open_button(&theme, cx))
@@ -588,6 +596,7 @@ impl Render for WorkspaceView {
             .children(team_dialog::overlay(self, &theme, cx))
             .children(schedule_dialog::overlay(self, &theme, window, cx))
             .children(plan_wizard::overlay(self, &theme, window, cx))
+            .children(plan_drafts::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
             .children(delete_dialog)
             .children(project_dialog)

@@ -15,8 +15,18 @@ use workspace::{WorkspaceList, WorkspaceView};
 
 pub const APP_NAME: &str = "Looji";
 
+/// The folder the database and icons live in. A debug build reads `LOOJI_DATA_DIR` first, so a manual run can use a
+/// scratch folder and leave the real data alone. Release builds always use the user's data folder.
+fn data_dir() -> Option<std::path::PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("LOOJI_DATA_DIR") {
+        return Some(std::path::PathBuf::from(dir));
+    }
+    persistence::data_dir()
+}
+
 fn main() {
-    let Some(data_dir) = persistence::data_dir() else {
+    let Some(data_dir) = data_dir() else {
         fail("looji could not find your user data folder.");
     };
     let database_path = persistence::database_path(&data_dir);

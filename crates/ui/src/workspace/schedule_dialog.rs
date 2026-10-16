@@ -402,17 +402,12 @@ impl WorkspaceView {
         }
         let modifier = modifiers.control || modifiers.alt || modifiers.platform;
         match self.focused_schedule_control(window) {
-            Some(Control::Day(day)) if matches!(key, "enter" | "space") => {
-                self.toggle_schedule_day(day, window, cx)
-            }
             Some(Control::Start | Control::End) if key == "enter" => {
                 self.save_schedule_dialog(window, cx)
             }
             Some(control @ (Control::Start | Control::End)) => {
                 self.edit_schedule_time(control, &event.keystroke, modifier, cx)
             }
-            Some(Control::Save) if key == "enter" => self.save_schedule_dialog(window, cx),
-            Some(Control::Cancel) if key == "enter" => self.request_schedule_close(window, cx),
             _ => {}
         }
     }

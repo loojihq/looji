@@ -528,6 +528,44 @@ impl PlanDraft {
         Ok(())
     }
 
+    /// A short name for the draft: the first line of its spec, or of its goal before there is one. Headings' `#` marks
+    /// are dropped, and the name is cut to 80 characters.
+    pub fn title(&self) -> String {
+        let source = if self.parts.spec.trim().is_empty() {
+            &self.parts.prompt
+        } else {
+            &self.parts.spec
+        };
+        source
+            .lines()
+            .map(|line| line.trim().trim_start_matches('#').trim())
+            .find(|line| !line.is_empty())
+            .unwrap_or("Untitled plan")
+            .chars()
+            .take(80)
+            .collect()
+    }
+
+    /// A copy of this draft under a new id. A ready plan copies its content and is unpublished, so the copy can be
+    /// edited and published on its own. Any other draft copies its goal only, as an interrupted draft, so the copy
+    /// can be resumed.
+    pub fn duplicate(&self, id: PlanDraftId, at: Timestamp) -> Result<PlanDraft, PlanDraftError> {
+        if self.parts.state == DraftState::Ready {
+            let mut parts = self.parts.clone();
+            parts.id = id;
+            parts.response = String::new();
+            parts.recovered = None;
+            parts.failure = None;
+            parts.published_at = None;
+            parts.created_at = at;
+            parts.updated_at = at;
+            return PlanDraft::from_parts(parts);
+        }
+        let mut copy = PlanDraft::start_as(id, self.parts.project_id, &self.parts.prompt, at)?;
+        copy.interrupt(at)?;
+        Ok(copy)
+    }
+
     fn require(&self, state: DraftState, action: &'static str) -> Result<(), PlanDraftError> {
         if self.parts.state == state {
             Ok(())
@@ -1643,6 +1681,60 @@ mod tests {
         ));
         assert!(matches!(
             draft.publication_plan(&[]),
+            Err(PlanDraftError::IllegalTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn a_title_is_the_first_line_of_the_spec_without_heading_marks_or_the_goal_before_there_is_one()
+    {
+        let draft = generating();
+        assert_eq!(draft.title(), "Plan the launch");
+
+        let mut ready = generating();
+        ready
+            .complete("\n# Launch plan\n\nDetails.", Vec::new(), Vec::new(), at(2))
+            .unwrap();
+        assert_eq!(ready.title(), "Launch plan");
+    }
+
+    #[test]
+    fn duplicating_a_ready_plan_copies_its_content_as_an_unpublished_plan_of_its_own() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft.mark_published(at(5)).unwrap();
+
+        let copy = draft
+            .duplicate(crate::ids::PlanDraftId::new(), at(6))
+            .unwrap();
+
+        assert_ne!(copy.id(), draft.id());
+        assert_eq!(copy.state(), DraftState::Ready);
+        assert_eq!(copy.published_at(), None, "the copy is not published");
+        assert_eq!(copy.spec(), draft.spec());
+        assert_eq!(copy.tasks(), draft.tasks());
+        assert_eq!(copy.prompt(), draft.prompt());
+    }
+
+    #[test]
+    fn duplicating_an_unfinished_draft_gives_an_interrupted_copy_of_its_goal() {
+        let mut draft = generating();
+        draft.append_response("partial", at(2)).unwrap();
+
+        let copy = draft
+            .duplicate(crate::ids::PlanDraftId::new(), at(3))
+            .unwrap();
+
+        assert_eq!(copy.state(), DraftState::Interrupted);
+        assert_eq!(copy.prompt(), draft.prompt());
+        assert_eq!(copy.response(), "", "the copy starts with no text");
+    }
+
+    #[test]
+    fn a_published_plan_cannot_be_resumed() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft.mark_published(at(5)).unwrap();
+        assert!(matches!(
+            draft.resume(at(6)),
             Err(PlanDraftError::IllegalTransition { .. })
         ));
     }
