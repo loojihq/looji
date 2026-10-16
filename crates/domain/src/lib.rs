@@ -26,6 +26,7 @@ mod task_query;
 mod team;
 mod time;
 mod validation;
+mod working_schedule;
 mod working_time;
 mod workload;
 mod workspace;
@@ -71,6 +72,10 @@ pub use team::{
     display_labels, initials, validate_member_name,
 };
 pub use time::Timestamp;
+pub use working_schedule::{
+    DEFAULT_END_MINUTES, DEFAULT_START_MINUTES, MINUTES_PER_DAY, ScheduleError, Workdays,
+    WorkingSchedule, format_time,
+};
 pub use working_time::{
     Period, WorkingCalendar, available_minutes, format_hours, weekday, working_days,
 };

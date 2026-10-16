@@ -90,6 +90,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "project_view_state",
         sql: include_str!("sql/0017_project_view_state.sql"),
     },
+    Migration {
+        version: 18,
+        name: "project_working_schedule",
+        sql: include_str!("sql/0018_project_working_schedule.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -528,5 +533,38 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rows, 0, "a project with no saved view has no row");
+    }
+
+    #[test]
+    fn a_project_from_before_working_hours_reads_back_as_monday_to_friday_nine_to_five() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..17]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let (name, start, end, mask): (String, i64, i64, i64) = connection
+            .query_row(
+                "SELECT name, working_start_min, working_end_min, workdays_mask FROM projects WHERE id = 'p'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        assert_eq!(
+            (start, end, mask),
+            (540, 1020, 31),
+            "Monday to Friday, 09:00 to 17:00"
+        );
     }
 }

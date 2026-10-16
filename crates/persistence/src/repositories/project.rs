@@ -17,6 +17,9 @@ fn read_project(row: &Row<'_>) -> RepoResult<ProjectRecord> {
         show_in_review: get(row, 4)?,
         created_at: read_timestamp(row, 5)?,
         updated_at: read_timestamp(row, 6)?,
+        working_start_min: get(row, 7)?,
+        working_end_min: get(row, 8)?,
+        workdays_mask: get(row, 9)?,
     })
 }
 
@@ -30,7 +33,8 @@ fn save_error(err: rusqlite::Error) -> RepoError {
 }
 
 const PROJECT_COLUMNS: &str =
-    "id, workspace_id, name, description, show_in_review, created_at, updated_at";
+    "id, workspace_id, name, description, show_in_review, created_at, updated_at,
+    working_start_min, working_end_min, workdays_mask";
 
 impl ProjectRepository for SqliteStore {
     /// Inserts or updates the name and description. The column flags are written only on insert:
@@ -38,12 +42,16 @@ impl ProjectRepository for SqliteStore {
     fn save(&self, project: &Project) -> RepoResult<()> {
         self.connection
             .execute(
-                "INSERT INTO projects (id, workspace_id, name, description, show_in_review, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO projects (id, workspace_id, name, description, show_in_review, created_at, updated_at,
+                                       working_start_min, working_end_min, workdays_mask)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT (id) DO UPDATE SET
                      name = excluded.name,
                      description = excluded.description,
-                     updated_at = excluded.updated_at",
+                     updated_at = excluded.updated_at,
+                     working_start_min = excluded.working_start_min,
+                     working_end_min = excluded.working_end_min,
+                     workdays_mask = excluded.workdays_mask",
                 params![
                     id_text(project.id().as_uuid()),
                     id_text(project.workspace_id().as_uuid()),
@@ -52,6 +60,9 @@ impl ProjectRepository for SqliteStore {
                     project.show_in_review(),
                     project.created_at().unix_millis(),
                     project.updated_at().unix_millis(),
+                    i64::from(project.working_schedule().start()),
+                    i64::from(project.working_schedule().end()),
+                    i64::from(project.working_schedule().workdays().mask()),
                 ],
             )
             .map_err(save_error)?;

@@ -49,6 +49,8 @@ pub enum DomainError {
     UnknownColour(i64),
     #[error("{0}")]
     Tag(crate::task_fields::TagError),
+    #[error("{0}")]
+    Schedule(crate::working_schedule::ScheduleError),
 }
 
 /// A repository could not load or save an entity.

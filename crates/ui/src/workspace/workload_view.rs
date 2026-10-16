@@ -1,8 +1,8 @@
 //! The workload view: for a period, how much estimated work each member carries against their working time.
 //! The numbers come from the domain's `workload`, so this file only chooses the period and draws rows.
 //!
-//! The working calendar is the stand-in in `project_calendar`. It's labelled on screen, so it can't be
-//! mistaken for the project's real hours.
+//! The working calendar is the project's own working schedule, so the view is only as right as the schedule it
+//! was given. The schedule is shown on screen.
 
 use gpui::{prelude::*, *};
 use looji_domain::{
@@ -16,10 +16,33 @@ use crate::theme::Theme;
 const BAR_WIDTH: f32 = 240.;
 const LABEL_WIDTH: f32 = 200.;
 
-/// The calendar the view uses. The one place that picks it, so real per-project hours replace the stand-in
-/// here.
-fn project_calendar() -> WorkingCalendar {
-    WorkingCalendar::stub()
+/// The project's calendar, from its working schedule. A project with no selection gets the default schedule.
+fn project_calendar(view: &WorkspaceView) -> WorkingCalendar {
+    view.projects
+        .active()
+        .map(|project| project.working_schedule())
+        .unwrap_or_default()
+        .calendar()
+}
+
+/// The schedule in words, for the view: its weekdays and its hours.
+fn describe_schedule(view: &WorkspaceView) -> String {
+    const NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let schedule = view
+        .projects
+        .active()
+        .map(|project| project.working_schedule())
+        .unwrap_or_default();
+    let days: Vec<&str> = (0..7)
+        .filter(|day| schedule.workdays().contains(*day))
+        .map(|day| NAMES[day])
+        .collect();
+    format!(
+        "{}, {}–{}",
+        days.join(" "),
+        looji_domain::format_time(schedule.start()),
+        looji_domain::format_time(schedule.end())
+    )
 }
 
 /// The period the view shows, and whether done tasks count. `None` means this week, so the default
@@ -88,7 +111,7 @@ pub(super) fn render(
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let period = view.workload.period();
-    let calendar = project_calendar();
+    let calendar = project_calendar(view);
     let members: Vec<_> = view.members.iter().map(|member| member.id()).collect();
     let report = workload(
         &view.board,
@@ -133,7 +156,8 @@ pub(super) fn render(
                 .text_size(theme.typography.caption)
                 .text_color(theme.palette.text_secondary)
                 .child(format!(
-                    "{working_days} working days · {hours_per_day} a day · stand-in calendar, Monday to Friday, until the project's own hours exist"
+                    "{working_days} working days · {hours_per_day} a day · working hours {}",
+                    describe_schedule(view)
                 ))
                 .child(format!(
                     "Counts {} tasks due in this period. Not counted: {} due outside it, {} with no due date. {} counted tasks have no estimate and count as 0h.",

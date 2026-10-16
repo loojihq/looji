@@ -5,6 +5,7 @@ use crate::{
     status_visibility::check_hideable,
     time::Timestamp,
     validation::trimmed_text,
+    working_schedule::WorkingSchedule,
 };
 
 /// Longest project description, in characters after trimming.
@@ -18,6 +19,8 @@ pub struct Project {
     description: Option<String>,
     /// Whether the In review column is shown. The defaults are always shown.
     show_in_review: bool,
+    /// When the project works. A new project gets the default: Monday to Friday, 09:00 to 17:00.
+    working_schedule: WorkingSchedule,
     created_at: Timestamp,
     updated_at: Timestamp,
 }
@@ -31,6 +34,7 @@ impl Project {
             name: trimmed_text(name, DomainError::EmptyName)?,
             description: None,
             show_in_review: true,
+            working_schedule: WorkingSchedule::default(),
             created_at: now,
             updated_at: now,
         })
@@ -50,6 +54,16 @@ impl Project {
 
     pub fn show_in_review(&self) -> bool {
         self.show_in_review
+    }
+
+    pub fn working_schedule(&self) -> WorkingSchedule {
+        self.working_schedule
+    }
+
+    /// Replaces the working schedule. The schedule was checked when it was built, so this can't fail.
+    pub fn set_working_schedule(&mut self, schedule: WorkingSchedule) {
+        self.working_schedule = schedule;
+        self.updated_at = Timestamp::now();
     }
 
     /// Whether `status` has a column on this project's board. Defaults are always visible.
@@ -152,6 +166,9 @@ pub struct ProjectRecord {
     pub name: String,
     pub description: Option<String>,
     pub show_in_review: bool,
+    pub working_start_min: i64,
+    pub working_end_min: i64,
+    pub workdays_mask: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -166,6 +183,12 @@ impl TryFrom<ProjectRecord> for Project {
             name: trimmed_text(&record.name, DomainError::EmptyName)?,
             description: clean_description(record.description.as_deref())?,
             show_in_review: record.show_in_review,
+            working_schedule: WorkingSchedule::from_stored(
+                record.working_start_min,
+                record.working_end_min,
+                record.workdays_mask,
+            )
+            .map_err(DomainError::Schedule)?,
             created_at: record.created_at,
             updated_at: record.updated_at,
         })
