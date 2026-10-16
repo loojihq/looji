@@ -7,8 +7,8 @@
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    PlanDraft, PlanDraftRepository, PlanEdit, Priority, RefineTarget, RepoError, TeamMember,
-    TeamMemberId, Timestamp, display_labels, parse_estimate_hours,
+    PlanDraft, PlanDraftRepository, PlanEdit, Priority, Publication, RefineTarget, RepoError,
+    TeamMember, TeamMemberId, Timestamp, display_labels, parse_estimate_hours,
 };
 
 use super::fields::text_box;
@@ -126,6 +126,9 @@ impl WorkspaceView {
     /// Starts an edit on one piece of the plan. An edit already open is saved first. If that fails, it stays
     /// open with its error, and the new one doesn't start.
     pub(super) fn begin_plan_edit(&mut self, target: Target, cx: &mut Context<Self>) {
+        if self.reject_if_published(cx) {
+            return;
+        }
         if self
             .plan_wizard
             .as_ref()
@@ -216,6 +219,9 @@ impl WorkspaceView {
 
     /// A change made by a button. There's no text to keep, so a refusal goes to the notice at the foot.
     fn plan_change(&mut self, edit: PlanEdit, cx: &mut Context<Self>) {
+        if self.reject_if_published(cx) {
+            return;
+        }
         // A refinement is replacing a part, so nothing else may change the plan until it's done.
         if self
             .plan_wizard
@@ -302,6 +308,57 @@ impl WorkspaceView {
             .find(|candidate| !taken.contains(&candidate.to_lowercase()))
             .unwrap_or_else(|| "New task".to_string());
         self.plan_change(PlanEdit::AddTask { title }, cx);
+    }
+
+    /// Whether the plan has been published. A published plan is in the backlog, so it can't change here. Says so when
+    /// something tries.
+    fn reject_if_published(&mut self, cx: &mut Context<Self>) -> bool {
+        let published = self
+            .plan_wizard
+            .as_ref()
+            .and_then(|dialog| dialog.draft.as_ref())
+            .is_some_and(|draft| draft.published_at().is_some());
+        if published && let Some(dialog) = self.plan_wizard.as_mut() {
+            dialog.notice = Some("This plan is in the backlog, so it can't change.".to_string());
+            cx.notify();
+        }
+        published
+    }
+
+    /// Publishes the plan's tasks to the Backlog. An edit still open is saved or cancelled first, so what's published
+    /// is what's on screen. The store does the whole publication in one transaction. A failure adds nothing, and the
+    /// plan stays as it was.
+    pub(super) fn publish_plan(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.plan_wizard.as_mut() else {
+            return;
+        };
+        if dialog.editor.is_some() {
+            dialog.notice = Some("Save or cancel the open edit before publishing.".to_string());
+            return cx.notify();
+        }
+        let Some(id) = dialog.draft.as_ref().map(PlanDraft::id) else {
+            return;
+        };
+        let outcome = PlanDraftRepository::publish(store(cx), id, now());
+        let Some(dialog) = self.plan_wizard.as_mut() else {
+            return;
+        };
+        match outcome {
+            Ok(Some(publication)) => {
+                if let Ok(Some(updated)) = PlanDraftRepository::find(store(cx), id) {
+                    dialog.draft = Some(updated);
+                }
+                dialog.notice = Some(publish_message(&publication));
+            }
+            Ok(None) => dialog.notice = Some("This plan is no longer stored.".to_string()),
+            Err(RepoError::Rejected(err)) => dialog.notice = Some(err.to_string()),
+            Err(err) => {
+                dialog.notice = Some(format!(
+                    "Could not publish the plan, so nothing was added: {err}"
+                ))
+            }
+        }
+        cx.notify();
     }
 
     pub(super) fn handle_review_key(
@@ -448,6 +505,58 @@ fn section_heading(text: String, theme: &Theme) -> Div {
         .text_size(theme.typography.caption)
         .text_color(theme.palette.text_secondary)
         .child(text)
+}
+
+/// What a publication says in the notice: how many tasks went in, and which titles were already there.
+fn publish_message(publication: &Publication) -> String {
+    let count = publication.published.len();
+    let noun = if count == 1 { "task" } else { "tasks" };
+    let mut message = format!("Published {count} {noun} to the backlog.");
+    if !publication.skipped.is_empty() {
+        message.push_str(&format!(
+            " Skipped {} the backlog already has: {}.",
+            publication.skipped.len(),
+            publication.skipped.join(", ")
+        ));
+    }
+    message
+}
+
+/// The publish control. Before publishing it says what will happen. Afterwards it says the plan is in the backlog.
+fn publish_row(dialog: &PlanWizardDialog, theme: &Theme, cx: &mut Context<WorkspaceView>) -> Div {
+    let row = div()
+        .flex()
+        .flex_row()
+        .justify_between()
+        .items_center()
+        .gap(theme.spacing.sm);
+    let Some(draft) = dialog.draft.as_ref() else {
+        return row;
+    };
+    if draft.published_at().is_some() {
+        return row.child(
+            div()
+                .text_color(theme.palette.text_secondary)
+                .child("This plan is in the backlog. It can't change now."),
+        );
+    }
+    let count = draft.tasks().len();
+    let noun = if count == 1 { "task" } else { "tasks" };
+    row.child(
+        div()
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child("A task whose title the backlog already has is skipped."),
+    )
+    .child(
+        button(
+            "review-publish",
+            &format!("Publish {count} {noun} to the backlog"),
+            true,
+            theme,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.publish_plan(cx))),
+    )
 }
 
 /// The mark on a part a person wrote or changed by hand. Refining that part asks first.
@@ -805,6 +914,7 @@ pub(super) fn overlay(
                 .child(stories)
                 .child(backlog),
         )
+        .child(publish_row(dialog, theme, cx))
         .child(div().flex().flex_row().justify_end().child(
             button("plan-close", "Close", false, theme).on_click(
                 cx.listener(|this, _: &ClickEvent, window, cx| this.request_plan_close(window, cx)),

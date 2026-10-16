@@ -25,7 +25,7 @@ use thiserror::Error;
 
 use crate::{
     error::DomainError,
-    ids::{PlanDraftId, ProjectId, TeamMemberId},
+    ids::{PlanDraftId, ProjectId, TaskId, TeamMemberId},
     task::Estimate,
     task_fields::{Priority, TagError, normalize_tags},
     time::Timestamp,
@@ -55,6 +55,8 @@ pub enum PlanDraftError {
     UnknownAssignee,
     #[error("this was edited by hand; replacing it needs confirmation")]
     ManuallyEdited,
+    #[error("this plan has been published, so it can't change")]
+    AlreadyPublished,
     #[error("that refinement is for a different part of the plan")]
     WrongPart,
     #[error("{0}")]
@@ -167,6 +169,7 @@ pub struct PlanDraftParts {
     pub tasks: Vec<PlanTask>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    pub published_at: Option<Timestamp>,
 }
 
 /// One change to a ready draft. Every change goes through `PlanDraft::apply`, so each one is checked the same way.
@@ -317,6 +320,7 @@ impl PlanDraft {
                 tasks: Vec::new(),
                 created_at: at,
                 updated_at: at,
+                published_at: None,
             },
         })
     }
@@ -470,12 +474,57 @@ impl PlanDraft {
         members: &[TeamMemberId],
         at: Timestamp,
     ) -> Result<(), PlanDraftError> {
-        self.require(DraftState::Ready, "be edited")?;
+        self.require_unpublished("be edited")?;
         let mut next = self.parts.clone();
         apply_to(&mut next, edit, members)?;
         check_content(&next.stories, &next.tasks)?;
         next.updated_at = at;
         self.parts = next;
+        Ok(())
+    }
+
+    /// The published flag: when the plan was published, or `None` if it hasn't been.
+    pub fn published_at(&self) -> Option<Timestamp> {
+        self.parts.published_at
+    }
+
+    /// The tasks a publication would create, and the titles it would skip because the project already has a task with
+    /// that title, ignoring case. Requires a ready plan that hasn't been published.
+    pub fn publication_plan(
+        &self,
+        existing_titles: &[String],
+    ) -> Result<PublishPlan, PlanDraftError> {
+        self.require_unpublished("be published")?;
+        let taken: Vec<String> = existing_titles
+            .iter()
+            .map(|title| title.trim().to_lowercase())
+            .collect();
+        let mut plan = PublishPlan::default();
+        for task in &self.parts.tasks {
+            if taken.contains(&task.title.trim().to_lowercase()) {
+                plan.skipped.push(task.title.clone());
+            } else {
+                plan.create.push(task.clone());
+            }
+        }
+        Ok(plan)
+    }
+
+    /// Records that the plan was published. After this the plan can't change. Only a ready plan that hasn't been
+    /// published can be marked.
+    pub fn mark_published(&mut self, at: Timestamp) -> Result<(), PlanDraftError> {
+        self.require_unpublished("be published")?;
+        self.parts.published_at = Some(at);
+        self.parts.updated_at = at;
+        Ok(())
+    }
+
+    /// A ready plan that hasn't been published. Only this kind of plan can change.
+    fn require_unpublished(&self, action: &'static str) -> Result<(), PlanDraftError> {
+        self.require(DraftState::Ready, action)?;
+        if self.parts.published_at.is_some() {
+            return Err(PlanDraftError::AlreadyPublished);
+        }
         Ok(())
     }
 
@@ -608,7 +657,7 @@ impl PlanDraft {
         replace_edited: bool,
         at: Timestamp,
     ) -> Result<(), PlanDraftError> {
-        self.require(DraftState::Ready, "be refined")?;
+        self.require_unpublished("be refined")?;
         let mut next = self.parts.clone();
         match (target, part) {
             (RefineTarget::Spec, RefinedPart::Spec(spec)) => {
@@ -663,6 +712,22 @@ impl PlanDraft {
     pub fn spec_edited(&self) -> bool {
         self.parts.spec_edited
     }
+}
+
+/// The tasks a publication would create, and the titles it would skip. Every task of the plan is in one of the two
+/// lists, in the order the plan has them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PublishPlan {
+    pub create: Vec<PlanTask>,
+    /// Titles the project already has, ignoring case. Those tasks aren't created again.
+    pub skipped: Vec<String>,
+}
+
+/// What a publication did: the new tasks, and the titles it skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Publication {
+    pub published: Vec<TaskId>,
+    pub skipped: Vec<String>,
 }
 
 impl From<PlanDraftError> for DomainError {
@@ -920,6 +985,7 @@ mod tests {
             failure: None,
             spec: "Spec".to_string(),
             spec_edited: false,
+            published_at: None,
             stories: Vec::new(),
             tasks: vec![PlanTask {
                 section: Some(0),
@@ -946,6 +1012,7 @@ mod tests {
             failure: None,
             spec: "  ".to_string(),
             spec_edited: false,
+            published_at: None,
             stories: Vec::new(),
             tasks: Vec::new(),
             created_at: at(1),
@@ -1123,6 +1190,7 @@ mod tests {
             failure: None,
             spec: draft.spec().to_string(),
             spec_edited: false,
+            published_at: None,
             stories: draft.stories().to_vec(),
             tasks: Vec::new(),
             created_at: draft.created_at(),
@@ -1508,6 +1576,75 @@ mod tests {
             Err(PlanDraftError::DuplicateTitle { index: 1, first: 0 })
         );
         assert_eq!(draft, before);
+    }
+
+    #[test]
+    fn the_publication_plan_creates_every_task_whose_title_is_new_and_skips_the_rest() {
+        let draft = ready_with(vec![task("One"), task("Two"), task("Three")]);
+
+        let plan = draft
+            .publication_plan(&["  TWO ".to_string(), "Unrelated".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            plan.create
+                .iter()
+                .map(|t| t.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["One", "Three"]
+        );
+        assert_eq!(plan.skipped, vec!["Two"]);
+        assert_eq!(
+            plan.create.len() + plan.skipped.len(),
+            draft.tasks().len(),
+            "every task of the draft is either created or skipped"
+        );
+    }
+
+    #[test]
+    fn a_plan_is_marked_published_once_and_then_cannot_change() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft.mark_published(at(9)).unwrap();
+
+        assert_eq!(draft.published_at(), Some(at(9)));
+        assert_eq!(
+            draft.mark_published(at(10)),
+            Err(PlanDraftError::AlreadyPublished)
+        );
+        assert_eq!(
+            draft.apply(
+                PlanEdit::AddTask {
+                    title: "Late".to_string()
+                },
+                &[],
+                at(11)
+            ),
+            Err(PlanDraftError::AlreadyPublished)
+        );
+        assert_eq!(
+            draft.refine(
+                RefineTarget::Task(0),
+                RefinedPart::Task(task("One")),
+                &[],
+                true,
+                at(12)
+            ),
+            Err(PlanDraftError::AlreadyPublished)
+        );
+        assert_eq!(draft.tasks().len(), 1, "nothing changed after publishing");
+    }
+
+    #[test]
+    fn a_draft_that_is_not_ready_cannot_be_published() {
+        let mut draft = generating();
+        assert!(matches!(
+            draft.mark_published(at(3)),
+            Err(PlanDraftError::IllegalTransition { .. })
+        ));
+        assert!(matches!(
+            draft.publication_plan(&[]),
+            Err(PlanDraftError::IllegalTransition { .. })
+        ));
     }
 
     #[test]

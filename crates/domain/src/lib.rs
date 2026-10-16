@@ -50,7 +50,7 @@ pub use ordering::{
 };
 pub use plan_draft::{
     DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanEdit, PlanStory, PlanTask,
-    RefineTarget, RefinedPart,
+    Publication, PublishPlan, RefineTarget, RefinedPart,
 };
 pub use plan_wizard::{
     Generation, MAX_GOAL_CHARS, PlanWizard, WizardError, WizardPhase, validate_goal,

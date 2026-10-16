@@ -14,7 +14,10 @@ use super::{
 };
 use crate::SqliteStore;
 
-const DRAFT_COLUMNS: &str = "id, project_id, prompt, state, response, recovered, failure, created_at, updated_at, spec, spec_edited";
+use super::task::write_task;
+use looji_domain::{Position, Publication, Status, Task, after};
+
+const DRAFT_COLUMNS: &str = "id, project_id, prompt, state, response, recovered, failure, created_at, updated_at, spec, spec_edited, published_at";
 
 fn invalid(err: PlanDraftError) -> RepoError {
     RepoError::Invalid(DomainError::from(err))
@@ -24,6 +27,7 @@ fn invalid(err: PlanDraftError) -> RepoError {
 fn read_draft(row: &Row<'_>) -> RepoResult<PlanDraftParts> {
     let state: String = get(row, 3)?;
     let spec_edited: i64 = get(row, 10)?;
+    let published_at: Option<i64> = get(row, 11)?;
     Ok(PlanDraftParts {
         id: read_id(row, 0, PlanDraftId::from_uuid)?,
         project_id: read_id(row, 1, ProjectId::from_uuid)?,
@@ -34,6 +38,7 @@ fn read_draft(row: &Row<'_>) -> RepoResult<PlanDraftParts> {
         failure: get(row, 6)?,
         spec: get(row, 9)?,
         spec_edited: spec_edited != 0,
+        published_at: published_at.map(Timestamp::from_unix_millis),
         stories: Vec::new(),
         tasks: Vec::new(),
         created_at: read_timestamp(row, 7)?,
@@ -149,8 +154,8 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
         transaction
             .execute(
                 "INSERT INTO plan_drafts (id, project_id, prompt, state, response, recovered, failure,
-                                          created_at, updated_at, spec, spec_edited)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                                          created_at, updated_at, spec, spec_edited, published_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT (id) DO UPDATE SET
                      state = excluded.state,
                      response = excluded.response,
@@ -158,7 +163,8 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
                      failure = excluded.failure,
                      updated_at = excluded.updated_at,
                      spec = excluded.spec,
-                     spec_edited = excluded.spec_edited",
+                     spec_edited = excluded.spec_edited,
+                     published_at = excluded.published_at",
                 params![
                     key,
                     id_text(draft.project_id().as_uuid()),
@@ -171,6 +177,7 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
                     draft.updated_at().unix_millis(),
                     draft.spec(),
                     draft.spec_edited(),
+                    draft.published_at().map(|at| at.unix_millis()),
                 ],
             )
             .map_err(storage)?;
@@ -282,4 +289,74 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
             draft.refine(target, part, members, replace_edited, at)
         })
     }
+
+    /// Publishes a ready plan's tasks into the project's Backlog column, in one transaction. The tasks go after the
+    /// Backlog tasks already there, in the order the plan has them. A title the project already has is skipped. The
+    /// draft is marked published in the same transaction, so a failure part way leaves no task behind and the draft
+    /// unpublished. `None` means there is no such draft.
+    fn publish(&self, id: PlanDraftId, at: Timestamp) -> RepoResult<Option<Publication>> {
+        let Some(draft) = looji_domain::PlanDraftRepository::find(self, id)? else {
+            return Ok(None);
+        };
+        let project = draft.project_id();
+        let existing: Vec<String> = query_all(
+            &self.connection,
+            "SELECT title FROM tasks WHERE project_id = ?1",
+            params![id_text(project.as_uuid())],
+            |row| get(row, 0),
+        )?;
+        let plan = draft
+            .publication_plan(&existing)
+            .map_err(|err| RepoError::Rejected(err.into()))?;
+
+        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let mut last = last_backlog_position(&transaction, project)?;
+        let mut published = Vec::new();
+        for planned in &plan.create {
+            let key = after(last.as_deref()).map_err(RepoError::Invalid)?;
+            let position = Position::new(key.clone()).map_err(RepoError::Invalid)?;
+            let mut task = Task::new(project, &planned.title, Status::Backlog, position)
+                .map_err(RepoError::Invalid)?;
+            task.set_priority(Some(planned.priority));
+            task.set_estimate(planned.estimate);
+            task.set_tags(planned.tags.clone());
+            task.assign(planned.assignee);
+            write_task(&transaction, &task)?;
+            published.push(task.id());
+            last = Some(key);
+        }
+
+        let marked = transaction
+            .execute(
+                "UPDATE plan_drafts SET published_at = ?1, updated_at = ?1
+                 WHERE id = ?2 AND state = 'ready' AND published_at IS NULL",
+                params![at.unix_millis(), id_text(id.as_uuid())],
+            )
+            .map_err(storage)?;
+        if marked != 1 {
+            // Dropping the transaction without committing rolls back the tasks written above.
+            return Err(RepoError::Rejected(PlanDraftError::AlreadyPublished.into()));
+        }
+        transaction.commit().map_err(storage)?;
+        Ok(Some(Publication {
+            published,
+            skipped: plan.skipped,
+        }))
+    }
+}
+
+/// The position of the last Backlog task in a project, or `None` when the Backlog is empty.
+fn last_backlog_position(
+    connection: &Connection,
+    project: ProjectId,
+) -> RepoResult<Option<String>> {
+    Ok(query_all(
+        connection,
+        "SELECT position FROM tasks WHERE project_id = ?1 AND status = 'backlog'
+         ORDER BY position COLLATE BINARY DESC, id DESC LIMIT 1",
+        params![id_text(project.as_uuid())],
+        |row| get(row, 0),
+    )?
+    .into_iter()
+    .next())
 }
