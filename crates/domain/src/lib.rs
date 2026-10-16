@@ -8,6 +8,7 @@ mod board;
 mod code_source;
 mod due_calculation;
 mod error;
+mod file_tree;
 mod ids;
 mod list_view;
 mod ordering;
@@ -45,6 +46,7 @@ pub use due_calculation::{
     LocalMoment, add_working_hours, add_working_minutes, needs_estimate_hint, schedules_on_move,
 };
 pub use error::{DomainError, RepoError, RepoResult};
+pub use file_tree::{BUILT_IN_IGNORED, EntryKind, TreeNode, build_tree, is_built_in_ignored};
 pub use ids::PlanDraftId;
 pub use ids::{ActivityId, ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use list_view::{ListColumn, ListSort, ListView, SortColumn, SortDirection, ToggleOutcome};
