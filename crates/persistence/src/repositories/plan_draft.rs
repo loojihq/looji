@@ -1,22 +1,27 @@
 //! Planning drafts in SQLite. A draft is written whole, in one transaction, so a reopened draft is the last save.
+//! Edits go through `apply_edit`, which loads the draft, applies the change, and saves it, so no edit can be left
+//! unsaved.
 
 use looji_domain::{
-    DomainError, DraftState, PlanDraft, PlanDraftError, PlanDraftId, PlanDraftParts,
-    PlanDraftRepository, PlanSection, PlanTask, ProjectId, RepoError, RepoResult, Timestamp,
+    DomainError, DraftState, Estimate, PlanDraft, PlanDraftError, PlanDraftId, PlanDraftParts,
+    PlanEdit, PlanStory, PlanTask, Priority, ProjectId, RepoError, RepoResult, TeamMemberId,
+    Timestamp,
 };
 use rusqlite::{Connection, Row, params};
 
-use super::{execute, get, id_text, query_all, query_one, read_id, read_timestamp, storage};
+use super::{
+    execute, get, id_text, query_all, query_one, read_id, read_optional_id, read_timestamp, storage,
+};
 use crate::SqliteStore;
 
 const DRAFT_COLUMNS: &str =
-    "id, project_id, prompt, state, response, recovered, failure, created_at, updated_at";
+    "id, project_id, prompt, state, response, recovered, failure, created_at, updated_at, spec";
 
 fn invalid(err: PlanDraftError) -> RepoError {
     RepoError::Invalid(DomainError::from(err))
 }
 
-/// Reads a draft's own row. Its sections and tasks are read separately, and filled in by `assemble`.
+/// Reads a draft's own row. Its stories and tasks are read separately, and filled in by `assemble`.
 fn read_draft(row: &Row<'_>) -> RepoResult<PlanDraftParts> {
     let state: String = get(row, 3)?;
     Ok(PlanDraftParts {
@@ -27,22 +32,36 @@ fn read_draft(row: &Row<'_>) -> RepoResult<PlanDraftParts> {
         response: get(row, 4)?,
         recovered: get(row, 5)?,
         failure: get(row, 6)?,
-        sections: Vec::new(),
+        spec: get(row, 9)?,
+        stories: Vec::new(),
         tasks: Vec::new(),
         created_at: read_timestamp(row, 7)?,
         updated_at: read_timestamp(row, 8)?,
     })
 }
 
-/// Reads a draft's sections and tasks, in the order they were saved, and checks the whole draft.
+/// Tags are stored as one comma-separated string. Tags can't contain a comma, so this is exact.
+fn join_tags(tags: &[String]) -> String {
+    tags.join(",")
+}
+
+fn split_tags(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split(',').map(str::to_string).collect()
+    }
+}
+
+/// Reads a draft's stories and tasks, in the order they were saved, and checks the whole draft.
 fn assemble(connection: &Connection, mut parts: PlanDraftParts) -> RepoResult<PlanDraft> {
     let key = id_text(parts.id.as_uuid());
-    parts.sections = query_all(
+    parts.stories = query_all(
         connection,
         "SELECT title, body FROM plan_draft_sections WHERE draft_id = ?1 ORDER BY position",
         params![key],
         |row| {
-            Ok(PlanSection {
+            Ok(PlanStory {
                 title: get(row, 0)?,
                 body: get(row, 1)?,
             })
@@ -50,17 +69,30 @@ fn assemble(connection: &Connection, mut parts: PlanDraftParts) -> RepoResult<Pl
     )?;
     parts.tasks = query_all(
         connection,
-        "SELECT title, section_position FROM plan_draft_tasks WHERE draft_id = ?1 ORDER BY position",
+        "SELECT title, section_position, priority, estimate_minutes, assignee_id, tags
+         FROM plan_draft_tasks WHERE draft_id = ?1 ORDER BY position",
         params![key],
-        |row| {
-            let section: Option<i64> = get(row, 1)?;
-            Ok(PlanTask {
-                title: get(row, 0)?,
-                section: section.map(|position| position as usize),
-            })
-        },
+        read_task,
     )?;
     PlanDraft::from_parts(parts).map_err(invalid)
+}
+
+fn read_task(row: &Row<'_>) -> RepoResult<PlanTask> {
+    let section: Option<i64> = get(row, 1)?;
+    let priority: String = get(row, 2)?;
+    let minutes: Option<i64> = get(row, 3)?;
+    let tags: String = get(row, 5)?;
+    Ok(PlanTask {
+        title: get(row, 0)?,
+        priority: priority.parse::<Priority>().map_err(RepoError::Invalid)?,
+        estimate: minutes
+            .map(Estimate::from_minutes)
+            .transpose()
+            .map_err(RepoError::Invalid)?,
+        assignee: read_optional_id(row, 4, TeamMemberId::from_uuid)?,
+        tags: split_tags(&tags),
+        section: section.map(|position| position as usize),
+    })
 }
 
 /// Marks every generating draft as interrupted. A generation runs in the process that started it, so one still
@@ -75,23 +107,36 @@ pub(crate) fn interrupt_generating(
     )
 }
 
-impl PlanDraftRepository for SqliteStore {
-    /// Writes the whole draft. The row, its sections, and its tasks change in one transaction, so a failure
-    /// leaves the last saved draft as it was. The prompt and creation time are only set on insert.
+impl SqliteStore {
+    /// The team members of a project, for checking an assignee.
+    fn team_of(&self, project: ProjectId) -> RepoResult<Vec<TeamMemberId>> {
+        query_all(
+            &self.connection,
+            "SELECT id FROM team_members WHERE project_id = ?1",
+            params![id_text(project.as_uuid())],
+            |row| read_id(row, 0, TeamMemberId::from_uuid),
+        )
+    }
+}
+
+impl looji_domain::PlanDraftRepository for SqliteStore {
+    /// Writes the whole draft. The row, its stories, and its tasks change in one transaction, so a failure leaves
+    /// the last saved draft as it was. The prompt and creation time are only set on insert.
     fn save(&self, draft: &PlanDraft) -> RepoResult<()> {
         let key = id_text(draft.id().as_uuid());
         let transaction = self.connection.unchecked_transaction().map_err(storage)?;
         transaction
             .execute(
                 "INSERT INTO plan_drafts (id, project_id, prompt, state, response, recovered, failure,
-                                          created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                                          created_at, updated_at, spec)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT (id) DO UPDATE SET
                      state = excluded.state,
                      response = excluded.response,
                      recovered = excluded.recovered,
                      failure = excluded.failure,
-                     updated_at = excluded.updated_at",
+                     updated_at = excluded.updated_at,
+                     spec = excluded.spec",
                 params![
                     key,
                     id_text(draft.project_id().as_uuid()),
@@ -102,11 +147,12 @@ impl PlanDraftRepository for SqliteStore {
                     draft.failure(),
                     draft.created_at().unix_millis(),
                     draft.updated_at().unix_millis(),
+                    draft.spec(),
                 ],
             )
             .map_err(storage)?;
 
-        // Tasks go first, since they refer to sections.
+        // Tasks go first, since they refer to stories.
         transaction
             .execute(
                 "DELETE FROM plan_draft_tasks WHERE draft_id = ?1",
@@ -119,25 +165,30 @@ impl PlanDraftRepository for SqliteStore {
                 params![key],
             )
             .map_err(storage)?;
-        for (position, section) in draft.sections().iter().enumerate() {
+        for (position, story) in draft.stories().iter().enumerate() {
             transaction
                 .execute(
                     "INSERT INTO plan_draft_sections (draft_id, position, title, body)
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![key, position as i64, section.title, section.body],
+                    params![key, position as i64, story.title, story.body],
                 )
                 .map_err(storage)?;
         }
         for (position, task) in draft.tasks().iter().enumerate() {
             transaction
                 .execute(
-                    "INSERT INTO plan_draft_tasks (draft_id, position, title, section_position)
-                     VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO plan_draft_tasks (draft_id, position, title, section_position, priority,
+                                                   estimate_minutes, assignee_id, tags)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         key,
                         position as i64,
                         task.title,
                         task.section.map(|section| section as i64),
+                        task.priority.as_str(),
+                        task.estimate.map(|estimate| i64::from(estimate.minutes())),
+                        task.assignee.map(|member| id_text(member.as_uuid())),
+                        join_tags(&task.tags),
                     ],
                 )
                 .map_err(storage)?;
@@ -180,5 +231,27 @@ impl PlanDraftRepository for SqliteStore {
             "DELETE FROM plan_drafts WHERE id = ?1",
             params![id_text(id.as_uuid())],
         )
+    }
+
+    /// Loads the draft, applies the change against the project's current team, and saves it. A change the domain
+    /// refuses is returned as `Rejected`, and nothing is written. Returns `None` when the draft doesn't exist.
+    ///
+    /// The team is read from storage here, so an assignee who was removed can't be assigned by a stale copy of the
+    /// team in the UI.
+    fn apply_edit(
+        &self,
+        id: PlanDraftId,
+        edit: PlanEdit,
+        at: Timestamp,
+    ) -> RepoResult<Option<PlanDraft>> {
+        let Some(mut draft) = self.find(id)? else {
+            return Ok(None);
+        };
+        let members = self.team_of(draft.project_id())?;
+        draft
+            .apply(edit, &members, at)
+            .map_err(|err| RepoError::Rejected(err.into()))?;
+        looji_domain::PlanDraftRepository::save(self, &draft)?;
+        Ok(Some(draft))
     }
 }

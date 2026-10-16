@@ -1,12 +1,11 @@
-//! Planning drafts: what a planning request produced, kept so it can be reopened, resumed, or discarded after
-//! the app closes.
+//! Planning drafts: what a planning request produced, kept so it can be reopened, resumed, reviewed, and edited.
 //!
 //! The states:
 //! - `Generating`: a request is in flight. Text is arriving.
 //! - `Interrupted`: the app closed during generation. A generation can't outlive the process, so a draft still
 //!   generating when the store next opens is interrupted.
 //! - `Failed`: the request ended with an error, and the reason is kept.
-//! - `Ready`: the response was read and the plan is here.
+//! - `Ready`: the response was read, and the spec, user stories, and tasks are here to review and edit.
 //!
 //! Partial text is never discarded. An interrupted or failed draft keeps the text it received, since a partial
 //! response can still hold a plan worth recovering. Resuming starts a new generation and moves the old text to
@@ -14,7 +13,11 @@
 //! Discarding deletes the draft; that's the repository's job, not a state here.
 //!
 //! The text is kept as it was received. This module doesn't parse it. The strict JSON parser turns the text into
-//! sections and tasks, and `complete` is where those go in.
+//! the spec, stories, and tasks, and `complete` is where those go in.
+//!
+//! Once a draft is ready, it's edited one change at a time with `PlanEdit`. Each change is checked against every
+//! rule before it's applied, and a refused change leaves the draft as it was. A ready draft may have no tasks at
+//! all: deleting every task is a normal state with an empty backlog, not an error.
 
 use std::{fmt, str::FromStr};
 
@@ -22,21 +25,36 @@ use thiserror::Error;
 
 use crate::{
     error::DomainError,
-    ids::{PlanDraftId, ProjectId},
+    ids::{PlanDraftId, ProjectId, TeamMemberId},
+    task::Estimate,
+    task_fields::{Priority, TagError, normalize_tags},
     time::Timestamp,
+    validation::MAX_TEXT_CHARS,
 };
 
-/// Why a draft's state can't change the way it was asked to.
+/// Why a draft refused a change, or a value in it. Each variant names the rule.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PlanDraftError {
     #[error("a planning request needs a prompt")]
     EmptyPrompt,
-    #[error("a section needs a title")]
-    EmptySectionTitle,
+    #[error("the spec can't be empty")]
+    EmptySpec,
+    #[error("a user story needs a title")]
+    EmptyStoryTitle,
     #[error("a task needs a title")]
     EmptyTaskTitle,
-    #[error("a task refers to section {section}, which doesn't exist")]
-    UnknownSection { section: usize },
+    #[error("a title can be at most {max} characters")]
+    TitleTooLong { max: usize },
+    #[error("a task refers to story {section}, which doesn't exist")]
+    UnknownStory { section: usize },
+    #[error("task {index} repeats the title of task {first}, ignoring case")]
+    DuplicateTitle { index: usize, first: usize },
+    #[error("there is no item {index} to change; there are {len}")]
+    IndexOutOfRange { index: usize, len: usize },
+    #[error("that team member doesn't belong to this project")]
+    UnknownAssignee,
+    #[error("{0}")]
+    Tag(TagError),
     #[error("a {state} draft can't {action}")]
     IllegalTransition {
         state: DraftState,
@@ -90,18 +108,38 @@ impl FromStr for DraftState {
     }
 }
 
-/// One part of the plan. The body is whatever the planning response said about it.
+/// One user story. Its title and body are what the plan said.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanSection {
+pub struct PlanStory {
     pub title: String,
     pub body: String,
 }
 
-/// A task the plan proposes. `section` is the index of the section it belongs to, if any.
+/// A task in the backlog review. Only the title is required, and everything else can be left empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanTask {
     pub title: String,
+    pub priority: Priority,
+    pub estimate: Option<Estimate>,
+    pub assignee: Option<TeamMemberId>,
+    pub tags: Vec<String>,
+    /// The index of the story this task belongs to, if any.
     pub section: Option<usize>,
+}
+
+impl PlanTask {
+    /// A task with a title and the defaults for everything else: medium priority, no estimate, unassigned, and no
+    /// tags. Used when a user adds one.
+    pub fn new(title: &str) -> Result<Self, PlanDraftError> {
+        Ok(Self {
+            title: clean_title(title, PlanDraftError::EmptyTaskTitle)?,
+            priority: Priority::Medium,
+            estimate: None,
+            assignee: None,
+            tags: Vec::new(),
+            section: None,
+        })
+    }
 }
 
 /// Everything a stored draft holds. Used to rebuild a draft from storage without running the transitions again.
@@ -114,10 +152,57 @@ pub struct PlanDraftParts {
     pub response: String,
     pub recovered: Option<String>,
     pub failure: Option<String>,
-    pub sections: Vec<PlanSection>,
+    pub spec: String,
+    pub stories: Vec<PlanStory>,
     pub tasks: Vec<PlanTask>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// One change to a ready draft. Every change goes through `PlanDraft::apply`, so each one is checked the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanEdit {
+    SetSpec(String),
+    SetStoryTitle {
+        index: usize,
+        title: String,
+    },
+    SetStoryBody {
+        index: usize,
+        body: String,
+    },
+    RemoveStory(usize),
+    SetTaskTitle {
+        index: usize,
+        title: String,
+    },
+    SetTaskPriority {
+        index: usize,
+        priority: Priority,
+    },
+    SetTaskEstimate {
+        index: usize,
+        estimate: Option<Estimate>,
+    },
+    /// Must be one of the project's team members, or none.
+    SetTaskAssignee {
+        index: usize,
+        assignee: Option<TeamMemberId>,
+    },
+    /// The tags as typed. They're normalized and checked when the change is applied.
+    SetTaskTags {
+        index: usize,
+        tags: Vec<String>,
+    },
+    AddTask {
+        title: String,
+    },
+    RemoveTask(usize),
+    /// Moves the task at `from` so it ends up at `to`. Both are indexes in the current list.
+    MoveTask {
+        from: usize,
+        to: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +210,30 @@ pub struct PlanDraft {
     parts: PlanDraftParts,
 }
 
-/// Trims and checks a prompt. Blank prompts are refused.
+/// Trims a title, and checks it's not blank and not over the limit.
+fn clean_title(title: &str, empty: PlanDraftError) -> Result<String, PlanDraftError> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err(empty);
+    }
+    if trimmed.chars().count() > MAX_TEXT_CHARS {
+        return Err(PlanDraftError::TitleTooLong {
+            max: MAX_TEXT_CHARS,
+        });
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Trims a spec, and checks it's not blank.
+fn clean_spec(spec: &str) -> Result<String, PlanDraftError> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Err(PlanDraftError::EmptySpec);
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Trims a goal, and checks it's not blank.
 fn clean_prompt(prompt: &str) -> Result<String, PlanDraftError> {
     let trimmed = prompt.trim();
     if trimmed.is_empty() {
@@ -134,29 +242,44 @@ fn clean_prompt(prompt: &str) -> Result<String, PlanDraftError> {
     Ok(trimmed.to_string())
 }
 
-/// Every title is trimmed and must not be blank. Each task's section must be one of the sections given.
-fn check_content(sections: &[PlanSection], tasks: &[PlanTask]) -> Result<(), PlanDraftError> {
-    if sections
-        .iter()
-        .any(|section| section.title.trim().is_empty())
-    {
-        return Err(PlanDraftError::EmptySectionTitle);
+/// Checks the content of a draft as a whole: story titles, task titles, the stories tasks refer to, and that no two
+/// tasks repeat a title, ignoring case. A draft with no tasks passes, since an empty backlog is valid.
+fn check_content(stories: &[PlanStory], tasks: &[PlanTask]) -> Result<(), PlanDraftError> {
+    for story in stories {
+        clean_title(&story.title, PlanDraftError::EmptyStoryTitle)?;
     }
-    for task in tasks {
-        if task.title.trim().is_empty() {
-            return Err(PlanDraftError::EmptyTaskTitle);
-        }
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    for (index, task) in tasks.iter().enumerate() {
+        let title = clean_title(&task.title, PlanDraftError::EmptyTaskTitle)?;
         if let Some(section) = task.section
-            && section >= sections.len()
+            && section >= stories.len()
         {
-            return Err(PlanDraftError::UnknownSection { section });
+            return Err(PlanDraftError::UnknownStory { section });
+        }
+        let key = title.to_lowercase();
+        match seen.iter().find(|(known, _)| *known == key) {
+            Some((_, first)) => {
+                return Err(PlanDraftError::DuplicateTitle {
+                    index,
+                    first: *first,
+                });
+            }
+            None => seen.push((key, index)),
         }
     }
     Ok(())
 }
 
+fn check_index(index: usize, len: usize) -> Result<(), PlanDraftError> {
+    if index < len {
+        Ok(())
+    } else {
+        Err(PlanDraftError::IndexOutOfRange { index, len })
+    }
+}
+
 impl PlanDraft {
-    /// A new draft for a prompt. It starts generating, and nothing has been received yet.
+    /// A new draft for a goal. It starts generating, and nothing has been received yet.
     pub fn start(project: ProjectId, prompt: &str, at: Timestamp) -> Result<Self, PlanDraftError> {
         Self::start_as(PlanDraftId::new(), project, prompt, at)
     }
@@ -178,7 +301,8 @@ impl PlanDraft {
                 response: String::new(),
                 recovered: None,
                 failure: None,
-                sections: Vec::new(),
+                spec: String::new(),
+                stories: Vec::new(),
                 tasks: Vec::new(),
                 created_at: at,
                 updated_at: at,
@@ -186,13 +310,22 @@ impl PlanDraft {
         })
     }
 
-    /// Rebuilds a draft from storage. Checks what the transitions check, so a stored draft that breaks a rule
-    /// is refused rather than loaded.
+    /// Rebuilds a draft from storage. Checks what the transitions check, so a stored draft that breaks a rule is
+    /// refused rather than loaded. A ready draft must have a spec.
     pub fn from_parts(parts: PlanDraftParts) -> Result<Self, PlanDraftError> {
         let prompt = clean_prompt(&parts.prompt)?;
-        check_content(&parts.sections, &parts.tasks)?;
+        let spec = if parts.state == DraftState::Ready {
+            clean_spec(&parts.spec)?
+        } else {
+            parts.spec
+        };
+        check_content(&parts.stories, &parts.tasks)?;
         Ok(Self {
-            parts: PlanDraftParts { prompt, ..parts },
+            parts: PlanDraftParts {
+                prompt,
+                spec,
+                ..parts
+            },
         })
     }
 
@@ -227,8 +360,12 @@ impl PlanDraft {
         self.parts.failure.as_deref()
     }
 
-    pub fn sections(&self) -> &[PlanSection] {
-        &self.parts.sections
+    pub fn spec(&self) -> &str {
+        &self.parts.spec
+    }
+
+    pub fn stories(&self) -> &[PlanStory] {
+        &self.parts.stories
     }
 
     pub fn tasks(&self) -> &[PlanTask] {
@@ -252,16 +389,20 @@ impl PlanDraft {
     }
 
     /// The response was read and the plan is here. The text is kept as the response, and any recovered text from
-    /// an earlier attempt is dropped, since the plan now stands on its own.
+    /// an earlier attempt is dropped, since the plan now stands on its own. A plan needs a spec, but it may have
+    /// no tasks.
     pub fn complete(
         &mut self,
-        sections: Vec<PlanSection>,
+        spec: &str,
+        stories: Vec<PlanStory>,
         tasks: Vec<PlanTask>,
         at: Timestamp,
     ) -> Result<(), PlanDraftError> {
         self.require(DraftState::Generating, "complete")?;
-        check_content(&sections, &tasks)?;
-        self.parts.sections = sections;
+        let spec = clean_spec(spec)?;
+        check_content(&stories, &tasks)?;
+        self.parts.spec = spec;
+        self.parts.stories = stories;
         self.parts.tasks = tasks;
         self.parts.state = DraftState::Ready;
         self.parts.recovered = None;
@@ -308,6 +449,25 @@ impl PlanDraft {
         Ok(())
     }
 
+    /// Applies one change to a ready draft. `members` is the project's current team, so an assignee outside it is
+    /// refused.
+    ///
+    /// The change is applied to a copy and checked as a whole. A refused change leaves the draft exactly as it was.
+    pub fn apply(
+        &mut self,
+        edit: PlanEdit,
+        members: &[TeamMemberId],
+        at: Timestamp,
+    ) -> Result<(), PlanDraftError> {
+        self.require(DraftState::Ready, "be edited")?;
+        let mut next = self.parts.clone();
+        apply_to(&mut next, edit, members)?;
+        check_content(&next.stories, &next.tasks)?;
+        next.updated_at = at;
+        self.parts = next;
+        Ok(())
+    }
+
     fn require(&self, state: DraftState, action: &'static str) -> Result<(), PlanDraftError> {
         if self.parts.state == state {
             Ok(())
@@ -320,6 +480,78 @@ impl PlanDraft {
     }
 }
 
+/// Applies one change to the parts. The caller checks the whole result.
+fn apply_to(
+    parts: &mut PlanDraftParts,
+    edit: PlanEdit,
+    members: &[TeamMemberId],
+) -> Result<(), PlanDraftError> {
+    match edit {
+        PlanEdit::SetSpec(spec) => parts.spec = clean_spec(&spec)?,
+        PlanEdit::SetStoryTitle { index, title } => {
+            check_index(index, parts.stories.len())?;
+            parts.stories[index].title = clean_title(&title, PlanDraftError::EmptyStoryTitle)?;
+        }
+        PlanEdit::SetStoryBody { index, body } => {
+            check_index(index, parts.stories.len())?;
+            parts.stories[index].body = body.trim().to_string();
+        }
+        PlanEdit::RemoveStory(index) => {
+            check_index(index, parts.stories.len())?;
+            parts.stories.remove(index);
+            // A task that belonged to the removed story is left without one. Tasks after it keep their story.
+            for task in &mut parts.tasks {
+                task.section = match task.section {
+                    Some(section) if section == index => None,
+                    Some(section) if section > index => Some(section - 1),
+                    other => other,
+                };
+            }
+        }
+        PlanEdit::SetTaskTitle { index, title } => {
+            check_index(index, parts.tasks.len())?;
+            parts.tasks[index].title = clean_title(&title, PlanDraftError::EmptyTaskTitle)?;
+        }
+        PlanEdit::SetTaskPriority { index, priority } => {
+            check_index(index, parts.tasks.len())?;
+            parts.tasks[index].priority = priority;
+        }
+        PlanEdit::SetTaskEstimate { index, estimate } => {
+            check_index(index, parts.tasks.len())?;
+            parts.tasks[index].estimate = estimate;
+        }
+        PlanEdit::SetTaskAssignee { index, assignee } => {
+            check_index(index, parts.tasks.len())?;
+            if let Some(member) = assignee
+                && !members.contains(&member)
+            {
+                return Err(PlanDraftError::UnknownAssignee);
+            }
+            parts.tasks[index].assignee = assignee;
+        }
+        PlanEdit::SetTaskTags { index, tags } => {
+            check_index(index, parts.tasks.len())?;
+            let tags =
+                normalize_tags(tags.iter().map(String::as_str)).map_err(PlanDraftError::Tag)?;
+            parts.tasks[index].tags = tags;
+        }
+        PlanEdit::AddTask { title } => {
+            parts.tasks.push(PlanTask::new(&title)?);
+        }
+        PlanEdit::RemoveTask(index) => {
+            check_index(index, parts.tasks.len())?;
+            parts.tasks.remove(index);
+        }
+        PlanEdit::MoveTask { from, to } => {
+            check_index(from, parts.tasks.len())?;
+            check_index(to, parts.tasks.len())?;
+            let task = parts.tasks.remove(from);
+            parts.tasks.insert(to, task);
+        }
+    }
+    Ok(())
+}
+
 impl From<PlanDraftError> for DomainError {
     fn from(err: PlanDraftError) -> Self {
         DomainError::Draft(err)
@@ -330,8 +562,12 @@ impl From<PlanDraftError> for DomainError {
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use crate::{
-        ids::ProjectId,
-        plan_draft::{DraftState, PlanDraft, PlanDraftError, PlanSection, PlanTask},
+        ids::{ProjectId, TeamMemberId},
+        plan_draft::{
+            DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanEdit, PlanStory, PlanTask,
+        },
+        task::Estimate,
+        task_fields::Priority,
         time::Timestamp,
     };
 
@@ -343,11 +579,31 @@ mod tests {
         PlanDraft::start(ProjectId::new(), "  Plan the launch  ", at(1)).unwrap()
     }
 
-    fn section(title: &str) -> PlanSection {
-        PlanSection {
+    fn story(title: &str) -> PlanStory {
+        PlanStory {
             title: title.to_string(),
-            body: String::new(),
+            body: format!("About {title}"),
         }
+    }
+
+    fn task(title: &str) -> PlanTask {
+        PlanTask::new(title).unwrap()
+    }
+
+    fn ready_with(tasks: Vec<PlanTask>) -> PlanDraft {
+        let mut draft = generating();
+        draft
+            .complete("The spec.", vec![story("Scope")], tasks, at(2))
+            .unwrap();
+        draft
+    }
+
+    fn titles(draft: &PlanDraft) -> Vec<&str> {
+        draft
+            .tasks()
+            .iter()
+            .map(|task| task.title.as_str())
+            .collect()
     }
 
     #[test]
@@ -369,62 +625,70 @@ mod tests {
     #[test]
     fn text_accumulates_while_generating() {
         let mut draft = generating();
-        draft.append_response("{\"sections\":[", at(2)).unwrap();
+        draft.append_response("{\"spec\":[", at(2)).unwrap();
         draft.append_response("]}", at(3)).unwrap();
-        assert_eq!(draft.response(), "{\"sections\":[]}");
+        assert_eq!(draft.response(), "{\"spec\":[]}");
         assert_eq!(draft.updated_at(), at(3));
     }
 
     #[test]
-    fn completing_stores_the_plan_and_moves_to_ready() {
+    fn completing_stores_the_spec_stories_and_tasks_and_moves_to_ready() {
         let mut draft = generating();
         draft
             .complete(
-                vec![section("Scope")],
-                vec![PlanTask {
-                    title: "Write the brief".to_string(),
-                    section: Some(0),
-                }],
+                "  The spec.  ",
+                vec![story("Scope")],
+                vec![task("Write the brief")],
                 at(4),
             )
             .unwrap();
         assert_eq!(draft.state(), DraftState::Ready);
-        assert_eq!(draft.sections().len(), 1);
-        assert_eq!(draft.tasks()[0].section, Some(0));
+        assert_eq!(draft.spec(), "The spec.");
+        assert_eq!(draft.stories().len(), 1);
+        assert_eq!(draft.tasks()[0].priority, Priority::Medium);
     }
 
     #[test]
-    fn a_task_in_a_section_that_doesnt_exist_is_refused() {
+    fn a_blank_spec_is_refused_when_completing() {
         let mut draft = generating();
-        let result = draft.complete(
-            vec![section("Scope")],
-            vec![PlanTask {
-                title: "Orphan".to_string(),
-                section: Some(3),
-            }],
-            at(4),
+        assert_eq!(
+            draft.complete("  ", Vec::new(), Vec::new(), at(4)),
+            Err(PlanDraftError::EmptySpec)
         );
-        assert_eq!(result, Err(PlanDraftError::UnknownSection { section: 3 }));
         assert_eq!(draft.state(), DraftState::Generating, "nothing changed");
     }
 
     #[test]
-    fn a_blank_title_is_refused_for_a_section_and_for_a_task() {
+    fn a_completed_plan_may_have_no_tasks() {
+        let mut draft = generating();
+        draft
+            .complete("Spec", Vec::new(), Vec::new(), at(4))
+            .unwrap();
+        assert!(draft.tasks().is_empty());
+    }
+
+    #[test]
+    fn a_task_in_a_story_that_doesnt_exist_is_refused() {
+        let mut draft = generating();
+        let mut orphan = task("Orphan");
+        orphan.section = Some(3);
+        assert_eq!(
+            draft.complete("Spec", vec![story("Scope")], vec![orphan], at(4)),
+            Err(PlanDraftError::UnknownStory { section: 3 })
+        );
+    }
+
+    #[test]
+    fn two_titles_that_differ_only_in_case_are_refused_when_completing() {
         let mut draft = generating();
         assert_eq!(
-            draft.complete(vec![section("  ")], Vec::new(), at(4)),
-            Err(PlanDraftError::EmptySectionTitle)
-        );
-        assert_eq!(
             draft.complete(
+                "Spec",
                 Vec::new(),
-                vec![PlanTask {
-                    title: String::new(),
-                    section: None
-                }],
+                vec![task("Write the note"), task("write the NOTE")],
                 at(4)
             ),
-            Err(PlanDraftError::EmptyTaskTitle)
+            Err(PlanDraftError::DuplicateTitle { index: 1, first: 0 })
         );
     }
 
@@ -432,11 +696,11 @@ mod tests {
     fn a_failure_keeps_the_text_received_and_its_reason() {
         let mut draft = generating();
         draft
-            .append_response("{\"sections\":[{\"title\":\"Sc", at(2))
+            .append_response("{\"spec\":[{\"title\":\"Sc", at(2))
             .unwrap();
         draft.fail("the connection dropped", at(3)).unwrap();
         assert_eq!(draft.state(), DraftState::Failed);
-        assert_eq!(draft.response(), "{\"sections\":[{\"title\":\"Sc");
+        assert_eq!(draft.response(), "{\"spec\":[{\"title\":\"Sc");
         assert_eq!(draft.failure(), Some("the connection dropped"));
     }
 
@@ -492,7 +756,7 @@ mod tests {
         draft.resume(at(4)).unwrap();
 
         draft
-            .complete(vec![section("Scope")], Vec::new(), at(5))
+            .complete("Spec", Vec::new(), Vec::new(), at(5))
             .unwrap();
 
         assert_eq!(draft.recovered(), None);
@@ -501,7 +765,9 @@ mod tests {
     #[test]
     fn transitions_that_dont_apply_to_the_state_are_refused() {
         let mut ready = generating();
-        ready.complete(Vec::new(), Vec::new(), at(2)).unwrap();
+        ready
+            .complete("Spec", Vec::new(), Vec::new(), at(2))
+            .unwrap();
         assert_eq!(
             ready.append_response("late", at(3)),
             Err(PlanDraftError::IllegalTransition {
@@ -516,7 +782,11 @@ mod tests {
 
         let mut interrupted = generating();
         interrupted.interrupt(at(2)).unwrap();
-        assert!(interrupted.complete(Vec::new(), Vec::new(), at(3)).is_err());
+        assert!(
+            interrupted
+                .complete("Spec", Vec::new(), Vec::new(), at(3))
+                .is_err()
+        );
         assert!(
             interrupted.interrupt(at(3)).is_err(),
             "only a generating draft is interrupted"
@@ -525,7 +795,7 @@ mod tests {
 
     #[test]
     fn a_stored_draft_that_breaks_a_rule_is_refused_when_loaded() {
-        let parts = super::PlanDraftParts {
+        let parts = PlanDraftParts {
             id: crate::ids::PlanDraftId::new(),
             project_id: ProjectId::new(),
             prompt: "p".to_string(),
@@ -533,18 +803,325 @@ mod tests {
             response: String::new(),
             recovered: None,
             failure: None,
-            sections: Vec::new(),
+            spec: "Spec".to_string(),
+            stories: Vec::new(),
             tasks: vec![PlanTask {
-                title: "t".to_string(),
                 section: Some(0),
+                ..task("t")
             }],
             created_at: at(1),
             updated_at: at(1),
         };
         assert_eq!(
             PlanDraft::from_parts(parts),
-            Err(PlanDraftError::UnknownSection { section: 0 })
+            Err(PlanDraftError::UnknownStory { section: 0 })
         );
+    }
+
+    #[test]
+    fn a_ready_draft_with_a_blank_spec_is_refused_when_loaded() {
+        let parts = PlanDraftParts {
+            id: crate::ids::PlanDraftId::new(),
+            project_id: ProjectId::new(),
+            prompt: "p".to_string(),
+            state: DraftState::Ready,
+            response: String::new(),
+            recovered: None,
+            failure: None,
+            spec: "  ".to_string(),
+            stories: Vec::new(),
+            tasks: Vec::new(),
+            created_at: at(1),
+            updated_at: at(1),
+        };
+        assert_eq!(PlanDraft::from_parts(parts), Err(PlanDraftError::EmptySpec));
+    }
+
+    #[test]
+    fn editing_a_task_title_changes_it_and_is_checked_as_a_whole() {
+        let mut draft = ready_with(vec![task("One"), task("Two")]);
+
+        draft
+            .apply(
+                PlanEdit::SetTaskTitle {
+                    index: 0,
+                    title: "  Uno  ".to_string(),
+                },
+                &[],
+                at(10),
+            )
+            .unwrap();
+        assert_eq!(titles(&draft), vec!["Uno", "Two"]);
+        assert_eq!(draft.updated_at(), at(10));
+
+        let refused = draft.apply(
+            PlanEdit::SetTaskTitle {
+                index: 1,
+                title: "UNO".to_string(),
+            },
+            &[],
+            at(11),
+        );
+        assert_eq!(
+            refused,
+            Err(PlanDraftError::DuplicateTitle { index: 1, first: 0 })
+        );
+        assert_eq!(
+            titles(&draft),
+            vec!["Uno", "Two"],
+            "a refused edit changes nothing"
+        );
+        assert_eq!(draft.updated_at(), at(10));
+    }
+
+    #[test]
+    fn a_blank_title_is_refused_for_a_task_and_for_a_story() {
+        let mut draft = ready_with(vec![task("One")]);
+        assert_eq!(
+            draft.apply(
+                PlanEdit::SetTaskTitle {
+                    index: 0,
+                    title: "  ".to_string()
+                },
+                &[],
+                at(3)
+            ),
+            Err(PlanDraftError::EmptyTaskTitle)
+        );
+        assert_eq!(
+            draft.apply(
+                PlanEdit::SetStoryTitle {
+                    index: 0,
+                    title: "".to_string()
+                },
+                &[],
+                at(3)
+            ),
+            Err(PlanDraftError::EmptyStoryTitle)
+        );
+    }
+
+    #[test]
+    fn priority_estimate_and_tags_are_saved_and_tags_are_normalized() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft
+            .apply(
+                PlanEdit::SetTaskPriority {
+                    index: 0,
+                    priority: Priority::High,
+                },
+                &[],
+                at(3),
+            )
+            .unwrap();
+        draft
+            .apply(
+                PlanEdit::SetTaskEstimate {
+                    index: 0,
+                    estimate: Some(Estimate::from_hours(2.5).unwrap()),
+                },
+                &[],
+                at(4),
+            )
+            .unwrap();
+        draft
+            .apply(
+                PlanEdit::SetTaskTags {
+                    index: 0,
+                    tags: vec!["UI".to_string(), "ui".to_string(), "docs".to_string()],
+                },
+                &[],
+                at(5),
+            )
+            .unwrap();
+
+        let saved = &draft.tasks()[0];
+        assert_eq!(saved.priority, Priority::High);
+        assert_eq!(saved.estimate.map(|e| e.minutes()), Some(150));
+        assert_eq!(saved.tags, vec!["docs", "ui"]);
+    }
+
+    #[test]
+    fn an_assignee_outside_the_project_is_refused() {
+        let member = TeamMemberId::new();
+        let outsider = TeamMemberId::new();
+        let mut draft = ready_with(vec![task("One")]);
+
+        draft
+            .apply(
+                PlanEdit::SetTaskAssignee {
+                    index: 0,
+                    assignee: Some(member),
+                },
+                &[member],
+                at(3),
+            )
+            .unwrap();
+        assert_eq!(draft.tasks()[0].assignee, Some(member));
+
+        assert_eq!(
+            draft.apply(
+                PlanEdit::SetTaskAssignee {
+                    index: 0,
+                    assignee: Some(outsider)
+                },
+                &[member],
+                at(4)
+            ),
+            Err(PlanDraftError::UnknownAssignee)
+        );
+        assert_eq!(draft.tasks()[0].assignee, Some(member));
+    }
+
+    #[test]
+    fn removing_a_task_keeps_the_others_in_order() {
+        let mut draft = ready_with(vec![task("One"), task("Two"), task("Three")]);
+        draft.apply(PlanEdit::RemoveTask(1), &[], at(3)).unwrap();
+        assert_eq!(titles(&draft), vec!["One", "Three"]);
+    }
+
+    #[test]
+    fn deleting_every_task_leaves_a_valid_ready_draft_with_an_empty_backlog() {
+        let mut draft = ready_with(vec![task("One"), task("Two")]);
+        draft.apply(PlanEdit::RemoveTask(0), &[], at(3)).unwrap();
+        draft.apply(PlanEdit::RemoveTask(0), &[], at(4)).unwrap();
+
+        assert_eq!(draft.state(), DraftState::Ready);
+        assert!(draft.tasks().is_empty());
+        assert_eq!(draft.spec(), "The spec.", "the spec is untouched");
+        assert_eq!(draft.stories().len(), 1, "so are the stories");
+    }
+
+    #[test]
+    fn an_empty_backlog_survives_being_loaded_back() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft.apply(PlanEdit::RemoveTask(0), &[], at(3)).unwrap();
+        let parts = PlanDraftParts {
+            id: draft.id(),
+            project_id: draft.project_id(),
+            prompt: draft.prompt().to_string(),
+            state: draft.state(),
+            response: String::new(),
+            recovered: None,
+            failure: None,
+            spec: draft.spec().to_string(),
+            stories: draft.stories().to_vec(),
+            tasks: Vec::new(),
+            created_at: draft.created_at(),
+            updated_at: draft.updated_at(),
+        };
+        assert_eq!(PlanDraft::from_parts(parts), Ok(draft));
+    }
+
+    #[test]
+    fn tasks_can_be_reordered_and_the_order_is_kept() {
+        let mut draft = ready_with(vec![task("One"), task("Two"), task("Three")]);
+        draft
+            .apply(PlanEdit::MoveTask { from: 2, to: 0 }, &[], at(3))
+            .unwrap();
+        assert_eq!(titles(&draft), vec!["Three", "One", "Two"]);
+        draft
+            .apply(PlanEdit::MoveTask { from: 0, to: 2 }, &[], at(4))
+            .unwrap();
+        assert_eq!(titles(&draft), vec!["One", "Two", "Three"]);
+    }
+
+    #[test]
+    fn a_move_to_a_position_that_doesnt_exist_is_refused() {
+        let mut draft = ready_with(vec![task("One")]);
+        assert!(matches!(
+            draft.apply(PlanEdit::MoveTask { from: 0, to: 5 }, &[], at(3)),
+            Err(PlanDraftError::IndexOutOfRange { index: 5, len: 1 })
+        ));
+    }
+
+    #[test]
+    fn adding_a_task_appends_it_with_the_defaults() {
+        let mut draft = ready_with(Vec::new());
+        draft
+            .apply(
+                PlanEdit::AddTask {
+                    title: "New work".to_string(),
+                },
+                &[],
+                at(3),
+            )
+            .unwrap();
+        let added = &draft.tasks()[0];
+        assert_eq!(added.title, "New work");
+        assert_eq!(added.priority, Priority::Medium);
+        assert_eq!(added.estimate, None);
+        assert_eq!(added.assignee, None);
+    }
+
+    #[test]
+    fn removing_a_story_unlinks_its_tasks_and_renumbers_the_rest() {
+        let mut draft = generating();
+        let first = PlanTask {
+            section: Some(0),
+            ..task("Under first")
+        };
+        let second = PlanTask {
+            section: Some(1),
+            ..task("Under second")
+        };
+        draft
+            .complete(
+                "Spec",
+                vec![story("First"), story("Second")],
+                vec![first, second],
+                at(2),
+            )
+            .unwrap();
+
+        draft.apply(PlanEdit::RemoveStory(0), &[], at(3)).unwrap();
+
+        assert_eq!(draft.tasks()[0].section, None);
+        assert_eq!(draft.tasks()[1].section, Some(0));
+    }
+
+    #[test]
+    fn edits_are_refused_for_a_draft_that_isnt_ready() {
+        let mut draft = generating();
+        assert_eq!(
+            draft.apply(
+                PlanEdit::AddTask {
+                    title: "x".to_string()
+                },
+                &[],
+                at(2)
+            ),
+            Err(PlanDraftError::IllegalTransition {
+                state: DraftState::Generating,
+                action: "be edited"
+            })
+        );
+    }
+
+    #[test]
+    fn a_blank_spec_edit_is_refused() {
+        let mut draft = ready_with(Vec::new());
+        assert_eq!(
+            draft.apply(PlanEdit::SetSpec("   ".to_string()), &[], at(3)),
+            Err(PlanDraftError::EmptySpec)
+        );
+        assert_eq!(draft.spec(), "The spec.");
+    }
+
+    #[test]
+    fn a_story_body_can_be_edited_and_keeps_its_line_breaks() {
+        let mut draft = ready_with(Vec::new());
+        draft
+            .apply(
+                PlanEdit::SetStoryBody {
+                    index: 0,
+                    body: "Line one\nLine two".to_string(),
+                },
+                &[],
+                at(3),
+            )
+            .unwrap();
+        assert_eq!(draft.stories()[0].body, "Line one\nLine two");
     }
 
     #[test]

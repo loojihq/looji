@@ -2,7 +2,7 @@
 //! is what's on disk, not what's in memory.
 
 use looji_domain::{
-    DraftState, PlanDraft, PlanDraftId, PlanDraftRepository, PlanSection, PlanTask, Project,
+    DraftState, PlanDraft, PlanDraftId, PlanDraftRepository, PlanStory, PlanTask, Project,
     ProjectId, ProjectRepository, Timestamp, Workspace, WorkspaceRepository,
 };
 use looji_persistence::SqliteStore;
@@ -47,8 +47,8 @@ fn at(millis: i64) -> Timestamp {
     Timestamp::from_unix_millis(millis)
 }
 
-fn section(title: &str) -> PlanSection {
-    PlanSection {
+fn story(title: &str) -> PlanStory {
+    PlanStory {
         title: title.to_string(),
         body: format!("About {title}"),
     }
@@ -67,15 +67,16 @@ fn a_completed_draft_round_trips_with_its_sections_and_tasks() {
     let mut draft = PlanDraft::start(fx.project, "Plan the launch", at(1)).unwrap();
     draft
         .complete(
-            vec![section("Scope"), section("Risks")],
+            "Spec",
+            vec![story("Scope"), story("Risks")],
             vec![
                 PlanTask {
-                    title: "Write the brief".to_string(),
                     section: Some(0),
+                    ..PlanTask::new("Write the brief").unwrap()
                 },
                 PlanTask {
-                    title: "Rehearse the demo".to_string(),
                     section: None,
+                    ..PlanTask::new("Rehearse the demo").unwrap()
                 },
             ],
             at(2),
@@ -108,7 +109,7 @@ fn a_generating_draft_is_interrupted_on_restart_and_keeps_its_partial_text() {
         PARTIAL_JSON,
         "the partial text is kept byte for byte"
     );
-    assert_eq!(draft.sections().len(), 0, "nothing was read from it");
+    assert_eq!(draft.stories().len(), 0, "nothing was read from it");
 }
 
 #[test]
@@ -118,7 +119,7 @@ fn only_generating_drafts_are_touched_by_a_restart() {
         let store = fx.open();
         let mut ready = PlanDraft::start(fx.project, "done", at(1)).unwrap();
         ready
-            .complete(vec![section("Scope")], Vec::new(), at(2))
+            .complete("Spec", vec![story("Scope")], Vec::new(), at(2))
             .unwrap();
         PlanDraftRepository::save(&store, &ready).unwrap();
         let generating = PlanDraft::start(fx.project, "not done", at(3)).unwrap();
@@ -130,7 +131,7 @@ fn only_generating_drafts_are_touched_by_a_restart() {
 
     let ready = stored(&restarted, ready_id);
     assert_eq!(ready.state(), DraftState::Ready);
-    assert_eq!(ready.sections().len(), 1, "a ready draft keeps its plan");
+    assert_eq!(ready.stories().len(), 1, "a ready draft keeps its plan");
     assert_eq!(
         ready.updated_at(),
         at(2),
@@ -243,10 +244,11 @@ fn saving_again_does_not_duplicate_the_sections_or_tasks() {
     let mut draft = PlanDraft::start(fx.project, "Plan", at(1)).unwrap();
     draft
         .complete(
-            vec![section("A"), section("B")],
+            "Spec",
+            vec![story("A"), story("B")],
             vec![PlanTask {
-                title: "one".to_string(),
                 section: Some(1),
+                ..PlanTask::new("one").unwrap()
             }],
             at(2),
         )
@@ -259,7 +261,7 @@ fn saving_again_does_not_duplicate_the_sections_or_tasks() {
     PlanDraftRepository::save(&store, &loaded).unwrap();
 
     let reloaded = stored(&store, draft.id());
-    assert_eq!(reloaded.sections(), &[section("A"), section("B")]);
+    assert_eq!(reloaded.stories(), &[story("A"), story("B")]);
     assert_eq!(reloaded.tasks().len(), 1);
 }
 

@@ -49,7 +49,7 @@ pub use ordering::{
     FIRST_KEY, REBALANCE_LENGTH, after, before, key_between, needs_rebalance, rebalance,
 };
 pub use plan_draft::{
-    DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanSection, PlanTask,
+    DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanEdit, PlanStory, PlanTask,
 };
 pub use plan_wizard::{
     Generation, MAX_GOAL_CHARS, PlanWizard, WizardError, WizardPhase, validate_goal,

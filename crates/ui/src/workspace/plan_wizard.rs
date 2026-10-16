@@ -19,12 +19,13 @@ use looji_ai::{
     planning::{ParsedPlan, build_prompt, parse_plan},
 };
 use looji_domain::{
-    DraftState, DueDate, Generation, PlanDraft, PlanDraftId, PlanDraftRepository, PlanSection,
+    DraftState, DueDate, Generation, PlanDraft, PlanDraftId, PlanDraftRepository, PlanStory,
     PlanTask, PlanWizard, ProjectId, RepoError, TeamMember, TeamMemberId, TeamMemberRepository,
     Timestamp, WizardPhase, display_labels,
 };
 
 use super::fields::{field, text_box};
+use super::plan_review;
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
 use crate::theme::Theme;
@@ -84,6 +85,8 @@ pub(super) struct PlanWizardDialog {
     /// The project's team, read when the wizard opened and again when generation starts.
     pub members: Vec<TeamMember>,
     pub confirming_discard: bool,
+    /// The review edit that is open, if any.
+    pub editor: Option<super::plan_review::Editor>,
     /// A failure outside the plan itself, such as a store that couldn't be written.
     pub notice: Option<String>,
     /// Counts reads while generating, to turn the spinner.
@@ -150,6 +153,7 @@ impl WorkspaceView {
             plan: None,
             members,
             confirming_discard: false,
+            editor: None,
             notice,
             frame: 0,
         });
@@ -166,7 +170,15 @@ impl WorkspaceView {
     }
 
     /// Escape, Close, and a click outside. Closes at once when nothing would be lost. Otherwise asks first.
-    fn request_plan_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn request_plan_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .plan_wizard
+            .as_ref()
+            .is_some_and(|dialog| dialog.editor.is_some())
+            && !self.commit_plan_edit(cx)
+        {
+            return;
+        }
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };
@@ -338,30 +350,40 @@ impl WorkspaceView {
         let outcome = parse_plan(full, &dialog.members);
         match outcome {
             Ok(plan) => {
-                let sections: Vec<PlanSection> = std::iter::once(PlanSection {
-                    title: "Spec".to_string(),
-                    body: plan.spec.clone(),
-                })
-                .chain(plan.user_stories.iter().map(|story| PlanSection {
-                    title: story.title.clone(),
-                    body: story.body.clone(),
-                }))
-                .collect();
+                let stories: Vec<PlanStory> = plan
+                    .user_stories
+                    .iter()
+                    .map(|story| PlanStory {
+                        title: story.title.clone(),
+                        body: story.body.clone(),
+                    })
+                    .collect();
                 let tasks: Vec<PlanTask> = plan
                     .tasks
                     .iter()
                     .map(|task| PlanTask {
                         title: task.title.clone(),
+                        priority: task.priority,
+                        estimate: task.estimate,
+                        assignee: task.assignee,
+                        tags: task.tags.clone(),
                         section: None,
                     })
                     .collect();
-                if let Some(draft) = dialog.draft.as_mut()
-                    && let Err(err) = draft.complete(sections, tasks, now())
-                {
-                    dialog.notice = Some(format!("Could not record the plan: {err}"));
+                let recorded = dialog.draft.as_mut().map_or(Ok(()), |draft| {
+                    draft.complete(&plan.spec, stories, tasks, now())
+                });
+                match recorded {
+                    Ok(()) => {
+                        dialog.wizard.succeed();
+                        dialog.plan = Some(plan);
+                    }
+                    Err(err) => {
+                        let message = format!("Could not record the plan: {err}");
+                        dialog.wizard.fail(&message);
+                        dialog.notice = Some(message);
+                    }
                 }
-                dialog.wizard.succeed();
-                dialog.plan = Some(plan);
             }
             Err(err) => {
                 let message = err.to_string();
@@ -524,6 +546,9 @@ impl WorkspaceView {
             }
             return;
         }
+        if matches!(dialog.wizard.phase(), WizardPhase::Done) {
+            return self.handle_review_key(event, window, cx);
+        }
         match key {
             "escape" => return self.request_plan_close(window, cx),
             "tab" => {
@@ -634,6 +659,9 @@ pub(super) fn overlay(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.plan_wizard.as_ref()?;
+    if matches!(dialog.wizard.phase(), WizardPhase::Done) {
+        return plan_review::overlay(view, theme, cx);
+    }
     let focus = &view.plan_focus;
     let focused = |control: Control| {
         CONTROLS

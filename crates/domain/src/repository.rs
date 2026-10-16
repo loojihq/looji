@@ -131,6 +131,14 @@ pub trait PlanDraftRepository {
     /// Newest first.
     fn list_for_project(&self, project: ProjectId)
     -> RepoResult<Vec<crate::plan_draft::PlanDraft>>;
-    /// Deletes a draft and its sections and tasks. This is how a draft is discarded.
+    /// Deletes a draft and its stories and tasks. This is how a draft is discarded.
     fn delete(&self, id: crate::ids::PlanDraftId) -> RepoResult<()>;
+    /// Applies one change to a ready draft and saves it. The change is checked against the project's current team.
+    /// A refused change is `Rejected` and writes nothing. `None` means there is no such draft.
+    fn apply_edit(
+        &self,
+        id: crate::ids::PlanDraftId,
+        edit: crate::plan_draft::PlanEdit,
+        at: crate::time::Timestamp,
+    ) -> RepoResult<Option<crate::plan_draft::PlanDraft>>;
 }
