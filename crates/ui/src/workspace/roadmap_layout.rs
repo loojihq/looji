@@ -39,9 +39,9 @@ impl Scale {
     }
 }
 
-/// Monday is 0 and Sunday is 6. 1970-01-01 was a Thursday, which is 3.
+/// Monday is 0 and Sunday is 6. The week rule is the domain's, so the roadmap and the working-day count agree.
 pub fn weekday(day: i64) -> i64 {
-    (day + 3).rem_euclid(7)
+    looji_domain::weekday(DueDate::from_day_number(day)) as i64
 }
 
 pub fn is_weekend(day: i64) -> bool {

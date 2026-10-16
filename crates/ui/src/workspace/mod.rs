@@ -31,6 +31,7 @@ mod task_edit;
 mod task_editors;
 mod task_form;
 mod team_dialog;
+mod workload_view;
 
 use delete::PendingDelete;
 use project_state::ProjectList;
@@ -110,6 +111,8 @@ pub struct WorkspaceView {
     list_columns_open: bool,
     /// The roadmap's scale, grouping, and the day it is centred on.
     roadmap: roadmap::RoadmapState,
+    /// The workload view's period and whether done tasks count.
+    workload: workload_view::WorkloadState,
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
@@ -147,6 +150,7 @@ impl WorkspaceView {
                     list_settings: looji_domain::ListView::default(),
                     list_columns_open: false,
                     roadmap: roadmap::RoadmapState::default(),
+                    workload: workload_view::WorkloadState::default(),
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)

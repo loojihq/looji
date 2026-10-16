@@ -34,6 +34,7 @@ pub(super) enum ViewMode {
     Board,
     List,
     Roadmap,
+    Workload,
 }
 
 /// The list's paging state. `cursors[p]` is where page `p` starts, so the page after the current one is
@@ -271,6 +272,7 @@ pub(super) fn switch(
         (ViewMode::Board, "Board"),
         (ViewMode::List, "List"),
         (ViewMode::Roadmap, "Roadmap"),
+        (ViewMode::Workload, "Workload"),
     ]
     .into_iter()
     .enumerate()

@@ -25,6 +25,8 @@ mod task_query;
 mod team;
 mod time;
 mod validation;
+mod working_time;
+mod workload;
 mod workspace;
 
 pub use activity::{ActivityKind, TaskActivity};
@@ -66,6 +68,10 @@ pub use team::{
     display_labels, initials, validate_member_name,
 };
 pub use time::Timestamp;
+pub use working_time::{
+    Period, WorkingCalendar, available_minutes, format_hours, weekday, working_days,
+};
+pub use workload::{OVERLOAD_PERCENT, Owner, WorkloadReport, WorkloadRow, workload};
 pub use workspace::{
     DEFAULT_WORKSPACE_NAME, Workspace, WorkspaceRecord, next_untitled_name, validate_name,
 };
