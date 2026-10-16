@@ -23,6 +23,7 @@ mod schedule_draft;
 mod status;
 mod status_columns;
 mod status_visibility;
+mod symbols;
 mod task;
 mod task_event;
 mod task_fields;
@@ -80,6 +81,7 @@ pub use schedule_draft::{
 pub use status::Status;
 pub use status_columns::{StatusColumn, status_columns};
 pub use status_visibility::{check_hideable, resolve_visible_status, visible_statuses};
+pub use symbols::{Language, Symbol, SymbolKind, sort_symbols};
 pub use task::{Estimate, Task, TaskRecord};
 pub use task_event::{TaskEvent, TaskEventKind, changed_fields};
 pub use task_fields::{
