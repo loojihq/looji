@@ -24,6 +24,7 @@ mod project_views;
 mod projects;
 mod roadmap;
 mod roadmap_layout;
+mod schedule_dialog;
 mod search;
 mod sidebar;
 mod state;
@@ -92,6 +93,9 @@ pub struct WorkspaceView {
     task_dialog: Option<task_dialog::TaskDialog>,
     /// The team dialog, while it's open.
     team_dialog: Option<team_dialog::TeamDialog>,
+    /// The working hours dialog, while it's open, and one focus handle for each of its controls.
+    schedule_dialog: Option<schedule_dialog::ScheduleDialog>,
+    schedule_focus: Vec<FocusHandle>,
     /// The task detail panel beside the board, while a task is open in it.
     panel: Option<panel::PanelState>,
     /// The tag being typed for a task, while the tag input has the keyboard.
@@ -152,6 +156,10 @@ impl WorkspaceView {
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
                     team_dialog: None,
+                    schedule_dialog: None,
+                    schedule_focus: (0..schedule_dialog::CONTROL_COUNT)
+                        .map(|_| cx.focus_handle().tab_stop(true))
+                        .collect(),
                     panel: None,
                     tag_edit: None,
                     card_editing: None,
@@ -382,6 +390,9 @@ impl WorkspaceView {
         if self.task_dialog.is_some() {
             return self.task_dialog_key(event, cx);
         }
+        if self.schedule_dialog.is_some() {
+            return self.schedule_dialog_key(event, window, cx);
+        }
         if self.team_dialog.is_some() {
             return self.team_dialog_key(event, cx);
         }
@@ -507,6 +518,7 @@ impl Render for WorkspaceView {
                 .items_center()
                 .gap(theme.spacing.sm)
                 .child(list_view::switch(self, &theme, cx))
+                .child(schedule_dialog::open_button(&theme, cx))
                 .child(team_dialog::open_button(&theme, cx))
                 .into_any_element()
         });
@@ -560,6 +572,7 @@ impl Render for WorkspaceView {
             )
             .children(task_dialog::overlay(self, &theme, cx))
             .children(team_dialog::overlay(self, &theme, cx))
+            .children(schedule_dialog::overlay(self, &theme, window, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
             .children(delete_dialog)
             .children(project_dialog)

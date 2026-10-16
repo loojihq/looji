@@ -55,14 +55,15 @@ impl LocalMoment {
     }
 }
 
-/// The first moment at or after `at` that is inside working time.
-fn enter_working_time(schedule: &WorkingSchedule, at: LocalMoment) -> LocalMoment {
+/// The first moment at or after `at` that is inside working time. The caller has checked that the window
+/// is non-empty and that at least one weekday works.
+fn enter_working_time(workdays: &[bool; 7], start: u16, end: u16, at: LocalMoment) -> LocalMoment {
     let mut at = at;
     loop {
-        if schedule.workdays().contains(weekday(at.day)) && at.minute < schedule.end() {
+        if workdays[weekday(at.day)] && at.minute < end {
             return LocalMoment {
                 day: at.day,
-                minute: at.minute.max(schedule.start()),
+                minute: at.minute.max(start),
             };
         }
         at = LocalMoment {
@@ -72,33 +73,56 @@ fn enter_working_time(schedule: &WorkingSchedule, at: LocalMoment) -> LocalMomen
     }
 }
 
-/// The moment that `minutes` of working time after `start` has passed, under `schedule`.
+/// The moment that `minutes` of working time after `start` has passed, on the days marked in `workdays`,
+/// with each working day running from `start` to `end` in minutes since midnight.
 ///
-/// The schedule was checked when it was built, so it has at least one workday and a non-empty window. That
-/// makes the loop finite: each pass either returns or uses up a whole window.
-pub fn add_working_minutes(
-    schedule: &WorkingSchedule,
-    start: LocalMoment,
+/// An empty set of days, or a window with no length, is refused before anything is counted. Without that
+/// check the search for the next working time would never end.
+fn advance(
+    workdays: [bool; 7],
+    start: u16,
+    end: u16,
+    from: LocalMoment,
     minutes: u32,
-) -> LocalMoment {
+) -> Result<LocalMoment, DomainError> {
+    if !workdays.contains(&true) {
+        return Err(DomainError::Schedule(
+            crate::working_schedule::ScheduleError::NoWorkdays,
+        ));
+    }
+    if end <= start {
+        return Err(DomainError::Schedule(
+            crate::working_schedule::ScheduleError::EmptyShift { minutes: start },
+        ));
+    }
     if minutes == 0 {
-        return start;
+        return Ok(from);
     }
     let mut remaining = i64::from(minutes);
-    let mut cursor = start;
+    let mut cursor = from;
     loop {
-        cursor = enter_working_time(schedule, cursor);
-        let left = i64::from(schedule.end()) - i64::from(cursor.minute);
+        cursor = enter_working_time(&workdays, start, end, cursor);
+        let left = i64::from(end) - i64::from(cursor.minute);
         if remaining <= left {
-            return LocalMoment {
+            return Ok(LocalMoment {
                 day: cursor.day,
                 minute: u16::try_from(i64::from(cursor.minute) + remaining)
                     .expect("the result is within the window, so it fits in a day"),
-            };
+            });
         }
         remaining -= left;
         cursor = LocalMoment::start_of(cursor.day.plus_days(1));
     }
+}
+
+/// The moment that `minutes` of working time after `start` has passed, under `schedule`.
+pub fn add_working_minutes(
+    schedule: &WorkingSchedule,
+    start: LocalMoment,
+    minutes: u32,
+) -> Result<LocalMoment, DomainError> {
+    let workdays = schedule.calendar().workdays;
+    advance(workdays, schedule.start(), schedule.end(), start, minutes)
 }
 
 /// The moment that `hours` of working time after `start` has passed. Hours are rounded to whole minutes
@@ -114,7 +138,7 @@ pub fn add_working_hours(
         });
     }
     let estimate = Estimate::from_hours(hours)?;
-    Ok(add_working_minutes(schedule, start, estimate.minutes()))
+    add_working_minutes(schedule, start, estimate.minutes())
 }
 
 /// Whether moving a task from one status to another should set its due date. It should, when the task first
@@ -352,7 +376,7 @@ mod tests {
         for start_minute in (0..1440).step_by(15) {
             for minutes in (0..=(8 * 60 * 3)).step_by(15) {
                 let start = LocalMoment::new(start_day, start_minute);
-                let result = add_working_minutes(&schedule, start, minutes);
+                let result = add_working_minutes(&schedule, start, minutes).unwrap();
                 assert!(
                     schedule
                         .workdays()
@@ -367,5 +391,29 @@ mod tests {
                 assert!(result >= start || minutes == 0, "time only moves forward");
             }
         }
+    }
+
+    #[test]
+    fn an_empty_set_of_workdays_is_an_error_when_the_calculator_is_called_directly() {
+        // A schedule can't hold no workdays, so the calculator is called with the raw days. It must refuse,
+        // not search forever for a working day that never comes.
+        let start = LocalMoment::start_of(day(2026, 10, 12));
+        assert_eq!(
+            super::advance([false; 7], 540, 1020, start, 60),
+            Err(DomainError::Schedule(
+                crate::working_schedule::ScheduleError::NoWorkdays
+            ))
+        );
+    }
+
+    #[test]
+    fn an_empty_window_is_an_error_not_an_endless_search() {
+        let start = LocalMoment::start_of(day(2026, 10, 12));
+        assert_eq!(
+            super::advance([true; 7], 540, 540, start, 60),
+            Err(DomainError::Schedule(
+                crate::working_schedule::ScheduleError::EmptyShift { minutes: 540 }
+            ))
+        );
     }
 }

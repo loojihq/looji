@@ -15,6 +15,7 @@ pub mod preferences;
 mod project;
 mod project_view;
 pub mod repository;
+mod schedule_draft;
 mod status;
 mod status_columns;
 mod status_visibility;
@@ -55,6 +56,10 @@ pub use repository::{
     ColumnRepository, ListViewRepository, ProjectFilterRepository, ProjectRepository,
     ProjectViewRepository, SettingsRepository, TaskRepository, TeamMemberRepository,
     WorkspaceRepository,
+};
+pub use schedule_draft::{
+    DraftIssue, PREVIEW_COUNT, SAMPLE_ESTIMATE_HOURS, ScheduleDraft, TIME_FORMAT_MESSAGE,
+    TimeField, parse_time, preview_due_dates,
 };
 pub use status::Status;
 pub use status_columns::{StatusColumn, status_columns};

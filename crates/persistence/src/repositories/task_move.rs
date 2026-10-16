@@ -282,7 +282,8 @@ fn schedule_on_move(
     let schedule = WorkingSchedule::from_stored(start, end, mask)
         .map_err(|err| MoveError::Domain(DomainError::Schedule(err)))?;
 
-    let finish = add_working_minutes(&schedule, LocalMoment::from_timestamp_utc(at), minutes);
+    let finish = add_working_minutes(&schedule, LocalMoment::from_timestamp_utc(at), minutes)
+        .map_err(MoveError::Domain)?;
     transaction
         .execute(
             "UPDATE tasks SET due_on = ?1 WHERE id = ?2",

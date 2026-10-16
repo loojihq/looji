@@ -2,6 +2,7 @@
 
 pub mod icons;
 mod migrations;
+mod project_schedule;
 mod repositories;
 mod schema;
 mod status_visibility;
@@ -18,6 +19,7 @@ use std::{
 };
 
 pub use migrations::{Migration, migrate};
+pub use project_schedule::ScheduleSaveError;
 pub use repositories::task_move::MoveError;
 pub use rusqlite::Connection;
 pub use status_visibility::VisibilityError;
