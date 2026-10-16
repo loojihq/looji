@@ -121,3 +121,16 @@ pub trait ProjectViewRepository {
         state: &crate::project_view::ProjectViewState,
     ) -> RepoResult<()>;
 }
+
+/// Planning drafts for a project. A draft is saved whole: its text, state, sections, and tasks go in one
+/// transaction, so a reopened draft matches the last save.
+pub trait PlanDraftRepository {
+    fn save(&self, draft: &crate::plan_draft::PlanDraft) -> RepoResult<()>;
+    fn find(&self, id: crate::ids::PlanDraftId)
+    -> RepoResult<Option<crate::plan_draft::PlanDraft>>;
+    /// Newest first.
+    fn list_for_project(&self, project: ProjectId)
+    -> RepoResult<Vec<crate::plan_draft::PlanDraft>>;
+    /// Deletes a draft and its sections and tasks. This is how a draft is discarded.
+    fn delete(&self, id: crate::ids::PlanDraftId) -> RepoResult<()>;
+}

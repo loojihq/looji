@@ -6,6 +6,7 @@
 mod column;
 mod filter;
 mod list_view;
+pub(crate) mod plan_draft;
 mod project;
 mod project_view;
 pub(crate) mod settings;

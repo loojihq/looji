@@ -51,6 +51,8 @@ pub enum DomainError {
     Tag(crate::task_fields::TagError),
     #[error("{0}")]
     Schedule(crate::working_schedule::ScheduleError),
+    #[error("{0}")]
+    Draft(crate::plan_draft::PlanDraftError),
 }
 
 /// A repository could not load or save an entity.

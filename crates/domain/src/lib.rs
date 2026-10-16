@@ -10,6 +10,7 @@ mod error;
 mod ids;
 mod list_view;
 mod ordering;
+mod plan_draft;
 mod position;
 pub mod preferences;
 mod project;
@@ -40,10 +41,14 @@ pub use due_calculation::{
     LocalMoment, add_working_hours, add_working_minutes, needs_estimate_hint, schedules_on_move,
 };
 pub use error::{DomainError, RepoError, RepoResult};
+pub use ids::PlanDraftId;
 pub use ids::{ActivityId, ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use list_view::{ListColumn, ListSort, ListView, SortColumn, SortDirection, ToggleOutcome};
 pub use ordering::{
     FIRST_KEY, REBALANCE_LENGTH, after, before, key_between, needs_rebalance, rebalance,
+};
+pub use plan_draft::{
+    DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanSection, PlanTask,
 };
 pub use position::Position;
 pub use preferences::{
@@ -54,9 +59,9 @@ pub use project::{
 };
 pub use project_view::{ProjectView, ProjectViewState, ScrollOffset, scroll_key};
 pub use repository::{
-    ColumnRepository, ListViewRepository, ProjectFilterRepository, ProjectRepository,
-    ProjectViewRepository, SettingsRepository, TaskRepository, TeamMemberRepository,
-    WorkspaceRepository,
+    ColumnRepository, ListViewRepository, PlanDraftRepository, ProjectFilterRepository,
+    ProjectRepository, ProjectViewRepository, SettingsRepository, TaskRepository,
+    TeamMemberRepository, WorkspaceRepository,
 };
 pub use schedule_draft::{
     DraftIssue, PREVIEW_COUNT, SAMPLE_ESTIMATE_HOURS, ScheduleDraft, TIME_FORMAT_MESSAGE,
