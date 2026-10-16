@@ -5,6 +5,7 @@
 
 mod activity;
 mod board;
+mod code_source;
 mod due_calculation;
 mod error;
 mod ids;
@@ -38,6 +39,7 @@ mod zone;
 
 pub use activity::{ActivityKind, TaskActivity};
 pub use board::{Column, ColumnRecord};
+pub use code_source::{CodeSourceError, CodeSourceStatus, PathCheck, clean_path_input, status_for};
 pub use due_calculation::{
     LocalMoment, add_working_hours, add_working_minutes, needs_estimate_hint, schedules_on_move,
 };
@@ -64,9 +66,9 @@ pub use project::{
 };
 pub use project_view::{ProjectView, ProjectViewState, ScrollOffset, scroll_key};
 pub use repository::{
-    ColumnRepository, ListViewRepository, PlanDraftRepository, ProjectFilterRepository,
-    ProjectRepository, ProjectViewRepository, SettingsRepository, TaskRepository,
-    TeamMemberRepository, WorkspaceRepository,
+    CodeSourceRepository, ColumnRepository, ListViewRepository, PlanDraftRepository,
+    ProjectFilterRepository, ProjectRepository, ProjectViewRepository, SettingsRepository,
+    TaskRepository, TeamMemberRepository, WorkspaceRepository,
 };
 pub use schedule_draft::{
     DraftIssue, PREVIEW_COUNT, SAMPLE_ESTIMATE_HOURS, ScheduleDraft, TIME_FORMAT_MESSAGE,

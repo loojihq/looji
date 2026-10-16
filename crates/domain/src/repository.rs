@@ -122,6 +122,18 @@ pub trait ProjectViewRepository {
     ) -> RepoResult<()>;
 }
 
+/// The local repository folder a project is connected to. Only the stored path lives here; whether the folder
+/// still exists is checked on disk when the project loads, so a missing folder never clears the path.
+pub trait CodeSourceRepository {
+    /// The stored path, or `None` if the project isn't connected.
+    fn load_path(&self, project: ProjectId) -> RepoResult<Option<String>>;
+    /// Stores `path` as the project's repository, replacing any earlier one. The caller has already trimmed it
+    /// and checked that it's a git repository.
+    fn save_path(&self, project: ProjectId, path: &str) -> RepoResult<()>;
+    /// Removes the stored path. Only the user's Disconnect does this.
+    fn clear_path(&self, project: ProjectId) -> RepoResult<()>;
+}
+
 /// Planning drafts for a project. A draft is saved whole: its text, state, sections, and tasks go in one
 /// transaction, so a reopened draft matches the last save.
 pub trait PlanDraftRepository {

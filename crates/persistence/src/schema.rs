@@ -115,6 +115,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "plan_draft_publish",
         sql: include_str!("sql/0022_plan_draft_publish.sql"),
     },
+    Migration {
+        version: 23,
+        name: "project_repository",
+        sql: include_str!("sql/0023_project_repository.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -586,5 +591,37 @@ mod tests {
             (540, 1020, 31),
             "Monday to Friday, 09:00 to 17:00"
         );
+    }
+
+    #[test]
+    fn a_project_from_before_the_repository_connection_keeps_its_data_and_gets_no_path() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..22]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM projects WHERE id = 'p'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM project_repository", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "a project with no folder connected has no row");
     }
 }

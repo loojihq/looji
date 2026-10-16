@@ -59,6 +59,7 @@ impl WorkspaceView {
         self.load_list_settings(cx);
         self.load_project_view(cx);
         self.reload_board(cx);
+        self.refresh_code_source(cx);
     }
 
     /// Loads the board and the team for the selected project. Nothing is loaded when no project is
@@ -89,6 +90,7 @@ impl WorkspaceView {
         self.load_list_settings(cx);
         self.load_project_view(cx);
         self.reload_board(cx);
+        self.refresh_code_source(cx);
         cx.notify();
     }
 

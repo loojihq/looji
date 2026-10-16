@@ -26,6 +26,7 @@ mod preferences_panel;
 mod project_state;
 mod project_views;
 mod projects;
+mod repo_dialog;
 mod roadmap;
 mod roadmap_layout;
 mod schedule_dialog;
@@ -97,6 +98,11 @@ pub struct WorkspaceView {
     task_dialog: Option<task_dialog::TaskDialog>,
     /// The team dialog, while it's open.
     team_dialog: Option<team_dialog::TeamDialog>,
+    /// The repository dialog, while it's open, and the status of the selected project's folder. A check
+    /// numbered `code_check_seq` is the only one allowed to replace the status it set.
+    repo_dialog: Option<repo_dialog::RepoDialog>,
+    code_source: Option<repo_dialog::Source>,
+    code_check_seq: u64,
     /// The working hours dialog, while it's open, and one focus handle for each of its controls.
     schedule_dialog: Option<schedule_dialog::ScheduleDialog>,
     schedule_focus: Vec<FocusHandle>,
@@ -165,6 +171,9 @@ impl WorkspaceView {
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
                     team_dialog: None,
+                    repo_dialog: None,
+                    code_source: None,
+                    code_check_seq: 0,
                     schedule_dialog: None,
                     plan_wizard: None,
                     plan_drafts: None,
@@ -413,6 +422,9 @@ impl WorkspaceView {
         if self.schedule_dialog.is_some() {
             return self.schedule_dialog_key(event, window, cx);
         }
+        if self.repo_dialog.is_some() {
+            return self.repo_dialog_key(event, cx);
+        }
         if self.team_dialog.is_some() {
             return self.team_dialog_key(event, cx);
         }
@@ -541,6 +553,7 @@ impl Render for WorkspaceView {
                 .child(plan_drafts::open_button(&theme, cx))
                 .child(plan_wizard::open_button(&theme, cx))
                 .child(schedule_dialog::open_button(&theme, cx))
+                .child(repo_dialog::open_button(&theme, cx))
                 .child(team_dialog::open_button(&theme, cx))
                 .into_any_element()
         });
@@ -594,6 +607,7 @@ impl Render for WorkspaceView {
             )
             .children(task_dialog::overlay(self, &theme, cx))
             .children(team_dialog::overlay(self, &theme, cx))
+            .children(repo_dialog::overlay(self, &theme, cx))
             .children(schedule_dialog::overlay(self, &theme, window, cx))
             .children(plan_wizard::overlay(self, &theme, window, cx))
             .children(plan_drafts::overlay(self, &theme, cx))

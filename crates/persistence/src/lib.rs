@@ -3,6 +3,7 @@
 pub mod icons;
 mod migrations;
 mod project_schedule;
+pub mod repo_folder;
 mod repositories;
 mod schema;
 mod status_visibility;
