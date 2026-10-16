@@ -5,6 +5,7 @@
 
 mod activity;
 mod board;
+mod due_calculation;
 mod error;
 mod ids;
 mod list_view;
@@ -33,6 +34,7 @@ mod workspace;
 
 pub use activity::{ActivityKind, TaskActivity};
 pub use board::{Column, ColumnRecord};
+pub use due_calculation::{LocalMoment, add_working_hours, add_working_minutes};
 pub use error::{DomainError, RepoError, RepoResult};
 pub use ids::{ActivityId, ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use list_view::{ListColumn, ListSort, ListView, SortColumn, SortDirection, ToggleOutcome};
