@@ -1,0 +1,8 @@
+{
+  "spec": "Plan the beta rollout.",
+  "user_stories": [],
+  "tasks": [
+    {"title": "Write the release note", "priority": "medium", "estimate_hours": 2, "assignee": "Alex Kim", "tags": []},
+    {"title": "Brief the support team", "priority": "high", "estimate_hours": 1.5, "assignee": "Jordan Blake", "tags": ["support"]}
+  ]
+}

@@ -87,6 +87,7 @@ pub use team::{
     display_labels, initials, validate_member_name,
 };
 pub use time::Timestamp;
+pub use validation::MAX_TEXT_CHARS;
 pub use working_schedule::{
     DEFAULT_END_MINUTES, DEFAULT_START_MINUTES, MINUTES_PER_DAY, ScheduleError, Workdays,
     WorkingSchedule, format_time,

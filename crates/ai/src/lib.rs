@@ -11,6 +11,7 @@ pub mod fake;
 mod key;
 pub mod key_store;
 pub mod models;
+pub mod planning;
 mod provider;
 mod sse;
 mod types;

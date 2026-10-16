@@ -1,0 +1,6 @@
+Here is the plan you asked for:
+{
+  "spec": "Plan the beta rollout.",
+  "user_stories": [],
+  "tasks": [{"title": "Write the release note", "priority": "medium", "estimate_hours": 2, "assignee": null, "tags": []}]
+}
