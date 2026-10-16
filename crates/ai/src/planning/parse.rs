@@ -21,7 +21,7 @@ use looji_domain::{
     DomainError, Estimate, Priority, TeamMember, TeamMemberId, display_labels, normalize_tags,
     parse_estimate_hours, validate_member_name, validate_title,
 };
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{error::Category, value::RawValue};
 use thiserror::Error;
 
@@ -222,17 +222,7 @@ pub struct ParsedPlan {
 ///
 /// Call this with the finished text only. A partial stream isn't a response yet.
 pub fn parse_plan(text: &str, team: &[TeamMember]) -> Result<ParsedPlan, PlanParseError> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(PlanParseError::Empty);
-    }
-    if text.starts_with("```") {
-        return Err(PlanParseError::CodeFence);
-    }
-    if !text.starts_with('{') {
-        return Err(PlanParseError::ProseBeforeJson);
-    }
-    let raw = read_plan(text)?;
+    let raw: RawPlan = read_reply(text)?;
 
     let mut issues = Vec::new();
     if raw.spec.trim().is_empty() {
@@ -241,103 +231,41 @@ pub fn parse_plan(text: &str, team: &[TeamMember]) -> Result<ParsedPlan, PlanPar
     if raw.tasks.is_empty() {
         issues.push(issue("tasks", Problem::NoTasks));
     }
-    let mut user_stories = Vec::new();
-    for (index, story) in raw.user_stories.iter().enumerate() {
-        match validate_title(&story.title) {
-            Ok(title) => user_stories.push(UserStory {
-                title,
-                body: story.body.trim().to_string(),
-            }),
-            Err(err) => issues.push(issue(
-                &format!("user_stories[{index}].title"),
-                Problem::Title(title_reason(&err)),
-            )),
-        }
-    }
+    let user_stories: Vec<UserStory> = raw
+        .user_stories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, story)| {
+            check_story(story, &format!("user_stories[{index}]"), &mut issues)
+        })
+        .collect();
 
     let labels = display_labels(team);
     let mut tasks = Vec::new();
     let mut warnings = Vec::new();
     let mut titles: Vec<(String, usize)> = Vec::new();
     for (index, task) in raw.tasks.iter().enumerate() {
-        let title = match validate_title(&task.title) {
-            Ok(title) => {
-                let key = title.to_lowercase();
-                match titles.iter().find(|(seen, _)| *seen == key) {
-                    Some((_, first)) => issues.push(issue(
-                        &format!("tasks[{index}].title"),
-                        Problem::DuplicateTitle { first: *first },
-                    )),
-                    None => titles.push((key, index)),
-                }
-                Some(title)
-            }
-            Err(err) => {
-                issues.push(issue(
-                    &format!("tasks[{index}].title"),
-                    Problem::Title(title_reason(&err)),
-                ));
-                None
-            }
+        let path = format!("tasks[{index}]");
+        let Some(parsed) = check_task(
+            task,
+            &path,
+            index,
+            &labels,
+            team,
+            &mut issues,
+            &mut warnings,
+        ) else {
+            continue;
         };
-
-        let priority = match Priority::from_str(&task.priority) {
-            Ok(priority) => Some(priority),
-            Err(_) => {
-                issues.push(issue(
-                    &format!("tasks[{index}].priority"),
-                    Problem::Priority(task.priority.clone()),
-                ));
-                None
-            }
-        };
-
-        let estimate = match read_estimate(&task.estimate_hours) {
-            Ok(estimate) => Some(estimate),
-            Err(reason) => {
-                issues.push(issue(
-                    &format!("tasks[{index}].estimate_hours"),
-                    Problem::Estimate(reason),
-                ));
-                None
-            }
-        };
-
-        let assignee = match read_assignee(&task.assignee) {
-            Ok(Some(name)) => {
-                let (member, warning) = resolve_assignee(&name, index, &labels, team);
-                warnings.extend(warning);
-                Some(member)
-            }
-            Ok(None) => Some(None),
-            Err(reason) => {
-                issues.push(issue(
-                    &format!("tasks[{index}].assignee"),
-                    Problem::Assignee(reason),
-                ));
-                None
-            }
-        };
-
-        match normalize_tags(task.tags.iter().map(String::as_str)) {
-            Ok(tags) => {
-                if let (Some(title), Some(priority), Some(estimate), Some(assignee)) =
-                    (title, priority, estimate, assignee)
-                {
-                    tasks.push(ParsedTask {
-                        title,
-                        priority,
-                        estimate,
-                        assignee,
-                        tags,
-                    });
-                }
-            }
-            Err(err) => issues.push(issue(
-                &format!("tasks[{index}].tags"),
-                Problem::Tag(err.to_string()),
+        let key = parsed.title.to_lowercase();
+        match titles.iter().find(|(seen, _)| *seen == key) {
+            Some((_, first)) => issues.push(issue(
+                &format!("{path}.title"),
+                Problem::DuplicateTitle { first: *first },
             )),
+            None => titles.push((key, index)),
         }
+        tasks.push(parsed);
     }
 
     if !issues.is_empty() {
@@ -360,6 +288,128 @@ fn title_reason(err: &DomainError) -> String {
     }
 }
 
+/// Checks one task against the rules a task has, and returns it when it passes them all. Every problem is pushed to
+/// `issues`, so one task reports all of its problems at once, and a warning goes to `warnings`. Duplicate titles
+/// aren't checked here, since they depend on the other tasks.
+fn check_task(
+    task: &RawTask,
+    path: &str,
+    index: usize,
+    labels: &[String],
+    team: &[TeamMember],
+    issues: &mut Vec<PlanIssue>,
+    warnings: &mut Vec<PlanWarning>,
+) -> Option<ParsedTask> {
+    let title = match validate_title(&task.title) {
+        Ok(title) => Some(title),
+        Err(err) => {
+            issues.push(issue(
+                &format!("{path}.title"),
+                Problem::Title(title_reason(&err)),
+            ));
+            None
+        }
+    };
+    let priority = match Priority::from_str(&task.priority) {
+        Ok(priority) => Some(priority),
+        Err(_) => {
+            issues.push(issue(
+                &format!("{path}.priority"),
+                Problem::Priority(task.priority.clone()),
+            ));
+            None
+        }
+    };
+    let estimate = match read_estimate(&task.estimate_hours) {
+        Ok(estimate) => Some(estimate),
+        Err(reason) => {
+            issues.push(issue(
+                &format!("{path}.estimate_hours"),
+                Problem::Estimate(reason),
+            ));
+            None
+        }
+    };
+    let assignee = match read_assignee(&task.assignee) {
+        Ok(Some(name)) => {
+            let (member, warning) = resolve_assignee(&name, index, labels, team);
+            warnings.extend(warning);
+            Some(member)
+        }
+        Ok(None) => Some(None),
+        Err(reason) => {
+            issues.push(issue(
+                &format!("{path}.assignee"),
+                Problem::Assignee(reason),
+            ));
+            None
+        }
+    };
+    let tags = match normalize_tags(task.tags.iter().map(String::as_str)) {
+        Ok(tags) => Some(tags),
+        Err(err) => {
+            issues.push(issue(
+                &format!("{path}.tags"),
+                Problem::Tag(err.to_string()),
+            ));
+            None
+        }
+    };
+    match (title, priority, estimate, assignee, tags) {
+        (Some(title), Some(priority), Some(estimate), Some(assignee), Some(tags)) => {
+            Some(ParsedTask {
+                title,
+                priority,
+                estimate,
+                assignee,
+                tags,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Checks one user story. A blank title is an error. A body may be empty.
+fn check_story(story: &RawStory, path: &str, issues: &mut Vec<PlanIssue>) -> Option<UserStory> {
+    match validate_title(&story.title) {
+        Ok(title) => Some(UserStory {
+            title,
+            body: story.body.trim().to_string(),
+        }),
+        Err(err) => {
+            issues.push(issue(
+                &format!("{path}.title"),
+                Problem::Title(title_reason(&err)),
+            ));
+            None
+        }
+    }
+}
+
+/// Reads a reply as `T`, after the checks every reply gets: one JSON object, with no code fence and no prose before
+/// it. Used for a whole plan and for a single part of one.
+pub(super) fn read_reply<T: DeserializeOwned>(text: &str) -> Result<T, PlanParseError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(PlanParseError::Empty);
+    }
+    if text.starts_with("```") {
+        return Err(PlanParseError::CodeFence);
+    }
+    if !text.starts_with('{') {
+        return Err(PlanParseError::ProseBeforeJson);
+    }
+    let mut de = serde_json::Deserializer::from_str(text);
+    let value = T::deserialize(&mut de).map_err(|err| match err.classify() {
+        Category::Eof => PlanParseError::Truncated,
+        Category::Data => PlanParseError::Schema(err.to_string()),
+        Category::Syntax | Category::Io => PlanParseError::Malformed(err.to_string()),
+    })?;
+    de.end()
+        .map_err(|err| PlanParseError::Malformed(format!("text follows the JSON object: {err}")))?;
+    Ok(value)
+}
+
 fn issue(path: &str, problem: Problem) -> PlanIssue {
     PlanIssue {
         path: path.to_string(),
@@ -369,18 +419,6 @@ fn issue(path: &str, problem: Problem) -> PlanIssue {
 
 /// Reads the structure. Checks that the text is one object and nothing follows it, and turns each serde failure
 /// into its kind.
-pub(super) fn read_plan(text: &str) -> Result<RawPlan, PlanParseError> {
-    let mut de = serde_json::Deserializer::from_str(text);
-    let plan = RawPlan::deserialize(&mut de).map_err(|err| match err.classify() {
-        Category::Eof => PlanParseError::Truncated,
-        Category::Data => PlanParseError::Schema(err.to_string()),
-        Category::Syntax | Category::Io => PlanParseError::Malformed(err.to_string()),
-    })?;
-    de.end()
-        .map_err(|err| PlanParseError::Malformed(format!("text follows the JSON object: {err}")))?;
-    Ok(plan)
-}
-
 /// An estimate in hours. A JSON number is read through the domain's rule, which takes the same text, so the two
 /// can't disagree. A string is refused, since the number is what the schema asks for. So is exponent form, which
 /// the domain would accept but the prompt doesn't allow.
@@ -458,5 +496,71 @@ fn resolve_assignee(
                 name: written.to_string(),
             }),
         ),
+    }
+}
+
+/// Which part of a plan a refinement replaces. Each one is read against its own schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefineKind {
+    Spec,
+    Story,
+    Task,
+}
+
+/// The replacement a refinement read. It's the same shape as the part of the plan it replaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refinement {
+    Spec(String),
+    Story(UserStory),
+    Task(ParsedTask),
+}
+
+/// A refinement that passed every rule, with any warnings it raised. A refinement covers one part, so its warnings
+/// are about that part, and a task's warning carries index 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refined {
+    pub part: Refinement,
+    pub warnings: Vec<PlanWarning>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSpec {
+    spec: String,
+}
+
+/// Parses a reply that replaces one part of a plan. It's held to the same rules as a whole plan, and a refusal names
+/// the part as `spec`, `story`, or `task` in its paths.
+pub fn parse_refinement(
+    text: &str,
+    kind: RefineKind,
+    team: &[TeamMember],
+) -> Result<Refined, PlanParseError> {
+    let labels = display_labels(team);
+    let mut issues = Vec::new();
+    let mut warnings = Vec::new();
+    let part = match kind {
+        RefineKind::Spec => {
+            let raw: RawSpec = read_reply(text)?;
+            if raw.spec.trim().is_empty() {
+                issues.push(issue("spec", Problem::BlankSpec));
+                None
+            } else {
+                Some(Refinement::Spec(raw.spec.trim().to_string()))
+            }
+        }
+        RefineKind::Story => {
+            let raw: RawStory = read_reply(text)?;
+            check_story(&raw, "story", &mut issues).map(Refinement::Story)
+        }
+        RefineKind::Task => {
+            let raw: RawTask = read_reply(text)?;
+            check_task(&raw, "task", 0, &labels, team, &mut issues, &mut warnings)
+                .map(Refinement::Task)
+        }
+    };
+    match part {
+        Some(part) if issues.is_empty() => Ok(Refined { part, warnings }),
+        _ => Err(PlanParseError::Invalid(issues)),
     }
 }

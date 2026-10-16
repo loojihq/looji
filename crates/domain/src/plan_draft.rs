@@ -53,6 +53,10 @@ pub enum PlanDraftError {
     IndexOutOfRange { index: usize, len: usize },
     #[error("that team member doesn't belong to this project")]
     UnknownAssignee,
+    #[error("this was edited by hand; replacing it needs confirmation")]
+    ManuallyEdited,
+    #[error("that refinement is for a different part of the plan")]
+    WrongPart,
     #[error("{0}")]
     Tag(TagError),
     #[error("a {state} draft can't {action}")]
@@ -113,6 +117,8 @@ impl FromStr for DraftState {
 pub struct PlanStory {
     pub title: String,
     pub body: String,
+    /// Whether a person wrote or changed this story, rather than the plan. Refinement asks before replacing it.
+    pub edited: bool,
 }
 
 /// A task in the backlog review. Only the title is required, and everything else can be left empty.
@@ -125,6 +131,8 @@ pub struct PlanTask {
     pub tags: Vec<String>,
     /// The index of the story this task belongs to, if any.
     pub section: Option<usize>,
+    /// Whether a person wrote or changed this task, rather than the plan. Refinement asks before replacing it.
+    pub edited: bool,
 }
 
 impl PlanTask {
@@ -138,6 +146,7 @@ impl PlanTask {
             assignee: None,
             tags: Vec::new(),
             section: None,
+            edited: false,
         })
     }
 }
@@ -153,6 +162,7 @@ pub struct PlanDraftParts {
     pub recovered: Option<String>,
     pub failure: Option<String>,
     pub spec: String,
+    pub spec_edited: bool,
     pub stories: Vec<PlanStory>,
     pub tasks: Vec<PlanTask>,
     pub created_at: Timestamp,
@@ -302,6 +312,7 @@ impl PlanDraft {
                 recovered: None,
                 failure: None,
                 spec: String::new(),
+                spec_edited: false,
                 stories: Vec::new(),
                 tasks: Vec::new(),
                 created_at: at,
@@ -487,14 +498,19 @@ fn apply_to(
     members: &[TeamMemberId],
 ) -> Result<(), PlanDraftError> {
     match edit {
-        PlanEdit::SetSpec(spec) => parts.spec = clean_spec(&spec)?,
+        PlanEdit::SetSpec(spec) => {
+            parts.spec = clean_spec(&spec)?;
+            parts.spec_edited = true;
+        }
         PlanEdit::SetStoryTitle { index, title } => {
             check_index(index, parts.stories.len())?;
             parts.stories[index].title = clean_title(&title, PlanDraftError::EmptyStoryTitle)?;
+            parts.stories[index].edited = true;
         }
         PlanEdit::SetStoryBody { index, body } => {
             check_index(index, parts.stories.len())?;
             parts.stories[index].body = body.trim().to_string();
+            parts.stories[index].edited = true;
         }
         PlanEdit::RemoveStory(index) => {
             check_index(index, parts.stories.len())?;
@@ -511,14 +527,17 @@ fn apply_to(
         PlanEdit::SetTaskTitle { index, title } => {
             check_index(index, parts.tasks.len())?;
             parts.tasks[index].title = clean_title(&title, PlanDraftError::EmptyTaskTitle)?;
+            parts.tasks[index].edited = true;
         }
         PlanEdit::SetTaskPriority { index, priority } => {
             check_index(index, parts.tasks.len())?;
             parts.tasks[index].priority = priority;
+            parts.tasks[index].edited = true;
         }
         PlanEdit::SetTaskEstimate { index, estimate } => {
             check_index(index, parts.tasks.len())?;
             parts.tasks[index].estimate = estimate;
+            parts.tasks[index].edited = true;
         }
         PlanEdit::SetTaskAssignee { index, assignee } => {
             check_index(index, parts.tasks.len())?;
@@ -528,15 +547,19 @@ fn apply_to(
                 return Err(PlanDraftError::UnknownAssignee);
             }
             parts.tasks[index].assignee = assignee;
+            parts.tasks[index].edited = true;
         }
         PlanEdit::SetTaskTags { index, tags } => {
             check_index(index, parts.tasks.len())?;
             let tags =
                 normalize_tags(tags.iter().map(String::as_str)).map_err(PlanDraftError::Tag)?;
             parts.tasks[index].tags = tags;
+            parts.tasks[index].edited = true;
         }
         PlanEdit::AddTask { title } => {
-            parts.tasks.push(PlanTask::new(&title)?);
+            let mut task = PlanTask::new(&title)?;
+            task.edited = true;
+            parts.tasks.push(task);
         }
         PlanEdit::RemoveTask(index) => {
             check_index(index, parts.tasks.len())?;
@@ -552,6 +575,96 @@ fn apply_to(
     Ok(())
 }
 
+/// Which part of a ready plan a refinement replaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefineTarget {
+    Spec,
+    Story(usize),
+    Task(usize),
+}
+
+/// The replacement a refinement produced. It has to match its target: a spec for the spec, a story for a story,
+/// and a task for a task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefinedPart {
+    Spec(String),
+    Story(PlanStory),
+    Task(PlanTask),
+}
+
+impl PlanDraft {
+    /// Replaces one part of a ready plan, and leaves every other part as it was.
+    ///
+    /// A part a person edited by hand is replaced only when `replace_edited` is set. Otherwise the change is refused
+    /// with `ManuallyEdited`, so the caller can ask first. The replacement is generated content again, so it isn't
+    /// marked edited. A task keeps its story, since a refinement doesn't move it.
+    ///
+    /// The change is checked as a whole, like every edit, and a refused refinement leaves the draft as it was.
+    pub fn refine(
+        &mut self,
+        target: RefineTarget,
+        part: RefinedPart,
+        members: &[TeamMemberId],
+        replace_edited: bool,
+        at: Timestamp,
+    ) -> Result<(), PlanDraftError> {
+        self.require(DraftState::Ready, "be refined")?;
+        let mut next = self.parts.clone();
+        match (target, part) {
+            (RefineTarget::Spec, RefinedPart::Spec(spec)) => {
+                if next.spec_edited && !replace_edited {
+                    return Err(PlanDraftError::ManuallyEdited);
+                }
+                next.spec = clean_spec(&spec)?;
+                next.spec_edited = false;
+            }
+            (RefineTarget::Story(index), RefinedPart::Story(story)) => {
+                check_index(index, next.stories.len())?;
+                if next.stories[index].edited && !replace_edited {
+                    return Err(PlanDraftError::ManuallyEdited);
+                }
+                next.stories[index] = PlanStory {
+                    title: clean_title(&story.title, PlanDraftError::EmptyStoryTitle)?,
+                    body: story.body.trim().to_string(),
+                    edited: false,
+                };
+            }
+            (RefineTarget::Task(index), RefinedPart::Task(task)) => {
+                check_index(index, next.tasks.len())?;
+                if next.tasks[index].edited && !replace_edited {
+                    return Err(PlanDraftError::ManuallyEdited);
+                }
+                if let Some(member) = task.assignee
+                    && !members.contains(&member)
+                {
+                    return Err(PlanDraftError::UnknownAssignee);
+                }
+                let tags = normalize_tags(task.tags.iter().map(String::as_str))
+                    .map_err(PlanDraftError::Tag)?;
+                let section = next.tasks[index].section;
+                next.tasks[index] = PlanTask {
+                    title: clean_title(&task.title, PlanDraftError::EmptyTaskTitle)?,
+                    priority: task.priority,
+                    estimate: task.estimate,
+                    assignee: task.assignee,
+                    tags,
+                    section,
+                    edited: false,
+                };
+            }
+            _ => return Err(PlanDraftError::WrongPart),
+        }
+        check_content(&next.stories, &next.tasks)?;
+        next.updated_at = at;
+        self.parts = next;
+        Ok(())
+    }
+
+    pub fn spec_edited(&self) -> bool {
+        self.parts.spec_edited
+    }
+}
+
 impl From<PlanDraftError> for DomainError {
     fn from(err: PlanDraftError) -> Self {
         DomainError::Draft(err)
@@ -565,6 +678,7 @@ mod tests {
         ids::{ProjectId, TeamMemberId},
         plan_draft::{
             DraftState, PlanDraft, PlanDraftError, PlanDraftParts, PlanEdit, PlanStory, PlanTask,
+            RefineTarget, RefinedPart,
         },
         task::Estimate,
         task_fields::Priority,
@@ -583,6 +697,7 @@ mod tests {
         PlanStory {
             title: title.to_string(),
             body: format!("About {title}"),
+            edited: false,
         }
     }
 
@@ -804,6 +919,7 @@ mod tests {
             recovered: None,
             failure: None,
             spec: "Spec".to_string(),
+            spec_edited: false,
             stories: Vec::new(),
             tasks: vec![PlanTask {
                 section: Some(0),
@@ -829,6 +945,7 @@ mod tests {
             recovered: None,
             failure: None,
             spec: "  ".to_string(),
+            spec_edited: false,
             stories: Vec::new(),
             tasks: Vec::new(),
             created_at: at(1),
@@ -1005,6 +1122,7 @@ mod tests {
             recovered: None,
             failure: None,
             spec: draft.spec().to_string(),
+            spec_edited: false,
             stories: draft.stories().to_vec(),
             tasks: Vec::new(),
             created_at: draft.created_at(),
@@ -1122,6 +1240,274 @@ mod tests {
             )
             .unwrap();
         assert_eq!(draft.stories()[0].body, "Line one\nLine two");
+    }
+
+    fn refined_task(title: &str, minutes: u32) -> PlanTask {
+        PlanTask {
+            estimate: Some(Estimate::from_minutes(i64::from(minutes)).unwrap()),
+            ..task(title)
+        }
+    }
+
+    #[test]
+    fn refining_one_task_leaves_the_spec_stories_and_other_tasks_exactly_as_they_were() {
+        let mut draft = ready_with(vec![task("One"), task("Two"), task("Three")]);
+        let before = draft.clone();
+
+        draft
+            .refine(
+                RefineTarget::Task(1),
+                RefinedPart::Task(refined_task("Two", 30)),
+                &[],
+                false,
+                at(3),
+            )
+            .unwrap();
+
+        assert_eq!(draft.spec(), before.spec());
+        assert_eq!(draft.stories(), before.stories());
+        assert_eq!(draft.tasks()[0], before.tasks()[0]);
+        assert_eq!(draft.tasks()[2], before.tasks()[2]);
+        assert_eq!(draft.tasks()[1].estimate.map(|e| e.minutes()), Some(30));
+    }
+
+    #[test]
+    fn refining_a_story_or_the_spec_leaves_the_rest_as_it_was() {
+        let mut draft = ready_with(vec![task("One")]);
+        let before = draft.clone();
+
+        draft
+            .refine(
+                RefineTarget::Story(0),
+                RefinedPart::Story(PlanStory {
+                    title: "Scope, narrower".to_string(),
+                    body: "Less.".to_string(),
+                    edited: false,
+                }),
+                &[],
+                false,
+                at(3),
+            )
+            .unwrap();
+        assert_eq!(draft.tasks(), before.tasks());
+        assert_eq!(draft.spec(), before.spec());
+        assert_eq!(draft.stories()[0].title, "Scope, narrower");
+
+        draft
+            .refine(
+                RefineTarget::Spec,
+                RefinedPart::Spec("A smaller spec.".to_string()),
+                &[],
+                false,
+                at(4),
+            )
+            .unwrap();
+        assert_eq!(draft.spec(), "A smaller spec.");
+        assert_eq!(draft.stories()[0].title, "Scope, narrower");
+        assert_eq!(draft.tasks(), before.tasks());
+    }
+
+    #[test]
+    fn a_refinement_keeps_the_task_in_its_story() {
+        let mut draft = generating();
+        let linked = PlanTask {
+            section: Some(0),
+            ..task("Linked")
+        };
+        draft
+            .complete("Spec", vec![story("Scope")], vec![linked], at(2))
+            .unwrap();
+
+        draft
+            .refine(
+                RefineTarget::Task(0),
+                RefinedPart::Task(refined_task("Linked", 45)),
+                &[],
+                false,
+                at(3),
+            )
+            .unwrap();
+
+        assert_eq!(draft.tasks()[0].section, Some(0));
+    }
+
+    #[test]
+    fn a_task_edited_by_hand_is_not_replaced_without_confirmation() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft
+            .apply(
+                PlanEdit::SetTaskPriority {
+                    index: 0,
+                    priority: Priority::High,
+                },
+                &[],
+                at(3),
+            )
+            .unwrap();
+        let before = draft.clone();
+
+        let refused = draft.refine(
+            RefineTarget::Task(0),
+            RefinedPart::Task(refined_task("One", 30)),
+            &[],
+            false,
+            at(4),
+        );
+
+        assert_eq!(refused, Err(PlanDraftError::ManuallyEdited));
+        assert_eq!(draft, before, "a refused refinement changes nothing");
+    }
+
+    #[test]
+    fn a_confirmed_refinement_replaces_an_edited_task_and_clears_the_mark() {
+        let mut draft = ready_with(vec![task("One")]);
+        draft
+            .apply(
+                PlanEdit::SetTaskTitle {
+                    index: 0,
+                    title: "Uno".to_string(),
+                },
+                &[],
+                at(3),
+            )
+            .unwrap();
+        assert!(draft.tasks()[0].edited);
+
+        draft
+            .refine(
+                RefineTarget::Task(0),
+                RefinedPart::Task(refined_task("Uno", 30)),
+                &[],
+                true,
+                at(4),
+            )
+            .unwrap();
+
+        assert!(!draft.tasks()[0].edited);
+        assert_eq!(draft.tasks()[0].estimate.map(|e| e.minutes()), Some(30));
+    }
+
+    #[test]
+    fn a_generated_task_is_refined_without_asking() {
+        let mut draft = ready_with(vec![task("One")]);
+        assert!(!draft.tasks()[0].edited);
+        assert!(
+            draft
+                .refine(
+                    RefineTarget::Task(0),
+                    RefinedPart::Task(refined_task("One", 30)),
+                    &[],
+                    false,
+                    at(3),
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_spec_edited_by_hand_asks_before_it_is_refined() {
+        let mut draft = ready_with(Vec::new());
+        draft
+            .apply(PlanEdit::SetSpec("Mine.".to_string()), &[], at(3))
+            .unwrap();
+        assert!(draft.spec_edited());
+
+        assert_eq!(
+            draft.refine(
+                RefineTarget::Spec,
+                RefinedPart::Spec("Theirs.".to_string()),
+                &[],
+                false,
+                at(4),
+            ),
+            Err(PlanDraftError::ManuallyEdited)
+        );
+        draft
+            .refine(
+                RefineTarget::Spec,
+                RefinedPart::Spec("Theirs.".to_string()),
+                &[],
+                true,
+                at(5),
+            )
+            .unwrap();
+        assert!(!draft.spec_edited());
+    }
+
+    #[test]
+    fn hand_edits_mark_only_what_was_changed() {
+        let mut draft = ready_with(vec![task("One"), task("Two")]);
+        draft
+            .apply(
+                PlanEdit::SetStoryBody {
+                    index: 0,
+                    body: "Edited.".to_string(),
+                },
+                &[],
+                at(3),
+            )
+            .unwrap();
+        assert!(draft.stories()[0].edited);
+        assert!(!draft.tasks()[0].edited);
+
+        draft
+            .apply(PlanEdit::MoveTask { from: 1, to: 0 }, &[], at(4))
+            .unwrap();
+        assert!(
+            draft.tasks().iter().all(|task| !task.edited),
+            "moving a task is not an edit to it"
+        );
+
+        draft
+            .apply(
+                PlanEdit::AddTask {
+                    title: "Mine".to_string(),
+                },
+                &[],
+                at(5),
+            )
+            .unwrap();
+        assert!(
+            draft
+                .tasks()
+                .iter()
+                .any(|task| task.title == "Mine" && task.edited)
+        );
+    }
+
+    #[test]
+    fn a_refinement_for_the_wrong_part_is_refused() {
+        let mut draft = ready_with(vec![task("One")]);
+        assert_eq!(
+            draft.refine(
+                RefineTarget::Spec,
+                RefinedPart::Task(refined_task("One", 30)),
+                &[],
+                false,
+                at(3),
+            ),
+            Err(PlanDraftError::WrongPart)
+        );
+    }
+
+    #[test]
+    fn a_refinement_that_repeats_another_title_is_refused_and_changes_nothing() {
+        let mut draft = ready_with(vec![task("One"), task("Two")]);
+        let before = draft.clone();
+
+        let refused = draft.refine(
+            RefineTarget::Task(1),
+            RefinedPart::Task(refined_task("one", 30)),
+            &[],
+            false,
+            at(3),
+        );
+
+        assert_eq!(
+            refused,
+            Err(PlanDraftError::DuplicateTitle { index: 1, first: 0 })
+        );
+        assert_eq!(draft, before);
     }
 
     #[test]

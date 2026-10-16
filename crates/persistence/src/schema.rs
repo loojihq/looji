@@ -105,6 +105,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "plan_draft_review",
         sql: include_str!("sql/0020_plan_draft_review.sql"),
     },
+    Migration {
+        version: 21,
+        name: "plan_draft_refinement",
+        sql: include_str!("sql/0021_plan_draft_refinement.sql"),
+    },
 ];
 
 #[cfg(test)]

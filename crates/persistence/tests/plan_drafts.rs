@@ -51,6 +51,7 @@ fn story(title: &str) -> PlanStory {
     PlanStory {
         title: title.to_string(),
         body: format!("About {title}"),
+        edited: false,
     }
 }
 

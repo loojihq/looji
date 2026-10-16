@@ -55,6 +55,7 @@ fn ready_draft(fx: &Fixture, store: &SqliteStore, tasks: Vec<PlanTask>) -> PlanD
             vec![PlanStory {
                 title: "Scope".to_string(),
                 body: "Ship it.".to_string(),
+                edited: false,
             }],
             tasks,
             at(2),

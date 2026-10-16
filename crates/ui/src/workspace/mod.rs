@@ -18,6 +18,7 @@ mod list_view;
 mod members;
 mod moves;
 mod panel;
+mod plan_refine;
 mod plan_review;
 mod plan_wizard;
 mod preferences_panel;

@@ -141,4 +141,14 @@ pub trait PlanDraftRepository {
         edit: crate::plan_draft::PlanEdit,
         at: crate::time::Timestamp,
     ) -> RepoResult<Option<crate::plan_draft::PlanDraft>>;
+    /// Replaces one part of a ready plan and saves it. A part a person edited by hand is refused unless
+    /// `replace_edited` is set. A refused change writes nothing. `None` means there is no such draft.
+    fn apply_refinement(
+        &self,
+        id: crate::ids::PlanDraftId,
+        target: crate::plan_draft::RefineTarget,
+        part: crate::plan_draft::RefinedPart,
+        replace_edited: bool,
+        at: crate::time::Timestamp,
+    ) -> RepoResult<Option<crate::plan_draft::PlanDraft>>;
 }

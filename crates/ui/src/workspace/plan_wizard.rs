@@ -37,7 +37,7 @@ const MAX_TOKENS: u32 = 8192;
 /// Most characters a date can take, as in `YYYY-MM-DD`, with room for a mistake.
 const DATE_CHARS: usize = 10;
 /// The frames of the progress indicator. The stream gives no percentage, so it spins.
-const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
+pub(super) const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
 /// The controls the keyboard reaches, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,8 @@ pub(super) struct PlanWizardDialog {
     pub confirming_discard: bool,
     /// The review edit that is open, if any.
     pub editor: Option<super::plan_review::Editor>,
+    /// The refinement form, when one part is being refined.
+    pub refine: Option<super::plan_refine::Refine>,
     /// A failure outside the plan itself, such as a store that couldn't be written.
     pub notice: Option<String>,
     /// Counts reads while generating, to turn the spinner.
@@ -154,6 +156,7 @@ impl WorkspaceView {
             members,
             confirming_discard: false,
             editor: None,
+            refine: None,
             notice,
             frame: 0,
         });
@@ -356,6 +359,7 @@ impl WorkspaceView {
                     .map(|story| PlanStory {
                         title: story.title.clone(),
                         body: story.body.clone(),
+                        edited: false,
                     })
                     .collect();
                 let tasks: Vec<PlanTask> = plan
@@ -368,6 +372,7 @@ impl WorkspaceView {
                         assignee: task.assignee,
                         tags: task.tags.clone(),
                         section: None,
+                        edited: false,
                     })
                     .collect();
                 let recorded = dialog.draft.as_mut().map_or(Ok(()), |draft| {

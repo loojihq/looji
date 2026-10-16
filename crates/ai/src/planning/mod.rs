@@ -11,4 +11,5 @@ pub use parse::{
     ErrorKind, ParsedPlan, ParsedTask, PlanIssue, PlanParseError, PlanWarning, Problem, UserStory,
     parse_plan,
 };
-pub use prompt::{PROMPT_VERSION, build_prompt};
+pub use parse::{RefineKind, Refined, Refinement, parse_refinement};
+pub use prompt::{PROMPT_VERSION, build_prompt, build_refinement_prompt};

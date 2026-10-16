@@ -1,11 +1,11 @@
 //! Planning drafts in SQLite. A draft is written whole, in one transaction, so a reopened draft is the last save.
-//! Edits go through `apply_edit`, which loads the draft, applies the change, and saves it, so no edit can be left
-//! unsaved.
+//! Edits and refinements go through `apply_edit` and `apply_refinement`, which load the draft, apply the change, and
+//! save it, so no change can be left unsaved.
 
 use looji_domain::{
     DomainError, DraftState, Estimate, PlanDraft, PlanDraftError, PlanDraftId, PlanDraftParts,
-    PlanEdit, PlanStory, PlanTask, Priority, ProjectId, RepoError, RepoResult, TeamMemberId,
-    Timestamp,
+    PlanEdit, PlanStory, PlanTask, Priority, ProjectId, RefineTarget, RefinedPart, RepoError,
+    RepoResult, TeamMemberId, Timestamp,
 };
 use rusqlite::{Connection, Row, params};
 
@@ -14,8 +14,7 @@ use super::{
 };
 use crate::SqliteStore;
 
-const DRAFT_COLUMNS: &str =
-    "id, project_id, prompt, state, response, recovered, failure, created_at, updated_at, spec";
+const DRAFT_COLUMNS: &str = "id, project_id, prompt, state, response, recovered, failure, created_at, updated_at, spec, spec_edited";
 
 fn invalid(err: PlanDraftError) -> RepoError {
     RepoError::Invalid(DomainError::from(err))
@@ -24,6 +23,7 @@ fn invalid(err: PlanDraftError) -> RepoError {
 /// Reads a draft's own row. Its stories and tasks are read separately, and filled in by `assemble`.
 fn read_draft(row: &Row<'_>) -> RepoResult<PlanDraftParts> {
     let state: String = get(row, 3)?;
+    let spec_edited: i64 = get(row, 10)?;
     Ok(PlanDraftParts {
         id: read_id(row, 0, PlanDraftId::from_uuid)?,
         project_id: read_id(row, 1, ProjectId::from_uuid)?,
@@ -33,6 +33,7 @@ fn read_draft(row: &Row<'_>) -> RepoResult<PlanDraftParts> {
         recovered: get(row, 5)?,
         failure: get(row, 6)?,
         spec: get(row, 9)?,
+        spec_edited: spec_edited != 0,
         stories: Vec::new(),
         tasks: Vec::new(),
         created_at: read_timestamp(row, 7)?,
@@ -58,18 +59,20 @@ fn assemble(connection: &Connection, mut parts: PlanDraftParts) -> RepoResult<Pl
     let key = id_text(parts.id.as_uuid());
     parts.stories = query_all(
         connection,
-        "SELECT title, body FROM plan_draft_sections WHERE draft_id = ?1 ORDER BY position",
+        "SELECT title, body, edited FROM plan_draft_sections WHERE draft_id = ?1 ORDER BY position",
         params![key],
         |row| {
+            let edited: i64 = get(row, 2)?;
             Ok(PlanStory {
                 title: get(row, 0)?,
                 body: get(row, 1)?,
+                edited: edited != 0,
             })
         },
     )?;
     parts.tasks = query_all(
         connection,
-        "SELECT title, section_position, priority, estimate_minutes, assignee_id, tags
+        "SELECT title, section_position, priority, estimate_minutes, assignee_id, tags, edited
          FROM plan_draft_tasks WHERE draft_id = ?1 ORDER BY position",
         params![key],
         read_task,
@@ -82,6 +85,7 @@ fn read_task(row: &Row<'_>) -> RepoResult<PlanTask> {
     let priority: String = get(row, 2)?;
     let minutes: Option<i64> = get(row, 3)?;
     let tags: String = get(row, 5)?;
+    let edited: i64 = get(row, 6)?;
     Ok(PlanTask {
         title: get(row, 0)?,
         priority: priority.parse::<Priority>().map_err(RepoError::Invalid)?,
@@ -92,6 +96,7 @@ fn read_task(row: &Row<'_>) -> RepoResult<PlanTask> {
         assignee: read_optional_id(row, 4, TeamMemberId::from_uuid)?,
         tags: split_tags(&tags),
         section: section.map(|position| position as usize),
+        edited: edited != 0,
     })
 }
 
@@ -117,6 +122,22 @@ impl SqliteStore {
             |row| read_id(row, 0, TeamMemberId::from_uuid),
         )
     }
+
+    /// Loads a draft, changes it with `change` against the project's current team, and saves it. A refused change
+    /// is `Rejected`, and nothing is written. `None` means there is no such draft.
+    fn change_draft(
+        &self,
+        id: PlanDraftId,
+        change: impl FnOnce(&mut PlanDraft, &[TeamMemberId]) -> Result<(), PlanDraftError>,
+    ) -> RepoResult<Option<PlanDraft>> {
+        let Some(mut draft) = looji_domain::PlanDraftRepository::find(self, id)? else {
+            return Ok(None);
+        };
+        let members = self.team_of(draft.project_id())?;
+        change(&mut draft, &members).map_err(|err| RepoError::Rejected(err.into()))?;
+        looji_domain::PlanDraftRepository::save(self, &draft)?;
+        Ok(Some(draft))
+    }
 }
 
 impl looji_domain::PlanDraftRepository for SqliteStore {
@@ -128,15 +149,16 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
         transaction
             .execute(
                 "INSERT INTO plan_drafts (id, project_id, prompt, state, response, recovered, failure,
-                                          created_at, updated_at, spec)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                          created_at, updated_at, spec, spec_edited)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT (id) DO UPDATE SET
                      state = excluded.state,
                      response = excluded.response,
                      recovered = excluded.recovered,
                      failure = excluded.failure,
                      updated_at = excluded.updated_at,
-                     spec = excluded.spec",
+                     spec = excluded.spec,
+                     spec_edited = excluded.spec_edited",
                 params![
                     key,
                     id_text(draft.project_id().as_uuid()),
@@ -148,6 +170,7 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
                     draft.created_at().unix_millis(),
                     draft.updated_at().unix_millis(),
                     draft.spec(),
+                    draft.spec_edited(),
                 ],
             )
             .map_err(storage)?;
@@ -168,9 +191,9 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
         for (position, story) in draft.stories().iter().enumerate() {
             transaction
                 .execute(
-                    "INSERT INTO plan_draft_sections (draft_id, position, title, body)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![key, position as i64, story.title, story.body],
+                    "INSERT INTO plan_draft_sections (draft_id, position, title, body, edited)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![key, position as i64, story.title, story.body, story.edited],
                 )
                 .map_err(storage)?;
         }
@@ -178,8 +201,8 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
             transaction
                 .execute(
                     "INSERT INTO plan_draft_tasks (draft_id, position, title, section_position, priority,
-                                                   estimate_minutes, assignee_id, tags)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                                   estimate_minutes, assignee_id, tags, edited)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         key,
                         position as i64,
@@ -189,6 +212,7 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
                         task.estimate.map(|estimate| i64::from(estimate.minutes())),
                         task.assignee.map(|member| id_text(member.as_uuid())),
                         join_tags(&task.tags),
+                        task.edited,
                     ],
                 )
                 .map_err(storage)?;
@@ -233,25 +257,29 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
         )
     }
 
-    /// Loads the draft, applies the change against the project's current team, and saves it. A change the domain
-    /// refuses is returned as `Rejected`, and nothing is written. Returns `None` when the draft doesn't exist.
-    ///
-    /// The team is read from storage here, so an assignee who was removed can't be assigned by a stale copy of the
-    /// team in the UI.
+    /// Applies one edit. The team is read from storage here, so an assignee who was removed can't be assigned by a
+    /// stale copy of the team in the UI.
     fn apply_edit(
         &self,
         id: PlanDraftId,
         edit: PlanEdit,
         at: Timestamp,
     ) -> RepoResult<Option<PlanDraft>> {
-        let Some(mut draft) = self.find(id)? else {
-            return Ok(None);
-        };
-        let members = self.team_of(draft.project_id())?;
-        draft
-            .apply(edit, &members, at)
-            .map_err(|err| RepoError::Rejected(err.into()))?;
-        looji_domain::PlanDraftRepository::save(self, &draft)?;
-        Ok(Some(draft))
+        self.change_draft(id, |draft, members| draft.apply(edit, members, at))
+    }
+
+    /// Replaces one part of a ready plan, and saves it. Every other part is saved as it was. A part a person edited
+    /// by hand is refused unless `replace_edited` is set.
+    fn apply_refinement(
+        &self,
+        id: PlanDraftId,
+        target: RefineTarget,
+        part: RefinedPart,
+        replace_edited: bool,
+        at: Timestamp,
+    ) -> RepoResult<Option<PlanDraft>> {
+        self.change_draft(id, |draft, members| {
+            draft.refine(target, part, members, replace_edited, at)
+        })
     }
 }

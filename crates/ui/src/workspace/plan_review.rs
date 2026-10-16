@@ -7,11 +7,12 @@
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    PlanDraft, PlanDraftRepository, PlanEdit, Priority, RepoError, TeamMember, TeamMemberId,
-    Timestamp, display_labels, parse_estimate_hours,
+    PlanDraft, PlanDraftRepository, PlanEdit, Priority, RefineTarget, RepoError, TeamMember,
+    TeamMemberId, Timestamp, display_labels, parse_estimate_hours,
 };
 
 use super::fields::text_box;
+use super::plan_refine;
 use super::plan_wizard::PlanWizardDialog;
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
@@ -125,6 +126,13 @@ impl WorkspaceView {
     /// Starts an edit on one piece of the plan. An edit already open is saved first. If that fails, it stays
     /// open with its error, and the new one doesn't start.
     pub(super) fn begin_plan_edit(&mut self, target: Target, cx: &mut Context<Self>) {
+        if self
+            .plan_wizard
+            .as_ref()
+            .is_some_and(PlanWizardDialog::refining)
+        {
+            return;
+        }
         let has_open = self
             .plan_wizard
             .as_ref()
@@ -208,6 +216,14 @@ impl WorkspaceView {
 
     /// A change made by a button. There's no text to keep, so a refusal goes to the notice at the foot.
     fn plan_change(&mut self, edit: PlanEdit, cx: &mut Context<Self>) {
+        // A refinement is replacing a part, so nothing else may change the plan until it's done.
+        if self
+            .plan_wizard
+            .as_ref()
+            .is_some_and(PlanWizardDialog::refining)
+        {
+            return;
+        }
         if let Err(message) = self.apply_plan_edit(edit, cx)
             && let Some(dialog) = self.plan_wizard.as_mut()
         {
@@ -294,6 +310,13 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .plan_wizard
+            .as_ref()
+            .is_some_and(|dialog| dialog.refine.is_some())
+        {
+            return plan_refine::refine_key(self, event, cx);
+        }
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
         let Some(editor) = self
@@ -427,6 +450,25 @@ fn section_heading(text: String, theme: &Theme) -> Div {
         .child(text)
 }
 
+/// The mark on a part a person wrote or changed by hand. Refining that part asks first.
+fn edited_mark(theme: &Theme) -> Div {
+    div()
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .child("Edited by hand")
+}
+
+/// The button that asks for a refinement of one part.
+fn refine_button(
+    id: (&'static str, usize),
+    target: RefineTarget,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    button(id, "Refine", false, theme)
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_refine(target, cx)))
+}
+
 /// The review, drawn over the window in place of the wizard's form. Nothing is drawn when the wizard isn't open.
 pub(super) fn overlay(
     view: &WorkspaceView,
@@ -450,7 +492,22 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.xs)
-        .child(section_heading("Spec".to_string(), theme))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .items_center()
+                .child(section_heading("Spec".to_string(), theme))
+                .children(draft.spec_edited().then(|| edited_mark(theme)))
+                .child(refine_button(
+                    ("review-refine-spec", 0),
+                    RefineTarget::Spec,
+                    theme,
+                    cx,
+                )),
+        )
+        .children(plan_refine::form(dialog, RefineTarget::Spec, theme, cx))
         .child(editable(
             dialog,
             Target::Spec,
@@ -486,6 +543,7 @@ pub(super) fn overlay(
                 .rounded(theme.radius.md)
                 .border_1()
                 .border_color(theme.palette.border_control)
+                .children(story.edited.then(|| edited_mark(theme)))
                 .child(editable(
                     dialog,
                     Target::StoryTitle(index),
@@ -504,13 +562,31 @@ pub(super) fn overlay(
                     theme,
                     cx,
                 ))
-                .child(div().flex().flex_row().justify_end().child(
-                    button(("review-remove-story", index), "Remove story", false, theme).on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.plan_change(PlanEdit::RemoveStory(index), cx)
-                        }),
-                    ),
-                )),
+                .children(plan_refine::form(
+                    dialog,
+                    RefineTarget::Story(index),
+                    theme,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap(theme.spacing.sm)
+                        .child(refine_button(
+                            ("review-refine-story", index),
+                            RefineTarget::Story(index),
+                            theme,
+                            cx,
+                        ))
+                        .child(
+                            button(("review-remove-story", index), "Remove story", false, theme)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.plan_change(PlanEdit::RemoveStory(index), cx)
+                                })),
+                        ),
+                ),
         );
     }
 
@@ -548,12 +624,19 @@ pub(super) fn overlay(
                 .rounded(theme.radius.md)
                 .border_1()
                 .border_color(theme.palette.border_control)
+                .children(task.edited.then(|| edited_mark(theme)))
                 .child(editable(
                     dialog,
                     Target::TaskTitle(index),
                     ("review-task-title", index),
                     task.title.clone(),
                     "Untitled task",
+                    theme,
+                    cx,
+                ))
+                .children(plan_refine::form(
+                    dialog,
+                    RefineTarget::Task(index),
                     theme,
                     cx,
                 ))
@@ -615,6 +698,12 @@ pub(super) fn overlay(
                         .flex_row()
                         .justify_end()
                         .gap(theme.spacing.sm)
+                        .child(refine_button(
+                            ("review-refine-task", index),
+                            RefineTarget::Task(index),
+                            theme,
+                            cx,
+                        ))
                         .child(
                             button(("review-up", index), "Up", false, theme)
                                 .when(index == 0, |b| b.opacity(0.5).cursor_default())
