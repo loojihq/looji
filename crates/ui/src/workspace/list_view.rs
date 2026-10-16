@@ -27,15 +27,9 @@ use crate::theme::Theme;
 
 const ROW_HEIGHT: Pixels = px(36.);
 
-/// Which body the board area shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum ViewMode {
-    #[default]
-    Board,
-    List,
-    Roadmap,
-    Workload,
-}
+/// Which body the board area shows. The views are the domain's, so the saved view and the one on screen are the
+/// same type.
+pub(super) use looji_domain::ProjectView as ViewMode;
 
 /// The list's paging state. `cursors[p]` is where page `p` starts, so the page after the current one is
 /// always `cursors[page + 1]`, taken from the last row shown.
@@ -96,14 +90,18 @@ impl WorkspaceView {
         }
     }
 
+    /// Switches the view. The view being left is recorded, the project's state is saved, and the view entered
+    /// gets its saved scroll position back. Its filters, search, and list page are the same as before, so
+    /// nothing is re-filtered and a deep list page stays where it was.
     pub(super) fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if self.view_mode == mode {
             return;
         }
+        self.capture_scroll(self.view_mode);
         self.view_mode = mode;
-        if mode == ViewMode::List {
-            self.restart_list(cx);
-        }
+        self.pending_scroll = true;
+        self.save_project_view(cx);
+        self.refresh_list(cx);
         cx.notify();
     }
 
@@ -262,25 +260,22 @@ impl WorkspaceView {
 }
 
 /// The Board and List switch in the header.
+/// The view switcher in the header: Board, List, Roadmap, and Workload. The selected one is marked. Each
+/// option can take focus, and the left and right arrows move between them and switch, as a radio group
+/// does. The app can't yet announce the selected option to a screen reader, since GPUI 0.2 has no
+/// accessibility interface on Windows.
 pub(super) fn switch(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let mut row = div().flex().flex_row().gap(theme.spacing.xs);
-    for (index, (mode, label)) in [
-        (ViewMode::Board, "Board"),
-        (ViewMode::List, "List"),
-        (ViewMode::Roadmap, "Roadmap"),
-        (ViewMode::Workload, "Workload"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (index, mode) in ViewMode::ALL.into_iter().enumerate() {
         let selected = view.view_mode == mode;
         row = row.child(
             div()
                 .id(("view-switch", index as u64))
+                .track_focus(&view.view_focus[index])
                 .px(theme.spacing.sm)
                 .py(theme.spacing.xs)
                 .rounded(theme.radius.md)
@@ -292,13 +287,35 @@ pub(super) fn switch(
                 .when(!selected, |button| {
                     button.hover(|style| style.bg(theme.palette.surface_hover))
                 })
-                .child(label)
-                .on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.set_view_mode(mode, cx)),
-                ),
+                .child(view_label(mode))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.set_view_mode(mode, cx);
+                    this.view_focus[index].focus(window);
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    let step: isize = match event.keystroke.key.as_str() {
+                        "left" => -1,
+                        "right" => 1,
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    let next =
+                        (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
+                    this.set_view_mode(ViewMode::ALL[next], cx);
+                    this.view_focus[next].focus(window);
+                })),
         );
     }
     row.into_any_element()
+}
+
+fn view_label(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::Board => "Board",
+        ViewMode::List => "List",
+        ViewMode::Roadmap => "Roadmap",
+        ViewMode::Workload => "Workload",
+    }
 }
 
 /// The list body: the header, one row per task, the column picker when it's open, and the footer.
@@ -314,7 +331,8 @@ pub(super) fn render(
         .flex_col()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll();
+        .overflow_y_scroll()
+        .track_scroll(&view.scroll_list);
     body = body.child(header_row(view, theme, cx));
     for (index, task) in view.task_list.rows.iter().enumerate() {
         body = body.child(row(index, task, view, &entries, theme, cx));

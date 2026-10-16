@@ -20,6 +20,7 @@ mod moves;
 mod panel;
 mod preferences_panel;
 mod project_state;
+mod project_views;
 mod projects;
 mod roadmap;
 mod roadmap_layout;
@@ -113,6 +114,19 @@ pub struct WorkspaceView {
     roadmap: roadmap::RoadmapState,
     /// The workload view's period and whether done tasks count.
     workload: workload_view::WorkloadState,
+    /// Each project's view state, as it was loaded, and the active project's scroll positions. The positions
+    /// are read from the live handles below when the user leaves a view.
+    loaded_view_state: looji_domain::ProjectViewState,
+    view_scroll: std::collections::BTreeMap<String, looji_domain::ScrollOffset>,
+    /// Set when a view was entered or a project loaded, so its scroll positions are put back on the next frame.
+    pending_scroll: bool,
+    scroll_list: ScrollHandle,
+    scroll_roadmap: ScrollHandle,
+    scroll_workload: ScrollHandle,
+    /// One focus handle per view option in the switcher, in order.
+    view_focus: Vec<FocusHandle>,
+    /// Saves the active project when the app quits.
+    quit_subscription: Option<Subscription>,
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
@@ -151,6 +165,16 @@ impl WorkspaceView {
                     list_columns_open: false,
                     roadmap: roadmap::RoadmapState::default(),
                     workload: workload_view::WorkloadState::default(),
+                    loaded_view_state: looji_domain::ProjectViewState::default(),
+                    view_scroll: std::collections::BTreeMap::new(),
+                    pending_scroll: false,
+                    scroll_list: ScrollHandle::new(),
+                    scroll_roadmap: ScrollHandle::new(),
+                    scroll_workload: ScrollHandle::new(),
+                    view_focus: (0..looji_domain::ProjectView::ALL.len())
+                        .map(|_| cx.focus_handle().tab_stop(true))
+                        .collect(),
+                    quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
@@ -163,6 +187,13 @@ impl WorkspaceView {
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
             let focus = view.read(cx).focus_handle.clone();
             focus.focus(window);
+            // The active project's view is saved when the app quits, after the last window has gone.
+            let weak = view.downgrade();
+            let quit = cx.on_app_quit(move |cx| {
+                let _ = weak.update(cx, |view, cx| view.save_on_quit(cx));
+                async {}
+            });
+            view.update(cx, |view, _| view.quit_subscription = Some(quit));
             view
         })
     }
@@ -176,6 +207,8 @@ impl WorkspaceView {
         // Write first; only move the selection once the write has succeeded.
         match SettingsRepository::set_active_workspace(store(cx), id) {
             Ok(()) => {
+                // The project being left keeps its view and scroll, saved before the switch.
+                self.save_project_view(cx);
                 self.list.set_active(id);
                 // The previous workspace's project must not stay selected.
                 self.reload_projects(cx);
@@ -457,7 +490,10 @@ fn window_options(cx: &App) -> WindowOptions {
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.pending_scroll) {
+            self.schedule_scroll_restore(window);
+        }
         let theme = cx.theme().clone();
         let header = match self.projects.active() {
             Some(project) => format!("{} / {}", self.list.active().name(), project.name()),

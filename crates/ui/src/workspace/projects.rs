@@ -57,6 +57,7 @@ impl WorkspaceView {
         }
         self.load_project_filter(cx);
         self.load_list_settings(cx);
+        self.load_project_view(cx);
         self.reload_board(cx);
     }
 
@@ -79,11 +80,13 @@ impl WorkspaceView {
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
+        self.save_project_view(cx);
         self.reset_search();
         self.reset_list_position();
         self.projects.select(id);
         self.load_project_filter(cx);
         self.load_list_settings(cx);
+        self.load_project_view(cx);
         self.reload_board(cx);
         cx.notify();
     }

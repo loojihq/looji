@@ -85,6 +85,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_start_date",
         sql: include_str!("sql/0016_task_start_date.sql"),
     },
+    Migration {
+        version: 17,
+        name: "project_view_state",
+        sql: include_str!("sql/0017_project_view_state.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -491,5 +496,37 @@ mod tests {
         assert_eq!(title, "Write copy");
         assert_eq!(due.as_deref(), Some("2026-10-16"), "the due date is kept");
         assert_eq!(start, None, "existing tasks have no start");
+    }
+
+    #[test]
+    fn a_database_from_before_view_state_keeps_its_projects_and_gets_the_table() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..16]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM projects WHERE id = 'p'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM project_view_state", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "a project with no saved view has no row");
     }
 }

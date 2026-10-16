@@ -7,6 +7,7 @@ mod column;
 mod filter;
 mod list_view;
 mod project;
+mod project_view;
 pub(crate) mod settings;
 mod task;
 pub(crate) mod task_history;

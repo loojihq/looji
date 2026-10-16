@@ -108,3 +108,16 @@ pub trait ListViewRepository {
         view: &crate::list_view::ListView,
     ) -> RepoResult<()>;
 }
+
+/// Which view a project shows and where it was scrolled. A project with no saved row reads as the default.
+pub trait ProjectViewRepository {
+    fn load_view_state(
+        &self,
+        project: ProjectId,
+    ) -> RepoResult<crate::project_view::ProjectViewState>;
+    fn save_view_state(
+        &self,
+        project: ProjectId,
+        state: &crate::project_view::ProjectViewState,
+    ) -> RepoResult<()>;
+}

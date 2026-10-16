@@ -12,6 +12,7 @@ mod ordering;
 mod position;
 pub mod preferences;
 mod project;
+mod project_view;
 pub mod repository;
 mod status;
 mod status_columns;
@@ -44,9 +45,11 @@ pub use preferences::{
 pub use project::{
     MAX_DESCRIPTION_CHARS, Project, ProjectRecord, clean_description, validate_project_name,
 };
+pub use project_view::{ProjectView, ProjectViewState, ScrollOffset, scroll_key};
 pub use repository::{
     ColumnRepository, ListViewRepository, ProjectFilterRepository, ProjectRepository,
-    SettingsRepository, TaskRepository, TeamMemberRepository, WorkspaceRepository,
+    ProjectViewRepository, SettingsRepository, TaskRepository, TeamMemberRepository,
+    WorkspaceRepository,
 };
 pub use status::Status;
 pub use status_columns::{StatusColumn, status_columns};

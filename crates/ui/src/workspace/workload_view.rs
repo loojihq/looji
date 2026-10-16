@@ -120,6 +120,7 @@ pub(super) fn render(
         .size_full()
         .min_h_0()
         .overflow_y_scroll()
+        .track_scroll(&view.scroll_workload)
         .gap(theme.spacing.md)
         .px(theme.spacing.lg)
         .py(theme.spacing.md)

@@ -98,6 +98,7 @@ pub(super) fn render(
         .flex_1()
         .min_h_0()
         .overflow_scroll()
+        .track_scroll(&view.scroll_roadmap)
         .child(header(window, state.scale, theme));
     let overlay_top = HEADER_HEIGHT * 2.;
     let mut rows = div()
