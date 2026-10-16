@@ -23,8 +23,8 @@
 //! extended at that point, and the test table extended with them.
 
 use crate::{
-    error::DomainError, task::Estimate, task_fields::DueDate, working_schedule::WorkingSchedule,
-    working_time::weekday,
+    error::DomainError, status::Status, task::Estimate, task_fields::DueDate, time::Timestamp,
+    working_schedule::WorkingSchedule, working_time::weekday,
 };
 
 /// A wall-clock moment: a calendar day, and the minutes since midnight. 1440 is the end of the day.
@@ -36,6 +36,15 @@ pub struct LocalMoment {
 
 impl LocalMoment {
     pub fn new(day: DueDate, minute: u16) -> Self {
+        Self { day, minute }
+    }
+
+    /// The UTC wall-clock moment of a timestamp. The project zone isn't stored yet, so "now" is read in UTC,
+    /// and this is the one place that decides that.
+    pub fn from_timestamp_utc(at: Timestamp) -> Self {
+        let millis = at.unix_millis();
+        let day = DueDate::from_day_number(millis.div_euclid(86_400_000));
+        let minute = (millis.rem_euclid(86_400_000) / 60_000) as u16;
         Self { day, minute }
     }
 
@@ -106,6 +115,33 @@ pub fn add_working_hours(
     }
     let estimate = Estimate::from_hours(hours)?;
     Ok(add_working_minutes(schedule, start, estimate.minutes()))
+}
+
+/// Whether moving a task from one status to another should set its due date. It should, when the task first
+/// enters In progress, has no due date, and has an estimate of more than zero. A move within one column, or a
+/// task that already has a date, changes nothing. A zero estimate counts as none.
+pub fn schedules_on_move(
+    from: Status,
+    to: Status,
+    due: Option<DueDate>,
+    estimate_minutes: Option<u32>,
+) -> bool {
+    from != to
+        && to == Status::InProgress
+        && due.is_none()
+        && estimate_minutes.is_some_and(|minutes| minutes > 0)
+}
+
+/// Whether a task is in progress without a due date or an estimate, so it should show a hint. Zero counts as
+/// no estimate.
+pub fn needs_estimate_hint(
+    status: Status,
+    due: Option<DueDate>,
+    estimate_minutes: Option<u32>,
+) -> bool {
+    status == Status::InProgress
+        && due.is_none()
+        && estimate_minutes.is_none_or(|minutes| minutes == 0)
 }
 
 #[cfg(test)]

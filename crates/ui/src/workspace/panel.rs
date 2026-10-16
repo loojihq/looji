@@ -340,6 +340,11 @@ pub(super) fn render(
         .due_on()
         .map(|due| due.to_string())
         .unwrap_or_else(|| "No due date".to_string());
+    let needs_hint = looji_domain::needs_estimate_hint(
+        task.status(),
+        task.due_on(),
+        task.estimate().map(|estimate| estimate.minutes()),
+    );
     let mut history = div().flex().flex_col().gap(theme.spacing.xs);
     if panel.history.is_empty() {
         history = history.child(
@@ -440,6 +445,11 @@ pub(super) fn render(
                 .child(format!("Estimate: {estimate}"))
                 .child(format!("Start: {start}"))
                 .child(format!("Due: {due}"))
+                .children(needs_hint.then(|| {
+                    div()
+                        .text_color(theme.palette.text_secondary)
+                        .child("Add an estimate to schedule this task.")
+                }))
                 .child(assignee_row(
                     task.assignee_id(),
                     &members::entries(&view.members),

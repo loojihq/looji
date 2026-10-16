@@ -470,6 +470,11 @@ pub(super) fn card_view<'a>(task: &'a Task, cards: &CardContext) -> CardView<'a>
             .and_then(|due| CalendarDate::new(due.year(), due.month(), due.day())),
         tags: task.tags().to_vec(),
         search: (!cards.terms.is_empty()).then(|| search::hits(task, &cards.terms)),
+        hint: looji_domain::needs_estimate_hint(
+            task.status(),
+            task.due_on(),
+            task.estimate().map(|estimate| estimate.minutes()),
+        ),
     }
 }
 
