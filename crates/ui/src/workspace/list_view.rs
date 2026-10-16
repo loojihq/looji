@@ -33,6 +33,7 @@ pub(super) enum ViewMode {
     #[default]
     Board,
     List,
+    Roadmap,
 }
 
 /// The list's paging state. `cursors[p]` is where page `p` starts, so the page after the current one is
@@ -266,9 +267,13 @@ pub(super) fn switch(
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let mut row = div().flex().flex_row().gap(theme.spacing.xs);
-    for (index, (mode, label)) in [(ViewMode::Board, "Board"), (ViewMode::List, "List")]
-        .into_iter()
-        .enumerate()
+    for (index, (mode, label)) in [
+        (ViewMode::Board, "Board"),
+        (ViewMode::List, "List"),
+        (ViewMode::Roadmap, "Roadmap"),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let selected = view.view_mode == mode;
         row = row.child(

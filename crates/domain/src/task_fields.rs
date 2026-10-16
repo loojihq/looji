@@ -123,6 +123,117 @@ impl DueDate {
     }
 }
 
+impl DueDate {
+    /// Days since 1970-01-01. Whole days, so the difference between two dates is exact, with no time zone
+    /// or daylight saving involved.
+    pub fn day_number(self) -> i64 {
+        // Howard Hinnant's days_from_civil.
+        let year = i64::from(if self.month <= 2 {
+            self.year - 1
+        } else {
+            self.year
+        });
+        let era = year.div_euclid(400);
+        let year_of_era = year - era * 400;
+        let shifted_month = i64::from(if self.month > 2 {
+            self.month - 3
+        } else {
+            self.month + 9
+        });
+        let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(self.day) - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
+    }
+
+    /// The calendar day that is `days` days after 1970-01-01.
+    pub fn from_day_number(days: i64) -> Self {
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let day_of_era = z - era * 146_097;
+        let year_of_era =
+            (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let shifted = (5 * day_of_year + 2) / 153;
+        let day = (day_of_year - (153 * shifted + 2) / 5 + 1) as u32;
+        let month = if shifted < 10 {
+            shifted + 3
+        } else {
+            shifted - 9
+        } as u32;
+        let year = (year_of_era + era * 400) + i64::from(month <= 2);
+        Self {
+            year: year as i32,
+            month,
+            day,
+        }
+    }
+
+    /// The day `count` days later, or earlier when `count` is negative.
+    pub fn plus_days(self, count: i64) -> Self {
+        Self::from_day_number(self.day_number() + count)
+    }
+
+    /// Today in UTC. Dates are stored without a zone, so the UTC day is the one the app uses.
+    pub fn today_utc() -> Self {
+        let days = crate::time::Timestamp::now()
+            .unix_millis()
+            .div_euclid(86_400_000);
+        Self::from_day_number(days)
+    }
+}
+
+#[cfg(test)]
+mod day_number_tests {
+    use super::DueDate;
+
+    fn day(year: i32, month: u32, day: u32) -> DueDate {
+        DueDate::new(year, month, day).unwrap()
+    }
+
+    #[test]
+    fn the_epoch_is_day_zero_and_round_trips() {
+        assert_eq!(day(1970, 1, 1).day_number(), 0);
+        assert_eq!(DueDate::from_day_number(0), day(1970, 1, 1));
+    }
+
+    #[test]
+    fn consecutive_days_are_one_apart_across_months_and_years() {
+        assert_eq!(
+            day(2026, 10, 16).day_number() + 3,
+            day(2026, 10, 19).day_number()
+        );
+        assert_eq!(day(2026, 10, 31).plus_days(1), day(2026, 11, 1));
+        assert_eq!(day(2026, 12, 31).plus_days(1), day(2027, 1, 1));
+    }
+
+    #[test]
+    fn leap_days_exist_only_in_leap_years() {
+        assert_eq!(day(2028, 2, 28).plus_days(1), day(2028, 2, 29));
+        assert_eq!(day(2028, 2, 29).plus_days(1), day(2028, 3, 1));
+        assert_eq!(day(2026, 2, 28).plus_days(1), day(2026, 3, 1));
+        assert_eq!(
+            day(2100, 2, 28).plus_days(1),
+            day(2100, 3, 1),
+            "2100 is not a leap year"
+        );
+    }
+
+    #[test]
+    fn the_day_number_matches_the_calendar_for_many_days() {
+        let mut current = day(1999, 12, 25);
+        for _ in 0..3000 {
+            assert_eq!(DueDate::from_day_number(current.day_number()), current);
+            current = current.plus_days(1);
+        }
+    }
+
+    #[test]
+    fn days_before_the_epoch_are_negative() {
+        assert_eq!(day(1969, 12, 31).day_number(), -1);
+        assert_eq!(DueDate::from_day_number(-1), day(1969, 12, 31));
+    }
+}
+
 impl fmt::Display for DueDate {
     /// `YYYY-MM-DD`, which is also the stored form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

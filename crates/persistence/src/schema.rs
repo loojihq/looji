@@ -80,6 +80,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "project_list_view",
         sql: include_str!("sql/0015_project_list_view.sql"),
     },
+    Migration {
+        version: 16,
+        name: "task_start_date",
+        sql: include_str!("sql/0016_task_start_date.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -453,5 +458,38 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rows, 0, "a project with no saved settings has no row");
+    }
+
+    #[test]
+    fn tasks_from_before_the_start_date_keep_their_data_with_no_start() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..15]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, due_on, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a0', NULL, NULL, '2026-10-16', 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let (title, due, start): (String, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT title, due_on, start_on FROM tasks WHERE id = 't'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Write copy");
+        assert_eq!(due.as_deref(), Some("2026-10-16"), "the due date is kept");
+        assert_eq!(start, None, "existing tasks have no start");
     }
 }

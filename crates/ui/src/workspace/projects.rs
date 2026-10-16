@@ -10,7 +10,7 @@ use looji_domain::{
 use super::{
     WorkspaceView, board, board_search, filter_bar, list_view,
     project_state::{ProjectList, load_board},
-    store, typed_text,
+    roadmap, store, typed_text,
 };
 use crate::theme::Theme;
 
@@ -303,6 +303,11 @@ pub(super) fn content(
                         .into_any_element();
                     (column, shown.len(), notice)
                 }
+                list_view::ViewMode::Roadmap => (
+                    roadmap::render(view, theme, cx),
+                    board_search::shown_tasks(view).len(),
+                    None,
+                ),
                 list_view::ViewMode::List => (
                     list_view::render(view, theme, cx),
                     view.task_list.total as usize,

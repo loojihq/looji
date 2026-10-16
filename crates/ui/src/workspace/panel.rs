@@ -332,6 +332,10 @@ pub(super) fn render(
         .estimate()
         .map(|estimate| format!("{} minutes", estimate.minutes()))
         .unwrap_or_else(|| "No estimate".to_string());
+    let start = task
+        .start_on()
+        .map(|start| start.to_string())
+        .unwrap_or_else(|| "No start date".to_string());
     let due = task
         .due_on()
         .map(|due| due.to_string())
@@ -434,6 +438,7 @@ pub(super) fn render(
                 .flex_col()
                 .gap(theme.spacing.xs)
                 .child(format!("Estimate: {estimate}"))
+                .child(format!("Start: {start}"))
                 .child(format!("Due: {due}"))
                 .child(assignee_row(
                     task.assignee_id(),

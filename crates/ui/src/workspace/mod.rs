@@ -21,6 +21,8 @@ mod panel;
 mod preferences_panel;
 mod project_state;
 mod projects;
+mod roadmap;
+mod roadmap_layout;
 mod search;
 mod sidebar;
 mod state;
@@ -106,6 +108,8 @@ pub struct WorkspaceView {
     /// The sort and the shown columns of the selected project's list, and whether the column picker is open.
     list_settings: looji_domain::ListView,
     list_columns_open: bool,
+    /// The roadmap's scale, grouping, and the day it is centred on.
+    roadmap: roadmap::RoadmapState,
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
@@ -142,6 +146,7 @@ impl WorkspaceView {
                     task_list: list_view::ListState::default(),
                     list_settings: looji_domain::ListView::default(),
                     list_columns_open: false,
+                    roadmap: roadmap::RoadmapState::default(),
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)

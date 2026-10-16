@@ -39,6 +39,9 @@ pub fn changed_fields(before: &Task, after: &Task) -> Vec<&'static str> {
     if before.estimate() != after.estimate() {
         changed.push("estimate");
     }
+    if before.start_on() != after.start_on() {
+        changed.push("start");
+    }
     if before.due_on() != after.due_on() {
         changed.push("due");
     }

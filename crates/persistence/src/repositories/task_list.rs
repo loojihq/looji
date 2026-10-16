@@ -190,10 +190,11 @@ fn sort_value_of(value: Value) -> Option<SortValue> {
     }
 }
 
-/// A task row, with the sort value the page was ordered by, which the next cursor needs.
+/// A task row, with the sort value the page was ordered by, which the next cursor needs. The value is the
+/// column after the task columns.
 fn read_with_key(row: &Row<'_>) -> RepoResult<(TaskRecord, Option<SortValue>)> {
     let record = read_task(row)?;
-    let key: Value = row.get(12).map_err(storage)?;
+    let key: Value = row.get(13).map_err(storage)?;
     Ok((record, sort_value_of(key)))
 }
 

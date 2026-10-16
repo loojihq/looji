@@ -275,6 +275,7 @@ fn apply(task: &mut Task, valid: &Validated) -> Result<(), DomainError> {
     task.set_estimate(valid.estimate);
     task.set_priority(valid.priority);
     task.assign(valid.assignee);
+    task.set_start_on(valid.start);
     task.set_due_on(valid.due);
     task.set_tags(valid.tags.clone());
     Ok(())
@@ -315,6 +316,7 @@ pub(super) fn overlay(
         active == Field::Estimate,
         theme,
     );
+    let start_box = text_box(&values.start, "YYYY-MM-DD", active == Field::Start, theme);
     let due_box = text_box(&values.due, "YYYY-MM-DD", active == Field::Due, theme);
 
     let mut chips = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
@@ -392,6 +394,12 @@ pub(super) fn overlay(
             theme,
         ))
         .child(field(
+            "Start date",
+            errors.start.as_deref(),
+            focusable("field-start", Field::Start, start_box, cx),
+            theme,
+        ))
+        .child(field(
             "Due date",
             errors.due.as_deref(),
             focusable("field-due", Field::Due, due_box, cx),
@@ -421,6 +429,14 @@ pub(super) fn overlay(
             focusable("field-tags", Field::Tags, tags_body, cx),
             theme,
         ))
+        .when_some(form.schedule_warning(), |panel, message| {
+            panel.child(
+                div()
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.danger)
+                    .child(message),
+            )
+        })
         .when_some(form.save_error.clone(), |panel, message| {
             panel.child(
                 div()

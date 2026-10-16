@@ -25,17 +25,19 @@ pub enum Field {
     Priority,
     Assignee,
     Estimate,
+    Start,
     Due,
     Tags,
 }
 
 impl Field {
-    const ORDER: [Field; 7] = [
+    const ORDER: [Field; 8] = [
         Field::Title,
         Field::Description,
         Field::Priority,
         Field::Assignee,
         Field::Estimate,
+        Field::Start,
         Field::Due,
         Field::Tags,
     ];
@@ -67,6 +69,8 @@ pub struct Values {
     /// The member the task is assigned to. `None` is Unassigned.
     pub assignee: Option<TeamMemberId>,
     pub estimate: String,
+    /// The day work starts, typed as YYYY-MM-DD. Blank means none.
+    pub start: String,
     pub due: String,
     /// Committed tags, as chips.
     pub tags: Vec<String>,
@@ -88,6 +92,7 @@ impl Values {
 pub struct Errors {
     pub title: Option<String>,
     pub estimate: Option<String>,
+    pub start: Option<String>,
     pub due: Option<String>,
     pub tags: Option<String>,
 }
@@ -100,6 +105,7 @@ pub struct Validated {
     pub priority: Option<Priority>,
     pub assignee: Option<TeamMemberId>,
     pub estimate: Option<Estimate>,
+    pub start: Option<DueDate>,
     pub due: Option<DueDate>,
     pub tags: Vec<String>,
 }
@@ -131,6 +137,10 @@ impl TaskForm {
             estimate: task
                 .estimate()
                 .map(|estimate| format_hours(estimate.minutes()))
+                .unwrap_or_default(),
+            start: task
+                .start_on()
+                .map(|start| start.to_string())
                 .unwrap_or_default(),
             due: task.due_on().map(|due| due.to_string()).unwrap_or_default(),
             tags: task.tags().to_vec(),
@@ -176,6 +186,13 @@ impl TaskForm {
                 None
             }
         };
+        let start = match parse_due_date(&self.values.start) {
+            Ok(start) => Some(start),
+            Err(err) => {
+                self.errors.start = Some(err.to_string());
+                None
+            }
+        };
         let due = match parse_due_date(&self.values.due) {
             Ok(due) => Some(due),
             Err(err) => {
@@ -200,8 +217,19 @@ impl TaskForm {
             priority: self.values.priority,
             assignee: self.values.assignee,
             estimate: estimate?,
+            start: start?,
             due: due?,
             tags: tags?,
+        })
+    }
+
+    /// A warning, not an error, when the start is after the due date. Saving still works, and the roadmap shows
+    /// the task flagged, so the user can correct the dates. Nothing is swapped.
+    pub fn schedule_warning(&self) -> Option<String> {
+        let start = parse_due_date(&self.values.start).ok().flatten()?;
+        let due = parse_due_date(&self.values.due).ok().flatten()?;
+        (due < start).then(|| {
+            "The due date is before the start date. The roadmap will flag this task.".to_string()
         })
     }
 
@@ -214,7 +242,7 @@ impl TaskForm {
                 .chars()
                 .filter(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
                 .collect(),
-            Field::Due => text
+            Field::Due | Field::Start => text
                 .chars()
                 .filter(|c| c.is_ascii_digit() || *c == '-')
                 .collect(),
@@ -224,6 +252,7 @@ impl TaskForm {
             Field::Title => self.values.title.push_str(&accepted),
             Field::Description => self.values.description.push_str(&accepted),
             Field::Estimate => self.values.estimate.push_str(&accepted),
+            Field::Start => self.values.start.push_str(&accepted),
             Field::Due => self.values.due.push_str(&accepted),
             Field::Tags => {
                 // A comma ends the tag being typed.
@@ -255,6 +284,9 @@ impl TaskForm {
             }
             Field::Estimate => {
                 self.values.estimate.pop();
+            }
+            Field::Start => {
+                self.values.start.pop();
             }
             Field::Due => {
                 self.values.due.pop();
@@ -355,7 +387,9 @@ pub fn format_hours(minutes: u32) -> String {
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
-    use looji_domain::{Estimate, Position, Priority, ProjectId, Status, Task, TeamMemberId};
+    use looji_domain::{
+        DueDate, Estimate, Position, Priority, ProjectId, Status, Task, TeamMemberId,
+    };
 
     use super::{Field, Mode, TaskForm, format_hours};
 
@@ -442,6 +476,26 @@ mod tests {
         form.focus(Field::Estimate);
         form.type_text("-2a.5");
         assert_eq!(form.values.estimate, "2.5");
+    }
+
+    #[test]
+    fn a_due_date_before_the_start_is_a_warning_and_still_saves() {
+        let mut form = filled();
+        form.values.start = "2026-10-18".to_string();
+        form.values.due = "2026-10-16".to_string();
+        assert!(form.schedule_warning().is_some());
+        let valid = form.validate().expect("the warning does not block saving");
+        assert_eq!(valid.start, Some(DueDate::new(2026, 10, 18).unwrap()));
+        assert_eq!(valid.due, Some(DueDate::new(2026, 10, 16).unwrap()));
+    }
+
+    #[test]
+    fn no_warning_without_both_dates_or_when_the_order_is_right() {
+        let mut form = filled();
+        form.values.start = "2026-10-16".to_string();
+        assert!(form.schedule_warning().is_none(), "one date is not a range");
+        form.values.due = "2026-10-16".to_string();
+        assert!(form.schedule_warning().is_none(), "a one-day task is fine");
     }
 
     #[test]
