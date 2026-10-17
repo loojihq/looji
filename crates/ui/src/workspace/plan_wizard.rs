@@ -163,6 +163,8 @@ impl WorkspaceView {
             notice,
             frame: 0,
         });
+        let main = cx.entity();
+        cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Plan));
         self.plan_focus[0].focus(window);
         cx.notify();
     }
@@ -650,7 +652,7 @@ pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> imp
 }
 
 /// The wizard, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     window: &Window,
@@ -658,7 +660,7 @@ pub(super) fn overlay(
 ) -> Option<AnyElement> {
     let dialog = view.plan_wizard.as_ref()?;
     if matches!(dialog.wizard.phase(), WizardPhase::Done) {
-        return plan_review::overlay(view, theme, cx);
+        return plan_review::panel(view, theme, cx);
     }
     let focus = &view.plan_focus;
     let focused = |control: Control| {
@@ -857,13 +859,9 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(520.))
+        .w_full()
         .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -920,19 +918,8 @@ pub(super) fn overlay(
                 .child(primary),
         );
 
-    let mut layer = div()
-        .id("plan-backdrop")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.palette.scrim)
-        .occlude()
-        .on_click(
-            cx.listener(|this, _: &ClickEvent, window, cx| this.request_plan_close(window, cx)),
-        )
-        .child(panel);
+    // The panel fills the window. An unsaved-changes prompt is drawn over it, in the same window.
+    let mut layer = div().relative().size_full().child(panel);
     if dialog.confirming_discard {
         layer = layer.child(discard_prompt(theme, cx));
     }

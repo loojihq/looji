@@ -12,7 +12,7 @@ use looji_domain::{
 };
 
 use super::card::tooltip;
-use super::fields::{chip, field, member_mark, segment, text_box};
+use super::fields::{chip, field, member_mark, text_box};
 use super::members;
 use super::task_form::{Field, Mode, TaskForm, Validated};
 use super::{WorkspaceView, store, typed_text};
@@ -25,17 +25,38 @@ pub(super) struct TaskDialog {
     pub confirming: bool,
     /// The assignee list is open under its field.
     pub assignee_open: bool,
+    /// The priority menu is open under its select.
+    pub priority_open: bool,
+    /// The calendar is open under a date field.
+    pub calendar: Option<super::date_picker::Calendar>,
     pub status: Status,
 }
 
 impl WorkspaceView {
-    /// Opens the dialog for a new task, or for an existing task on the board.
+    /// Opens the form for a new task, inline at the top of the board, or the editor window for an existing
+    /// task. The New task button closes the inline form again.
     pub(super) fn open_task_dialog(
         &mut self,
         mode: Mode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let creating = matches!(mode, Mode::Create);
+        if creating {
+            if self
+                .task_dialog
+                .as_ref()
+                .is_some_and(|dialog| matches!(dialog.form.mode, Mode::Create))
+            {
+                return self.request_task_dialog_close(cx);
+            }
+            if self.projects.active().is_none() {
+                self.status = Some("Create a project first.".to_string());
+                return cx.notify();
+            }
+            // The inline form lives on the board, so a screen that stands in for the board gives way.
+            self.screen = None;
+        }
         let form = match mode {
             Mode::Create => TaskForm::create(),
             Mode::Edit(id) => match self.board.iter().find(|task| task.id() == id) {
@@ -46,27 +67,23 @@ impl WorkspaceView {
                 }
             },
         };
-        // New tasks go into To do when it's shown, otherwise the first shown column.
-        let status = self
-            .projects
-            .active()
-            .map(|project| project.visible_statuses())
-            .and_then(|visible| {
-                visible
-                    .iter()
-                    .copied()
-                    .find(|status| *status == Status::Todo)
-                    .or_else(|| visible.first().copied())
-            })
-            .unwrap_or(Status::Todo);
+        let status = self.new_task_status();
         // Refresh the members on open, so the list is current even if the team changed since.
         self.reload_members(cx);
         self.task_dialog = Some(TaskDialog {
             form,
             confirming: false,
             assignee_open: false,
+            priority_open: false,
+            calendar: None,
             status,
         });
+        if !creating {
+            let main = cx.entity();
+            cx.defer(move |cx| {
+                super::dialog_window::open(cx, main, super::dialog_window::Kind::Task)
+            });
+        }
         self.focus_handle.focus(window);
         cx.notify();
     }
@@ -201,6 +218,8 @@ impl WorkspaceView {
         if let Some(dialog) = self.task_dialog.as_mut() {
             dialog.form.focus(Field::Assignee);
             dialog.assignee_open = !dialog.assignee_open;
+            dialog.priority_open = false;
+            dialog.calendar = None;
             cx.notify();
         }
     }
@@ -268,6 +287,23 @@ impl WorkspaceView {
     }
 }
 
+impl WorkspaceView {
+    /// New tasks go into To do when it's shown, otherwise the first shown column.
+    pub(super) fn new_task_status(&self) -> Status {
+        self.projects
+            .active()
+            .map(|project| project.visible_statuses())
+            .and_then(|visible| {
+                visible
+                    .iter()
+                    .copied()
+                    .find(|status| *status == Status::Todo)
+                    .or_else(|| visible.first().copied())
+            })
+            .unwrap_or(Status::Todo)
+    }
+}
+
 /// Writes the validated values onto a task.
 fn apply(task: &mut Task, valid: &Validated) -> Result<(), DomainError> {
     task.rename(&valid.title)?;
@@ -281,33 +317,26 @@ fn apply(task: &mut Task, valid: &Validated) -> Result<(), DomainError> {
     Ok(())
 }
 
-/// The dialog and its discard prompt, drawn over the window. Nothing is drawn when no dialog is
-/// open.
-pub(super) fn overlay(
+/// The dialog's panel and its discard prompt. The dialog window draws the header with the title and
+/// close button. Nothing is drawn when no dialog is open.
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.task_dialog.as_ref()?;
     let form = &dialog.form;
-    let heading = match form.mode {
-        Mode::Create => "New task",
-        Mode::Edit(_) => "Edit task",
-    };
     let values = &form.values;
     let active = form.active;
     let errors = &form.errors;
+    // A new task asks only for what it needs. Its description and tags are added in the editor later. The
+    // editor's window shows every field, stacked in one column.
+    let wide = matches!(form.mode, Mode::Create);
 
     let title_box = text_box(
         &values.title,
         "What needs doing?",
         active == Field::Title,
-        theme,
-    );
-    let description_box = text_box(
-        &values.description,
-        "Optional",
-        active == Field::Description,
         theme,
     );
     let estimate_box = text_box(
@@ -316,235 +345,226 @@ pub(super) fn overlay(
         active == Field::Estimate,
         theme,
     );
-    let start_box = text_box(&values.start, "YYYY-MM-DD", active == Field::Start, theme);
-    let due_box = text_box(&values.due, "YYYY-MM-DD", active == Field::Due, theme);
-
-    let mut chips = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
-    for tag in &values.tags {
-        chips = chips.child(chip(tag, theme));
-    }
-    let tag_draft = text_box(
-        &values.tag_draft,
-        "Type a tag, then comma or Enter",
-        active == Field::Tags,
+    let title = field(
+        "Title",
+        errors.title.as_deref(),
+        focusable("field-title", Field::Title, title_box, cx),
         theme,
     );
-    let tags_body = div()
+    let priority = field(
+        "Priority",
+        None,
+        focusable(
+            "field-priority",
+            Field::Priority,
+            priority_select(values.priority, dialog.priority_open, theme, cx),
+            cx,
+        ),
+        theme,
+    );
+    let assignee = field(
+        "Assignee",
+        None,
+        focusable(
+            "field-assignee",
+            Field::Assignee,
+            assignee_select(
+                values.assignee,
+                dialog.assignee_open,
+                &members::entries(&view.members),
+                theme,
+                cx,
+            ),
+            cx,
+        ),
+        theme,
+    );
+    let start = field(
+        "Start",
+        errors.start.as_deref(),
+        super::date_picker::date_field(Field::Start, &values.start, dialog.calendar, theme, cx),
+        theme,
+    );
+    let due = field(
+        "Due",
+        errors.due.as_deref(),
+        super::date_picker::date_field(Field::Due, &values.due, dialog.calendar, theme, cx),
+        theme,
+    );
+    let estimate = field(
+        "Estimate (hours)",
+        errors.estimate.as_deref(),
+        focusable("field-estimate", Field::Estimate, estimate_box, cx),
+        theme,
+    );
+    let notes = div()
         .flex()
         .flex_col()
         .gap(theme.spacing.xs)
-        .child(chips)
-        .child(tag_draft);
-
-    let priority_options = [
-        ("None", None),
-        ("Low", Some(Priority::Low)),
-        ("Medium", Some(Priority::Medium)),
-        ("High", Some(Priority::High)),
-    ];
-    let mut priority_row = div().flex().flex_row().gap(theme.spacing.xs);
-    for (index, (label, value)) in priority_options.into_iter().enumerate() {
-        let selected = values.priority == value;
-        priority_row = priority_row.child(
-            segment(selected, theme)
-                .id(("priority", index as u64))
-                .child(label)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.set_task_priority(value, cx)
-                })),
+        .children(form.schedule_warning().map(|message| {
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.danger)
+                .child(message)
+        }))
+        .children(form.save_error.clone().map(|message| {
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.danger)
+                .child(message)
+        }));
+    let footer = div()
+        .flex()
+        .flex_row()
+        .justify_end()
+        .gap(theme.spacing.sm)
+        .child(
+            crate::components::button(
+                "task-cancel",
+                "Cancel",
+                crate::components::Variant::Ghost,
+                theme,
+            )
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.request_task_dialog_close(cx)),
+            ),
+        )
+        .child(
+            crate::components::button(
+                "task-save",
+                "Save",
+                crate::components::Variant::Primary,
+                theme,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_task_dialog(cx))),
         );
-    }
 
-    let project = view
-        .projects
-        .active()
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
+    let body = if wide {
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.sm)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(theme.spacing.sm)
+                    .child(div().flex_1().min_w_0().child(title))
+                    .child(div().w(px(150.)).flex_none().child(priority))
+                    .child(div().w(px(200.)).flex_none().child(assignee)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_end()
+                    .gap(theme.spacing.sm)
+                    .child(div().w(px(170.)).flex_none().child(start))
+                    .child(div().w(px(170.)).flex_none().child(due))
+                    .child(div().w(px(150.)).flex_none().child(estimate))
+                    .child(div().flex_1())
+                    .child(footer),
+            )
+            .child(notes)
+    } else {
+        let description_box = text_box(
+            &values.description,
+            "Optional",
+            active == Field::Description,
+            theme,
+        );
+        let mut chips = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
+        for tag in &values.tags {
+            chips = chips.child(chip(tag, theme));
+        }
+        let tag_draft = text_box(
+            &values.tag_draft,
+            "Type a tag, then comma or Enter",
+            active == Field::Tags,
+            theme,
+        );
+        let tags_body = div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.xs)
+            .child(chips)
+            .child(tag_draft);
+        let description = field(
+            "Description",
+            None,
+            focusable("field-description", Field::Description, description_box, cx),
+            theme,
+        );
+        let tags = field(
+            "Tags",
+            errors.tags.as_deref(),
+            focusable("field-tags", Field::Tags, tags_body, cx),
+            theme,
+        );
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.sm)
+            .child(title)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(theme.spacing.sm)
+                    .child(div().flex_1().min_w_0().child(priority))
+                    .child(div().flex_1().min_w_0().child(assignee)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(theme.spacing.sm)
+                    .child(div().flex_1().min_w_0().child(start))
+                    .child(div().flex_1().min_w_0().child(due))
+                    .child(div().flex_1().min_w_0().child(estimate)),
+            )
+            .child(description)
+            .child(tags)
+            .child(notes)
+            .child(div().flex().flex_row().justify_end().child(footer))
+    };
 
     let panel = div()
         .id("task-panel")
         .flex()
         .flex_col()
-        .gap(theme.spacing.md)
-        .w(px(520.))
-        .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
-        .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
+        .w_full()
+        .p(theme.spacing.md)
+        // A press on the form closes any open menu or calendar. Presses on a menu stay with it.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_task_menus(cx)),
+        )
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_start()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .text_size(theme.typography.caption)
-                                .text_color(theme.palette.text_secondary)
-                                .truncate()
-                                .child(project),
-                        )
-                        .child(
-                            div()
-                                .mt(theme.spacing.xs)
-                                .text_size(theme.typography.heading)
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(heading),
-                        ),
-                )
-                .child(
-                    crate::components::icon_button("task-close", "x", theme).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| this.request_task_dialog_close(cx),
-                    )),
-                ),
-        )
-        .child(crate::components::section_label("Details", theme))
-        .child(field(
-            "Title (required)",
-            errors.title.as_deref(),
-            focusable("field-title", Field::Title, title_box, cx),
-            theme,
-        ))
-        .child(field(
-            "Description",
-            None,
-            focusable("field-description", Field::Description, description_box, cx),
-            theme,
-        ))
-        .child(field(
-            "Priority",
-            None,
-            focusable("field-priority", Field::Priority, priority_row, cx),
-            theme,
-        ))
-        .child(crate::components::section_label("Schedule", theme))
-        .child(field(
-            "Estimate, in hours",
-            errors.estimate.as_deref(),
-            focusable("field-estimate", Field::Estimate, estimate_box, cx),
-            theme,
-        ))
-        // The two dates sit side by side, as in the design.
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(theme.spacing.md)
-                .child(div().flex_1().min_w_0().child(field(
-                    "Start date",
-                    errors.start.as_deref(),
-                    focusable("field-start", Field::Start, start_box, cx),
-                    theme,
-                )))
-                .child(div().flex_1().min_w_0().child(field(
-                    "Due date",
-                    errors.due.as_deref(),
-                    focusable("field-due", Field::Due, due_box, cx),
-                    theme,
-                ))),
-        )
-        .child(crate::components::section_label("People and labels", theme))
-        .child(field(
-            "Assignee",
-            None,
-            focusable(
-                "field-assignee",
-                Field::Assignee,
-                assignee_dropdown(
-                    values.assignee,
-                    dialog.assignee_open,
-                    active == Field::Assignee,
-                    &members::entries(&view.members),
-                    theme,
-                    cx,
-                ),
-                cx,
-            ),
-            theme,
-        ))
-        .child(field(
-            "Tags",
-            errors.tags.as_deref(),
-            focusable("field-tags", Field::Tags, tags_body, cx),
-            theme,
-        ))
-        .when_some(form.schedule_warning(), |panel, message| {
-            panel.child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.danger)
-                    .child(message),
-            )
-        })
-        .when_some(form.save_error.clone(), |panel, message| {
-            panel.child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.danger)
-                    .child(message),
-            )
-        })
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .justify_end()
-                .gap(theme.spacing.sm)
-                .pt(theme.spacing.md)
-                .border_t_1()
-                .border_color(theme.palette.border)
-                .child(
-                    crate::components::button(
-                        "task-cancel",
-                        "Cancel",
-                        crate::components::Variant::Ghost,
-                        theme,
-                    )
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.request_task_dialog_close(cx)
-                        }),
-                    ),
-                )
-                .child(
-                    crate::components::button(
-                        "task-save",
-                        "Save",
-                        crate::components::Variant::Primary,
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_task_dialog(cx))),
-                ),
-        );
+        .child(body);
 
-    let backdrop = div()
-        .id("task-backdrop")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.palette.scrim)
-        .occlude()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.request_task_dialog_close(cx)))
-        .child(panel);
-
-    let mut layers = div().absolute().inset_0().child(backdrop);
+    // The panel fills its space. The discard prompt is drawn over it, in the same place.
+    let mut layer = div().relative().size_full().child(panel);
     if dialog.confirming {
-        layers = layers.child(discard_prompt(theme, cx));
+        layer = layer.child(discard_prompt(theme, cx));
     }
-    Some(layers.into_any_element())
+    Some(layer.into_any_element())
 }
 
-/// Makes a field's body clickable: a click makes that field the active one.
+/// The new-task form for the project header. Nothing is drawn unless a new task is being written.
+pub(super) fn new_task_form(
+    view: &WorkspaceView,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> Option<AnyElement> {
+    let dialog = view.task_dialog.as_ref()?;
+    if !matches!(dialog.form.mode, Mode::Create) {
+        return None;
+    }
+    panel(view, theme, cx)
+}
+
 fn focusable(
     id: &'static str,
     field: Field,
@@ -560,99 +580,152 @@ fn focusable(
         .child(body)
 }
 
-/// The assignee dropdown: the current choice, and when open, the choices under it. The first choice is
-/// Unassigned, then each member, shown with the same mark and label as on the card.
-fn assignee_dropdown(
+/// The priority choices, in the order the menu lists them.
+const PRIORITY_CHOICES: [(&str, Option<Priority>); 4] = [
+    ("None", None),
+    ("Low", Some(Priority::Low)),
+    ("Medium", Some(Priority::Medium)),
+    ("High", Some(Priority::High)),
+];
+
+fn priority_label(priority: Option<Priority>) -> &'static str {
+    match priority {
+        None => "None",
+        Some(Priority::Low) => "Low",
+        Some(Priority::Medium) => "Medium",
+        Some(Priority::High) => "High",
+    }
+}
+
+/// The priority select, as the filter bar's selects are: the choice in a small control, and a menu that
+/// floats right under it when it's open, so opening it moves nothing.
+fn priority_select(
+    selected: Option<Priority>,
+    open: bool,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let trigger = crate::components::select("task-priority", priority_label(selected), open, theme)
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_task_priority_list(cx)));
+    // Presses on the select and its menu stay with them, so the form doesn't close the menu first.
+    let mut item = div()
+        .relative()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(trigger);
+    if open {
+        let rows: Vec<AnyElement> = PRIORITY_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(index, (label, value))| {
+                let value = *value;
+                crate::components::dropdown_row(
+                    ("task-priority-option", index as u64),
+                    label,
+                    selected == value,
+                    false,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.choose_task_priority(value, cx)
+                }))
+                .into_any_element()
+            })
+            .collect();
+        item = item.child(
+            deferred(crate::components::dropdown_menu(
+                "task-priority-menu",
+                rows,
+                theme,
+            ))
+            .with_priority(1),
+        );
+    }
+    item.into_any_element()
+}
+
+/// The assignee select: the current choice, and when open, a menu of the members under it. The first
+/// choice is Unassigned, then each member, shown with the same mark and label as on the card.
+fn assignee_select(
     selected: Option<TeamMemberId>,
     open: bool,
-    active: bool,
     entries: &[members::Entry],
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
-) -> Div {
-    let chosen = selected.and_then(|id| entries.iter().find(|entry| entry.id == id));
-    let shown = match (selected, chosen) {
-        (None, _) => div()
-            .text_color(theme.palette.text_secondary)
-            .child("Unassigned")
-            .into_any_element(),
-        (Some(_), Some(entry)) => div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(theme.spacing.sm)
-            .child(member_mark(&entry.initials, entry.colour, px(22.), theme))
-            .child(entry.label.clone())
-            .into_any_element(),
-        // The member was removed after the dialog opened. The choice stays visible, so the save's
-        // message has something to point at.
-        (Some(_), None) => div()
-            .text_color(theme.palette.danger)
-            .child("No longer on the team. Pick someone else.")
-            .into_any_element(),
+) -> AnyElement {
+    let label = match selected {
+        None => "Unassigned".to_string(),
+        Some(id) => entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.label.clone())
+            // The member was removed after the form opened. The save's message says so.
+            .unwrap_or_else(|| "No longer on the team".to_string()),
     };
-    let trigger = div()
-        .id("task-assignee-toggle")
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .min_h(px(32.))
-        .px(theme.spacing.sm)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(if active {
-            theme.palette.accent
-        } else {
-            theme.palette.border_control
-        })
-        .bg(theme.palette.surface)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .child(shown)
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(if open { "Close" } else { "Change" }),
-        )
+    let trigger = crate::components::select("task-assignee", &label, open, theme)
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_task_assignee_list(cx)));
-
-    let mut column = div().flex().flex_col().gap(theme.spacing.xs).child(trigger);
+    let mut item = div()
+        .relative()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(trigger);
     if open {
-        let mut options = div()
-            .id("assignee-options")
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.xs)
-            .p(theme.spacing.xs)
-            .max_h(px(180.))
-            .overflow_y_scroll()
-            .rounded(theme.radius.md)
-            .border_1()
-            .border_color(theme.palette.border_control)
-            .bg(theme.palette.surface_raised);
-        options = options.child(assignee_option(
-            0,
-            None,
-            None,
-            selected.is_none(),
-            theme,
-            cx,
-        ));
+        let mut rows =
+            vec![assignee_option(0, None, None, selected.is_none(), theme, cx).into_any_element()];
         for (index, entry) in entries.iter().enumerate() {
-            options = options.child(assignee_option(
-                index + 1,
-                Some(entry.id),
-                Some(entry),
-                selected == Some(entry.id),
-                theme,
-                cx,
-            ));
+            rows.push(
+                assignee_option(
+                    index + 1,
+                    Some(entry.id),
+                    Some(entry),
+                    selected == Some(entry.id),
+                    theme,
+                    cx,
+                )
+                .into_any_element(),
+            );
         }
-        column = column.child(options);
+        item = item.child(
+            deferred(crate::components::dropdown_menu(
+                "task-assignee-menu",
+                rows,
+                theme,
+            ))
+            .with_priority(1),
+        );
     }
-    column
+    item.into_any_element()
+}
+
+impl WorkspaceView {
+    /// Opens or closes the priority menu. The assignee menu and the calendar close, so only one is open.
+    fn toggle_task_priority_list(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.task_dialog.as_mut() {
+            dialog.form.focus(Field::Priority);
+            dialog.priority_open = !dialog.priority_open;
+            dialog.assignee_open = false;
+            dialog.calendar = None;
+            cx.notify();
+        }
+    }
+
+    /// Picks a priority from its menu, and closes the menu.
+    fn choose_task_priority(&mut self, priority: Option<Priority>, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.task_dialog.as_mut() {
+            dialog.priority_open = false;
+        }
+        self.set_task_priority(priority, cx);
+    }
+
+    /// Closes any menu or calendar the form has open. A press outside them calls this.
+    pub(super) fn close_task_menus(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.task_dialog.as_mut()
+            && (dialog.priority_open || dialog.assignee_open || dialog.calendar.is_some())
+        {
+            dialog.priority_open = false;
+            dialog.assignee_open = false;
+            dialog.calendar = None;
+            cx.notify();
+        }
+    }
 }
 
 /// One choice in the assignee list. A member's row has their mark, and a tooltip with the full name

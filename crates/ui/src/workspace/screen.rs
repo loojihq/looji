@@ -174,12 +174,13 @@ pub(super) fn render(
     view: &WorkspaceView,
     screen: Screen,
     theme: &Theme,
+    window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     match screen {
         Screen::Today => today(view, theme, cx),
         Screen::Week => week(view, theme, cx),
-        Screen::Preferences => super::preferences_panel::render(view, theme, cx),
+        Screen::Preferences => super::preferences_panel::render(view, theme, window, cx),
         Screen::Workspace => super::workspace_setup::render(view, theme, cx),
     }
 }

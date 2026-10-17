@@ -1,77 +1,112 @@
 //! Raw token values. This is the only file that spells out colours, sizes, and radii for the UI.
 //!
-//! Surfaces are a neutral blue-grey ramp, saturation about 0.02. Each mode's accent is the only
-//! strongly saturated colour. `palette.rs` gives these values their roles, and components only
-//! ever read roles. The contrast tests in `contrast.rs` check every role pair the UI uses.
+//! The colours are the Gruvbox palette from the JLC player: Dark Hard for dark mode and Light Hard for
+//! light mode. Each value is named for the role JLC gives it, so the two apps read alike. Two values
+//! differ from JLC so the contrast rules in `contrast.rs` hold: the light-mode accent is Gruvbox's dark
+//! orange, because the bright orange is too faint on a light background, and the light-mode danger is
+//! Gruvbox's dark red for the same reason. `palette.rs` gives these values their roles, and components
+//! only ever read roles.
 
-/// Dark mode. Soft off-black surfaces avoid the glare of pure black.
+/// Dark mode: Gruvbox Dark Hard.
 pub mod dark {
-    pub const SURFACE: u32 = 0x262624;
-    pub const SURFACE_RAISED: u32 = 0x1f1e1d;
-    pub const SURFACE_HOVER: u32 = 0x2f2e2c;
-    pub const SURFACE_SELECTED: u32 = 0x3d3c3a;
-    pub const SURFACE_ACTIVE: u32 = 0x4a4946;
-    pub const TITLE_BAR: u32 = 0x1f1e1d;
-    pub const TITLE_BAR_INACTIVE: u32 = 0x1a1918;
-    /// Dividers and card edges. Decorative, so it's not held to the 3:1 control rule.
-    pub const BORDER: u32 = 0x403f3d;
+    /// The window behind everything (JLC's `background`).
+    pub const SURFACE: u32 = 0x1d2021;
+    /// Sidebars, columns, and dialogs (JLC's `controls_background`).
+    pub const SURFACE_RAISED: u32 = 0x282828;
+    /// Hovered rows and buttons (JLC's `hover`).
+    pub const SURFACE_HOVER: u32 = 0x3c3836;
+    /// The selected row, a step above hover so it reads as chosen.
+    pub const SURFACE_SELECTED: u32 = 0x454241;
+    /// A pressed control.
+    pub const SURFACE_ACTIVE: u32 = 0x665c54;
+    /// The title bar (JLC's `top_bar_background`). The inactive window keeps the same colour.
+    pub const TITLE_BAR: u32 = 0x1d2021;
+    pub const TITLE_BAR_INACTIVE: u32 = 0x1d2021;
+    /// Dividers and card edges (JLC's `divider`). Decorative, so not held to the 3:1 control rule.
+    pub const BORDER: u32 = 0x3c3836;
     /// Input, button, and field outlines. Held to 3:1 against their surface.
-    pub const BORDER_CONTROL: u32 = 0x9298a5;
-    pub const TEXT_PRIMARY: u32 = 0xf0eee6;
-    pub const TEXT_SECONDARY: u32 = 0xb4b2a9;
-    /// Exempt from WCAG, but kept readable enough to use.
-    pub const TEXT_DISABLED: u32 = 0x9ca0ad;
-    pub const ACCENT: u32 = 0x4a9be6;
-    pub const DANGER: u32 = 0xe0878c;
-    pub const ON_DANGER: u32 = 0x1b1d22;
-    pub const ON_ACCENT: u32 = 0x1b1d22;
+    pub const BORDER_CONTROL: u32 = 0xa89984;
+    /// The brightest text (JLC's `fg_heading`).
+    pub const TEXT_PRIMARY: u32 = 0xebdbb2;
+    /// Main text (JLC's `fg_primary`).
+    pub const TEXT_SECONDARY: u32 = 0xbdae93;
+    /// Disabled text (JLC's `fg_secondary`), light enough to clear 4.5:1 on every surface.
+    pub const TEXT_DISABLED: u32 = 0xa89984;
+    /// JLC's default accent swatch, Gruvbox orange.
+    pub const ACCENT: u32 = 0xfe8019;
+    /// Gruvbox red.
+    pub const DANGER: u32 = 0xff7b6e;
+    /// Text on the danger colour (JLC's `accent_text`).
+    pub const ON_DANGER: u32 = 0x1d2021;
+    /// Text on the accent colour (JLC's `accent_text`).
+    pub const ON_ACCENT: u32 = 0x1d2021;
     /// Overlay colour, black at this alpha. Drawn behind dialogs.
     pub const SCRIM_ALPHA: f32 = 0.5;
     /// Shadow colour for the dialog elevation, black at this alpha.
     pub const SHADOW_ALPHA: f32 = 0.35;
-    /// Avatar pairs, as (background, text). Each pair must clear 4.5:1.
+    /// Avatar pairs, as (background, text), from JLC's accent swatches. Each pair must clear 4.5:1.
     pub const AVATARS: [(u32, u32); 6] = [
-        (0x74ade8, ON_ACCENT),
-        (0xa1c181, ON_ACCENT),
-        (0xdec184, ON_ACCENT),
-        (0xe0878c, ON_ACCENT),
-        (0xb477cf, ON_ACCENT),
-        (0x6fb3c0, ON_ACCENT),
+        (0xfe8019, ON_ACCENT),
+        (0xb8bb26, ON_ACCENT),
+        (0x83a598, ON_ACCENT),
+        (0xd3869b, ON_ACCENT),
+        (0x8ec07c, ON_ACCENT),
+        (0xfabd2f, ON_ACCENT),
     ];
+    /// The close button's hover colour: Windows' standard close red, as JLC uses it.
+    pub const CAPTION_CLOSE: u32 = 0xe81120;
+    pub const ON_CAPTION_CLOSE: u32 = 0xffffff;
 }
 
-/// Light mode. Off-white surfaces avoid the glare of pure white on bright displays.
+/// Light mode: Gruvbox Light Hard.
 pub mod light {
-    pub const SURFACE: u32 = 0xffffff;
-    pub const SURFACE_RAISED: u32 = 0xf6f5f0;
-    pub const SURFACE_HOVER: u32 = 0xecebe6;
-    pub const SURFACE_SELECTED: u32 = 0xe4e3de;
-    pub const SURFACE_ACTIVE: u32 = 0xd9d8d2;
-    pub const TITLE_BAR: u32 = 0xefeee9;
-    pub const TITLE_BAR_INACTIVE: u32 = 0xf6f5f0;
-    pub const BORDER: u32 = 0xe4e3de;
-    pub const BORDER_CONTROL: u32 = 0x6b6a65;
-    pub const TEXT_PRIMARY: u32 = 0x1f1e1d;
-    pub const TEXT_SECONDARY: u32 = 0x5e5d59;
-    pub const TEXT_DISABLED: u32 = 0x767b85;
-    /// Slightly deeper than the design's #378ADD, so accent text such as priority markers clears 4.5:1.
-    pub const ACCENT: u32 = 0x2f6fd6;
-    pub const DANGER: u32 = 0xb42318;
-    pub const ON_DANGER: u32 = 0xffffff;
-    pub const ON_ACCENT: u32 = 0xffffff;
+    /// The window behind everything (JLC's `background`).
+    pub const SURFACE: u32 = 0xf9f5d7;
+    /// Sidebars, columns, and dialogs (JLC's `controls_background`).
+    pub const SURFACE_RAISED: u32 = 0xebdbb2;
+    /// Hovered rows and buttons (JLC's `hover`).
+    pub const SURFACE_HOVER: u32 = 0xd5c4a1;
+    /// The selected row, a step below hover so it reads as chosen.
+    pub const SURFACE_SELECTED: u32 = 0xc9b895;
+    /// A pressed control.
+    pub const SURFACE_ACTIVE: u32 = 0xa89984;
+    /// The title bar (JLC's `top_bar_background`). The inactive window keeps the same colour.
+    pub const TITLE_BAR: u32 = 0xf9f5d7;
+    pub const TITLE_BAR_INACTIVE: u32 = 0xf9f5d7;
+    /// Dividers and card edges (JLC's `divider`). Decorative, so not held to the 3:1 control rule.
+    pub const BORDER: u32 = 0xbdae93;
+    /// Input, button, and field outlines. Held to 3:1 against their surface.
+    pub const BORDER_CONTROL: u32 = 0x504945;
+    /// The brightest text (JLC's `fg_heading`).
+    pub const TEXT_PRIMARY: u32 = 0x282828;
+    /// Main text (JLC's `fg_secondary`).
+    pub const TEXT_SECONDARY: u32 = 0x504945;
+    /// Disabled text, darker than JLC's so it clears 4.5:1 on the raised surface too.
+    pub const TEXT_DISABLED: u32 = 0x665c54;
+    /// Gruvbox dark orange. JLC's bright orange is too faint on a light surface, so this is the
+    /// same hue at a contrast the rules allow.
+    pub const ACCENT: u32 = 0xaf3a03;
+    /// Gruvbox dark red, for the same reason as the accent.
+    pub const DANGER: u32 = 0x9d0006;
+    pub const ON_DANGER: u32 = 0xfbf1c7;
+    pub const ON_ACCENT: u32 = 0xfbf1c7;
     pub const SCRIM_ALPHA: f32 = 0.35;
     pub const SHADOW_ALPHA: f32 = 0.18;
+    /// Avatar pairs, as (background, text), from Gruvbox's light accents. Each pair must clear 4.5:1.
     pub const AVATARS: [(u32, u32); 6] = [
-        (0x2f6fd6, ON_ACCENT),
-        (0x2e7d4f, ON_ACCENT),
-        (0x8a5a00, ON_ACCENT),
-        (0xb42318, ON_ACCENT),
-        (0x7a3fb0, ON_ACCENT),
-        (0x1f7a8c, ON_ACCENT),
+        (0xaf3a03, ON_ACCENT),
+        (0x5f5a0b, ON_ACCENT),
+        (0x076678, ON_ACCENT),
+        (0x8f3f71, ON_ACCENT),
+        (0x2f5f4a, ON_ACCENT),
+        (0x8f5f0c, ON_ACCENT),
     ];
+    /// The close button's hover colour: Windows' standard close red, as JLC uses it.
+    pub const CAPTION_CLOSE: u32 = 0xe81120;
+    pub const ON_CAPTION_CLOSE: u32 = 0xffffff;
 }
 
-/// Font sizes in pixels. Body text is 13px, with 11px for metadata, as in the design.
+/// Font sizes in pixels. Body text is 13px, with 11px for metadata.
 pub mod typography {
     pub const CAPTION: f32 = 11.0;
     pub const BODY: f32 = 13.0;

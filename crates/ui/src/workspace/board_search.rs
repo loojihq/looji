@@ -223,6 +223,7 @@ pub(super) fn bar(
         .border_b_1()
         .border_color(theme.palette.border)
         .child(field)
+        .child(super::filter_bar::facets(view, theme, cx))
         .child(
             div()
                 .text_size(theme.typography.caption)

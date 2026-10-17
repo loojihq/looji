@@ -7,6 +7,7 @@ mod database;
 mod settings;
 mod theme;
 mod title_bar;
+mod window_move;
 mod workspace;
 
 use gpui::{App, Application};

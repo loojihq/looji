@@ -4,7 +4,7 @@
 use gpui::{prelude::*, *};
 use looji_domain::{DefaultView, Preference, Status, UpdateChannel};
 
-use super::WorkspaceView;
+use super::{WorkspaceView, columns, schedule_dialog};
 use crate::{
     components, settings,
     theme::{Mode, Theme},
@@ -14,6 +14,7 @@ use crate::{
 pub(super) fn render(
     view: &WorkspaceView,
     theme: &Theme,
+    window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let prefs = settings::current(cx);
@@ -53,6 +54,13 @@ pub(super) fn render(
         )
         .into_any_element(),
     };
+
+    // The column and hours confirmations open under their settings, and close the same way.
+    let column = view
+        .pending_column
+        .as_ref()
+        .map(|pending| columns::dialog(pending, theme, cx));
+    let hours = schedule_dialog::panel(view, theme, window, cx);
 
     let body = div()
         .id("preferences-body")
@@ -133,7 +141,12 @@ pub(super) fn render(
                     components::settings_row(
                         "Default view",
                         Some("The view a project opens in when it has no saved view."),
-                        components::select(default_view_label(default_view), theme),
+                        components::select(
+                            "pref-default-view-select",
+                            default_view_label(default_view),
+                            false,
+                            theme,
+                        ),
                         theme,
                     )
                     .id("pref-default-view")
@@ -145,12 +158,19 @@ pub(super) fn render(
                     )),
                 )
                 .child(board_row)
+                .children(column)
+                .children(hours)
                 .child(components::section_label("Assistant", theme))
                 .child(
                     components::settings_row(
                         "Model",
                         Some("The model that plans projects and answers task chat."),
-                        components::select(model.as_deref().unwrap_or("Default"), theme),
+                        components::select(
+                            "pref-model-select",
+                            model.as_deref().unwrap_or("Default"),
+                            false,
+                            theme,
+                        ),
                         theme,
                     )
                     .id("pref-model")

@@ -43,6 +43,8 @@ impl WorkspaceView {
                     tasks: summary.tasks,
                     deleting: false,
                 });
+                // The confirmation shows in the workspace screen's delete card, so that screen opens.
+                self.open_screen(super::screen::Screen::Workspace, cx);
                 self.focus_handle.focus(window);
             }
             Err(err) => self.status = Some(format!("Could not open the delete dialog: {err}")),
@@ -128,8 +130,8 @@ impl WorkspaceView {
     }
 }
 
-/// The modal dialog. Clicking the backdrop or Cancel closes it. Enter and Escape also cancel,
-/// since Cancel is the default action.
+/// The confirmation, drawn in the workspace screen's delete card in place of its button. Cancel
+/// closes it. Enter and Escape also cancel, since Cancel is the default action.
 pub(super) fn dialog(
     pending: &PendingDelete,
     theme: &Theme,
@@ -149,48 +151,33 @@ pub(super) fn dialog(
     };
 
     div()
-        .id("delete-backdrop")
-        .absolute()
-        .inset_0()
+        .id("delete-panel")
         .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.palette.scrim)
-        .occlude()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_delete(cx)))
+        .flex_col()
+        .gap(theme.spacing.md)
+        .w_full()
+        .p(theme.spacing.lg)
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.danger)
+        .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .id("delete-panel")
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.md)
-                .w(px(380.))
-                .p(theme.spacing.lg)
-                .rounded(theme.radius.lg)
-                .bg(theme.palette.surface_raised)
-                .shadow(theme.elevation.overlay.clone())
-                .border_1()
-                .border_color(theme.palette.border)
-                // Clicks on the panel must not reach the backdrop and close the dialog.
-                .on_click(|_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .text_size(theme.typography.title)
-                        .child(format!("Delete \"{}\"?", pending.name)),
-                )
-                .child(div().text_size(theme.typography.body).child(format!(
-                    "This permanently removes {counts} in this workspace, along with its icon. \
+                .text_size(theme.typography.title)
+                .child(format!("Delete \"{}\"?", pending.name)),
+        )
+        .child(div().text_size(theme.typography.body).child(format!(
+            "This permanently removes {counts} in this workspace, along with its icon. \
                      This can't be undone."
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(theme.spacing.sm)
-                        .child(cancel_button(theme, cx))
-                        .child(confirm_button(confirm_label, pending.deleting, theme, cx)),
-                ),
+        )))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_end()
+                .gap(theme.spacing.sm)
+                .child(cancel_button(theme, cx))
+                .child(confirm_button(confirm_label, pending.deleting, theme, cx)),
         )
 }
 

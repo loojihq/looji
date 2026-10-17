@@ -15,7 +15,7 @@ use super::fields::{member_mark, text_box};
 use super::members::{self, Entry};
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use crate::{components, theme::Theme};
 
 /// A member being renamed, with the name typed so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,9 +70,14 @@ fn name_message(err: &DomainError) -> String {
 
 impl WorkspaceView {
     /// Opens the team dialog for the active workspace.
-    pub(super) fn open_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_team_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.team_dialog.is_some() {
+            return;
+        }
+        // The team editor shows inline in the workspace screen's Team card. Only one inline form is open at
+        // a time, so the project form closes.
+        self.project_dialog = None;
         self.team_dialog = Some(TeamDialog::new(self.list.active_workspace_id()));
-        self.focus_handle.focus(window);
         cx.notify();
     }
 
@@ -348,14 +353,14 @@ impl WorkspaceView {
     }
 }
 
-/// The team dialog, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+/// The team editor's body: the members, their rename and remove, and the add field. It fills the
+/// workspace screen's Team card. Nothing is drawn when it isn't open.
+pub(super) fn inline(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.team_dialog.as_ref()?;
-    let workspace = view.list.active().name().to_string();
     let entries = members::entries(&view.members);
 
     let mut list = div().flex().flex_col().gap(theme.spacing.xs);
@@ -401,61 +406,33 @@ pub(super) fn overlay(
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_team_member(cx))),
         );
 
-    let panel =
-        div()
-            .id("team-panel")
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.md)
-            .w(px(460.))
-            .max_h(px(560.))
-            .p(theme.spacing.lg)
-            .rounded(theme.radius.lg)
-            .bg(theme.palette.surface_raised)
-            .shadow(theme.elevation.overlay.clone())
-            .border_1()
-            .border_color(theme.palette.border)
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .child(div().text_size(theme.typography.title).child("Team"))
-            .child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child(format!("Members of {workspace}")),
-            )
-            .child(list)
-            .child(add_row)
-            .when_some(dialog.add_error.clone(), |panel, message| {
-                panel.child(error_text(message, theme))
-            })
-            .when_some(dialog.error.clone(), |panel, message| {
-                panel.child(error_text(message, theme))
-            })
-            .child(div().flex().flex_row().justify_end().child(
-                button("team-done", "Done", false, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.close_team_dialog(cx)),
-                ),
-            ));
+    let add_section = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(components::section_label("Add someone", theme))
+        .child(add_row)
+        .children(
+            dialog
+                .add_error
+                .clone()
+                .map(|message| error_text(message, theme)),
+        )
+        .children(
+            dialog
+                .error
+                .clone()
+                .map(|message| error_text(message, theme)),
+        );
 
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .child(
-                div()
-                    .id("team-backdrop")
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.palette.scrim)
-                    .occlude()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_team_dialog(cx)))
-                    .child(panel),
-            )
-            .into_any_element(),
-    )
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.lg)
+        .child(list)
+        .child(add_section);
+
+    Some(body.into_any_element())
 }
 
 /// One member: a row with their mark and name, or the rename field, or the removal confirmation.

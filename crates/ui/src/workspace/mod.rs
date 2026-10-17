@@ -8,7 +8,9 @@ mod card;
 mod chat;
 mod chat_render;
 mod columns;
+mod date_picker;
 mod delete;
+mod dialog_window;
 mod drag;
 mod dragging;
 mod export;
@@ -68,7 +70,7 @@ use crate::{
     APP_NAME,
     database::AppDatabase,
     theme::{ActiveTheme, Theme},
-    title_bar::TitleBar,
+    title_bar::{SidebarHead, TitleBar},
 };
 
 const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1280.), px(800.));
@@ -607,21 +609,9 @@ impl Render for WorkspaceView {
         let theme = cx.theme().clone();
         let header = project_header(self, &theme, cx);
         let body = match self.screen {
-            Some(screen) => screen::render(self, screen, &theme, cx),
+            Some(screen) => screen::render(self, screen, &theme, window, cx),
             None => projects::content(self, &theme, cx),
         };
-        let delete_dialog = self
-            .pending_delete
-            .clone()
-            .map(|pending| delete::dialog(&pending, &theme, cx).into_any_element());
-        let column_dialog = self
-            .pending_column
-            .clone()
-            .map(|pending| columns::dialog(&pending, &theme, cx));
-        let project_dialog = self
-            .project_dialog
-            .clone()
-            .map(|dialog| projects::dialog(&dialog, &theme, cx));
 
         div()
             .id("workspace")
@@ -633,6 +623,7 @@ impl Render for WorkspaceView {
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.blur_tag_editor(cx);
                     this.blur_search(cx);
+                    this.close_task_menus(cx);
                     this.filter_menu = None;
                     this.list_columns_open = false;
                     this.close_workspace_menu(cx);
@@ -643,30 +634,41 @@ impl Render for WorkspaceView {
             .size_full()
             .bg(theme.palette.surface)
             .text_color(theme.palette.text_primary)
-            .child(TitleBar::new(APP_NAME))
+            // Windows drags the window from this strip over the top of the window, as JLC does. It is
+            // painted first, so the title bar's controls and the bars' own elements sit above it.
+            .when(cfg!(target_os = "windows"), |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(crate::title_bar::TITLE_BAR_HEIGHT)
+                        .window_control_area(WindowControlArea::Drag),
+                )
+            })
+            // The sidebar runs the full height, and the title bar covers only the main pane.
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h_0()
-                    .child(sidebar::render(self, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_none()
+                            .h_full()
+                            .child(SidebarHead::new(APP_NAME, sidebar::SIDEBAR_WIDTH))
+                            .child(sidebar::render(self, cx)),
+                    )
                     .child(main_pane(header, body, panel::render(self, &theme, cx))),
             )
-            .children(task_dialog::overlay(self, &theme, cx))
             .children(palette::overlay(self, &theme, cx))
-            .children(team_dialog::overlay(self, &theme, cx))
-            .children(chat::overlay(self, &theme, window, cx))
             .children(updates::notice(self, &theme, cx))
             .children(tour::overlay(self, &theme, cx))
-            .children(repo_dialog::overlay(self, &theme, cx))
-            .children(schedule_dialog::overlay(self, &theme, window, cx))
-            .children(plan_wizard::overlay(self, &theme, window, cx))
-            .children(plan_drafts::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
-            .children(delete_dialog)
-            .children(project_dialog)
-            .children(column_dialog)
             // Last, so the lifted card draws above everything else.
             .children(dragging::overlay(self, &theme))
     }
@@ -733,7 +735,7 @@ fn project_header(
         .gap(theme.spacing.md)
         .child(left)
         .when(project.is_some(), |top| {
-            top.child(board::new_task_button(theme, cx))
+            top.child(board::new_task_button(view, theme, cx))
         });
 
     let tabs = project.is_some().then(|| {
@@ -769,6 +771,11 @@ fn project_header(
         .px(theme.spacing.lg)
         .pt(theme.spacing.md)
         .child(top)
+        // The new-task form opens right under the New task button, above the board's tabs.
+        .children(
+            task_dialog::new_task_form(view, theme, cx)
+                .map(|form| div().pt(theme.spacing.sm).child(form)),
+        )
         .children(tabs)
         .into_any_element()
 }
@@ -780,6 +787,7 @@ fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> 
         .flex_1()
         .min_w_0()
         .h_full()
+        .child(TitleBar)
         .child(header)
         .child(
             div()

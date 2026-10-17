@@ -97,9 +97,17 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Opens the create form on the workspace screen's Projects list, or closes it if it's open. The
+    /// header button and the sidebar's New project row both call this.
     pub(super) fn open_project_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.project_dialog.take().is_some() {
+            return cx.notify();
+        }
+        // Only one inline form is open at a time, so the keyboard has one place to go.
+        self.team_dialog = None;
         self.cancel_rename(cx);
         self.project_dialog = Some(ProjectDialog::default());
+        self.open_screen(super::screen::Screen::Workspace, cx);
         self.focus_handle.focus(window);
         cx.notify();
     }
@@ -232,6 +240,11 @@ pub(super) fn sidebar_section(
         })
         .collect();
     let is_empty = view.projects.items().is_empty();
+    let new_project =
+        crate::components::nav_item("new-project", "plus", "New project", false, None, theme)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.open_project_dialog(window, cx);
+            }));
 
     div()
         .flex()
@@ -255,12 +268,7 @@ pub(super) fn sidebar_section(
                     .child("No projects yet"),
             )
         })
-        .child(
-            crate::components::nav_item("new-project", "plus", "New project", false, None, theme)
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.open_project_dialog(window, cx);
-                })),
-        )
+        .child(new_project)
 }
 
 fn project_row(
@@ -280,6 +288,7 @@ fn project_row(
         .py(theme.spacing.xs)
         .rounded(theme.radius.md)
         .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .when(is_active, |row| {
             row.bg(theme.palette.surface_selected)
                 .font_weight(FontWeight::MEDIUM)
@@ -313,13 +322,12 @@ pub(super) fn content(
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
-            let filters = filter_bar::bar(view, theme, cx);
             // The board and the list read the same query, so the counts in the bar agree with both.
             let (column, shown, notice) = match view.view_mode {
                 list_view::ViewMode::Board => {
                     let cards = board::card_context(view);
                     let shown = board_search::shown_tasks(view);
-                    let notice = filter_bar::empty_notice(view, shown.len(), theme, cx);
+                    let notice = filter_bar::empty_notice(view, shown.len(), theme);
                     let column = board::render(project, &shown, &cards, &view.drag, theme, cx)
                         .into_any_element();
                     (column, shown.len(), notice)
@@ -344,9 +352,8 @@ pub(super) fn content(
             div()
                 .flex()
                 .flex_col()
-                .size_full()
+                .flex_1()
                 .min_h_0()
-                .child(filters)
                 .child(search)
                 .children(notice)
                 .child(
@@ -430,7 +437,8 @@ fn empty_workspace(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoE
         )
 }
 
-/// The create-project dialog, drawn over the window.
+/// The create-project form. It sits at the top of the workspace screen's Projects list, above the
+/// projects, as the list's New project button opens it.
 pub(super) fn dialog(
     dialog: &ProjectDialog,
     theme: &Theme,
@@ -439,86 +447,67 @@ pub(super) fn dialog(
     let description_count = dialog.description.chars().count();
 
     div()
-        .id("project-backdrop")
-        .absolute()
-        .inset_0()
+        .id("project-panel")
         .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.palette.scrim)
-        .occlude()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_project_dialog(cx)))
+        .flex_col()
+        .gap(theme.spacing.sm)
+        .w_full()
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(field(
+            "Name",
+            &dialog.name,
+            dialog.field == Field::Name,
+            None,
+            Field::Name,
+            theme,
+            cx,
+        ))
+        .child(field(
+            "Description (optional)",
+            &dialog.description,
+            dialog.field == Field::Description,
+            Some(format!("{description_count}/{MAX_DESCRIPTION_CHARS}")),
+            Field::Description,
+            theme,
+            cx,
+        ))
+        .when_some(dialog.error.as_ref(), |panel, message| {
+            panel.child(
+                div()
+                    .text_size(theme.typography.body)
+                    .text_color(theme.palette.danger)
+                    .child(message.clone()),
+            )
+        })
         .child(
             div()
-                .id("project-panel")
                 .flex()
-                .flex_col()
-                .gap(theme.spacing.md)
-                .w(px(420.))
-                .p(theme.spacing.lg)
-                .rounded(theme.radius.lg)
-                .bg(theme.palette.surface_raised)
-                .shadow(theme.elevation.overlay.clone())
-                .border_1()
-                .border_color(theme.palette.border)
-                .on_click(|_, _, cx| cx.stop_propagation())
-                .child(div().text_size(theme.typography.title).child("New project"))
-                .child(field(
-                    "Name",
-                    &dialog.name,
-                    dialog.field == Field::Name,
-                    None,
-                    Field::Name,
-                    theme,
-                    cx,
-                ))
-                .child(field(
-                    "Description (optional)",
-                    &dialog.description,
-                    dialog.field == Field::Description,
-                    Some(format!("{description_count}/{MAX_DESCRIPTION_CHARS}")),
-                    Field::Description,
-                    theme,
-                    cx,
-                ))
-                .when_some(dialog.error.as_ref(), |panel, message| {
-                    panel.child(
-                        div()
-                            .text_size(theme.typography.body)
-                            .text_color(theme.palette.danger)
-                            .child(message.clone()),
+                .flex_row()
+                .justify_end()
+                .gap(theme.spacing.sm)
+                .child(
+                    crate::components::button(
+                        "project-cancel",
+                        "Cancel",
+                        crate::components::Variant::Ghost,
+                        theme,
                     )
-                })
+                    .on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_project_dialog(cx)),
+                    ),
+                )
                 .child(
                     div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(theme.spacing.sm)
-                        .child(
-                            crate::components::button(
-                                "project-cancel",
-                                "Cancel",
-                                crate::components::Variant::Ghost,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| this.cancel_project_dialog(cx),
-                            )),
-                        )
-                        .child(
-                            div()
-                                .id("project-create")
-                                .px(theme.spacing.md)
-                                .py(theme.spacing.xs)
-                                .rounded(theme.radius.md)
-                                .cursor_pointer()
-                                .bg(theme.palette.accent)
-                                .text_color(theme.palette.on_accent)
-                                .child("Create")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.submit_project(cx)
-                                })),
+                        .id("project-create")
+                        .px(theme.spacing.md)
+                        .py(theme.spacing.xs)
+                        .rounded(theme.radius.md)
+                        .cursor_pointer()
+                        .bg(theme.palette.accent)
+                        .text_color(theme.palette.on_accent)
+                        .child("Create project")
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.submit_project(cx)),
                         ),
                 ),
         )

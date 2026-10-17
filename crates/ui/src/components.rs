@@ -229,19 +229,28 @@ pub fn search_field(value: &str, placeholder: &str, active: bool, theme: &Theme)
 }
 
 /// A dropdown look: the current value and a chevron. The caller adds the click.
-pub fn select(label: &str, theme: &Theme) -> Div {
+pub fn select(id: impl Into<ElementId>, label: &str, open: bool, theme: &Theme) -> Stateful<Div> {
+    // Filled like the other controls. Open, it takes the selected fill, as a menu button does while its menu is up.
     div()
+        .id(id)
         .flex()
         .flex_none()
         .items_center()
+        .justify_between()
         .gap(theme.spacing.sm)
-        .h(px(30.))
-        .px(theme.spacing.sm)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
+        .h(px(32.))
+        .px(theme.spacing.md)
+        .rounded(theme.radius.lg)
         .text_size(theme.typography.body)
-        .child(label.to_string())
+        .text_color(theme.palette.text_primary)
+        .cursor_pointer()
+        .when(open, |select| select.bg(theme.palette.surface_selected))
+        .when(!open, |select| {
+            select
+                .bg(theme.palette.surface_raised)
+                .hover(|style| style.bg(theme.palette.surface_hover))
+        })
+        .child(div().min_w_0().truncate().child(label.to_string()))
         .child(icon("chevron-down", 14., theme.palette.text_secondary))
 }
 
@@ -493,6 +502,7 @@ pub fn nav_item(
         .py(theme.spacing.xs)
         .rounded(theme.radius.md)
         .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .text_color(theme.palette.text_secondary)
         .when(selected, |row| {
             row.bg(theme.palette.surface_selected)
@@ -559,4 +569,65 @@ pub fn settings_row(
         .border_color(theme.palette.border)
         .child(text)
         .child(control)
+}
+
+/// A dropdown's floating menu, drawn over the page below its trigger. It is placed absolutely, so it
+/// takes no room in the layout and moves nothing else. Wrap it in `deferred` and put it in a `relative`
+/// element with its trigger, as the workspace switcher does.
+pub fn dropdown_menu(
+    id: impl Into<ElementId>,
+    rows: Vec<AnyElement>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .absolute()
+        .top(px(36.))
+        .left_0()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .p(theme.spacing.xs)
+        .rounded(theme.radius.lg)
+        .bg(theme.palette.surface)
+        .border_1()
+        .border_color(theme.palette.border)
+        .shadow(theme.elevation.overlay.clone())
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .children(rows)
+}
+
+/// One option in a dropdown menu. The chosen one is ringed in the accent colour, and the highlighted one
+/// (the one the keys are on) takes the hover fill. The caller adds the click.
+pub fn dropdown_row(
+    id: impl Into<ElementId>,
+    label: &str,
+    selected: bool,
+    highlighted: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .cursor_pointer()
+        .border_1()
+        .when(selected, |row| {
+            row.bg(theme.palette.surface_selected)
+                .border_color(theme.palette.accent)
+        })
+        .when(!selected, |row| {
+            row.border_color(theme.palette.surface)
+                .hover(|style| style.bg(theme.palette.surface_hover))
+        })
+        .when(highlighted && !selected, |row| {
+            row.bg(theme.palette.surface_hover)
+        })
+        .child(div().min_w_0().truncate().child(label.to_string()))
 }

@@ -621,7 +621,7 @@ fn refine_button(
 }
 
 /// The review, drawn over the window in place of the wizard's form. Nothing is drawn when the wizard isn't open.
-pub(super) fn overlay(
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
@@ -942,13 +942,9 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(960.))
+        .w_full()
         .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -1047,20 +1043,5 @@ pub(super) fn overlay(
                 ),
         );
 
-    Some(
-        div()
-            .id("plan-backdrop")
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.palette.scrim)
-            .occlude()
-            .on_click(
-                cx.listener(|this, _: &ClickEvent, window, cx| this.request_plan_close(window, cx)),
-            )
-            .child(panel)
-            .into_any_element(),
-    )
+    Some(panel.into_any_element())
 }

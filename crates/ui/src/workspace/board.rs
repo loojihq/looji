@@ -671,14 +671,22 @@ fn column_toggle(
 }
 
 /// The button that starts a new task in the first shown column.
-pub(super) fn new_task_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button(
-        "new-task",
-        "+ New task",
-        crate::components::Variant::Primary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-        this.open_task_dialog(Mode::Create, window, cx)
-    }))
+pub(super) fn new_task_button(
+    view: &WorkspaceView,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    // The button turns into Cancel while the new-task form is open at the top of the board.
+    let creating = view
+        .task_dialog
+        .as_ref()
+        .is_some_and(|dialog| matches!(dialog.form.mode, Mode::Create));
+    let (label, variant) = if creating {
+        ("Cancel", crate::components::Variant::Secondary)
+    } else {
+        ("+ New task", crate::components::Variant::Primary)
+    };
+    crate::components::button("new-task", label, variant, theme).on_click(cx.listener(
+        |this, _: &ClickEvent, window, cx| this.open_task_dialog(Mode::Create, window, cx),
+    ))
 }

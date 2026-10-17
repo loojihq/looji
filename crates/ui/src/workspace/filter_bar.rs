@@ -1,43 +1,38 @@
-//! The board's filter bar: four facets (status, priority, assignee, and tag), each a menu of checkboxes,
-//! a count of the facets in use, and one control that clears them all.
+//! The board's filters: two selects, Priority and Assignee, that sit beside the search field. Each opens a
+//! menu of its values, and "All priorities" or "All assignees" at its top means nothing is filtered by it.
 //!
 //! The filter belongs to the project. Every change is saved, and opening a project loads its own filter.
-//! A selected value that no longer exists (a removed member, a tag no task uses) is dropped, so the bar
-//! never shows a selection that matches nothing.
+//! A selected value that no longer exists (a removed member) is dropped, so the bar never shows a selection
+//! that matches nothing. Status and tag criteria saved by an earlier version are dropped on load, since
+//! the bar no longer offers them, and a hidden criterion would still hide tasks.
 //!
-//! A facet's menu is opened from the keyboard or the mouse. Up and Down move through its choices, Enter
-//! or Space picks one, and Escape closes the menu and returns focus to its button.
+//! A menu is opened from the keyboard or the mouse. Up and Down move through its choices, Enter or Space
+//! picks one, and Escape closes the menu and returns focus to its select.
 
 use gpui::{prelude::*, *};
-use looji_domain::{Priority, ProjectFilterRepository, Status, TagMatch, TaskFilter, TeamMemberId};
+use looji_domain::{Priority, ProjectFilterRepository, TaskFilter, TeamMemberId};
 
-use super::board::status_label;
 use super::members;
 use super::{WorkspaceView, store};
 use crate::theme::Theme;
 
-/// The focusable controls in the bar, in tab order: the four facets, then the clear control.
-pub(super) const CONTROL_COUNT: usize = 5;
-pub(super) const CLEAR_CONTROL: usize = 4;
+/// The focusable selects, in tab order: Priority, then Assignee.
+pub(super) const CONTROL_COUNT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Facet {
-    Status,
     Priority,
     Assignee,
-    Tag,
 }
 
 impl Facet {
-    pub(super) const ALL: [Facet; 4] =
-        [Facet::Status, Facet::Priority, Facet::Assignee, Facet::Tag];
+    pub(super) const ALL: [Facet; 2] = [Facet::Priority, Facet::Assignee];
 
-    fn label(self) -> &'static str {
+    /// The select's text while nothing is filtered by this facet, and the menu's first row.
+    fn all_label(self) -> &'static str {
         match self {
-            Facet::Status => "Status",
-            Facet::Priority => "Priority",
-            Facet::Assignee => "Assignee",
-            Facet::Tag => "Tag",
+            Facet::Priority => "All priorities",
+            Facet::Assignee => "All assignees",
         }
     }
 
@@ -49,15 +44,12 @@ impl Facet {
     }
 }
 
-/// One value a facet can select.
+/// One value a facet can select. `All` clears the facet, so nothing is filtered by it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Choice {
-    Status(Status),
+    All(Facet),
     Priority(Option<Priority>),
     Assignee(Option<TeamMemberId>),
-    Tag(String),
-    /// Whether a task must match every selected tag, rather than any of them.
-    TagMode,
 }
 
 /// An open facet menu, and the choice the keyboard is on.
@@ -87,20 +79,16 @@ impl WorkspaceView {
                 TaskFilter::default()
             }
         };
+        // The bar offers only priority and assignee, so a status or tag saved earlier is dropped here.
+        self.filter.statuses.clear();
+        self.filter.tags.clear();
     }
 
     /// Drops selected values that the board no longer has, and saves the filter if anything was
-    /// dropped. Runs whenever the board reloads, so a removed member or an unused tag can't linger.
+    /// dropped. Runs whenever the board reloads, so a removed member can't linger.
     pub(super) fn prune_project_filter(&mut self, cx: &mut Context<Self>) {
         let members: Vec<TeamMemberId> = self.members.iter().map(|member| member.id()).collect();
-        let mut tags: Vec<String> = self
-            .board
-            .iter()
-            .flat_map(|task| task.tags().iter().cloned())
-            .collect();
-        tags.sort();
-        tags.dedup();
-        if self.filter.prune(&members, &tags) {
+        if self.filter.prune(&members, &[]) {
             self.save_project_filter(cx);
         }
     }
@@ -118,77 +106,48 @@ impl WorkspaceView {
         }
     }
 
-    /// The values a facet offers. Statuses are the ones the project shows, tags are the ones its tasks
-    /// use, and assignees are the team, with "No assignee" first.
+    /// The values a facet offers: "All" first, then the facet's own values.
     pub(super) fn options(&self, facet: Facet) -> Vec<(Choice, String)> {
+        let mut options = vec![(Choice::All(facet), facet.all_label().to_string())];
         match facet {
-            Facet::Status => self
-                .projects
-                .active()
-                .map(|project| project.visible_statuses())
-                .unwrap_or_default()
+            Facet::Priority => options.extend(
+                [
+                    (None, "No priority"),
+                    (Some(Priority::Low), "Low"),
+                    (Some(Priority::Medium), "Medium"),
+                    (Some(Priority::High), "High"),
+                ]
                 .into_iter()
-                .map(|status| (Choice::Status(status), status_label(status).to_string()))
-                .collect(),
-            Facet::Priority => [
-                (None, "No priority"),
-                (Some(Priority::Low), "Low"),
-                (Some(Priority::Medium), "Medium"),
-                (Some(Priority::High), "High"),
-            ]
-            .into_iter()
-            .map(|(priority, label)| (Choice::Priority(priority), label.to_string()))
-            .collect(),
+                .map(|(priority, label)| (Choice::Priority(priority), label.to_string())),
+            ),
             Facet::Assignee => {
-                let mut options = vec![(Choice::Assignee(None), "No assignee".to_string())];
+                options.push((Choice::Assignee(None), "No assignee".to_string()));
                 options.extend(
                     members::entries(&self.members)
                         .into_iter()
                         .map(|entry| (Choice::Assignee(Some(entry.id)), entry.label)),
                 );
-                options
-            }
-            Facet::Tag => {
-                let mut tags: Vec<String> = self
-                    .board
-                    .iter()
-                    .flat_map(|task| task.tags().iter().cloned())
-                    .collect();
-                tags.sort();
-                tags.dedup();
-                let mut options: Vec<(Choice, String)> = tags
-                    .into_iter()
-                    .map(|tag| (Choice::Tag(tag.clone()), tag))
-                    .collect();
-                options.push((Choice::TagMode, "Require every selected tag".to_string()));
-                options
             }
         }
+        options
     }
 
+    /// Whether a choice is in effect. "All" is in effect when nothing is selected for its facet.
     fn is_selected(&self, choice: &Choice) -> bool {
         match choice {
-            Choice::Status(status) => self.filter.statuses.contains(status),
+            Choice::All(facet) => selected_count(&self.filter, *facet) == 0,
             Choice::Priority(priority) => self.filter.priorities.contains(priority),
             Choice::Assignee(assignee) => self.filter.assignees.contains(assignee),
-            Choice::Tag(tag) => self.filter.tags.contains(tag),
-            Choice::TagMode => self.filter.tag_match == TagMatch::All,
         }
     }
 
     /// Selects or deselects a value, then saves. Cards that the change hides can't keep a keyboard move.
     fn apply_choice(&mut self, choice: Choice, cx: &mut Context<Self>) {
         match choice {
-            Choice::Status(status) => self.filter.toggle_status(status),
+            Choice::All(Facet::Priority) => self.filter.priorities.clear(),
+            Choice::All(Facet::Assignee) => self.filter.assignees.clear(),
             Choice::Priority(priority) => self.filter.toggle_priority(priority),
             Choice::Assignee(assignee) => self.filter.toggle_assignee(assignee),
-            Choice::Tag(tag) => self.filter.toggle_tag(&tag),
-            Choice::TagMode => {
-                self.filter.tag_match = match self.filter.tag_match {
-                    TagMatch::Any => TagMatch::All,
-                    TagMatch::All => TagMatch::Any,
-                };
-            }
         }
         self.save_project_filter(cx);
         self.cancel_keyboard_if_hidden(cx);
@@ -212,18 +171,6 @@ impl WorkspaceView {
                 highlight: 0,
             }),
         };
-        cx.notify();
-    }
-
-    /// Clears every facet and the tag mode. The search is left alone.
-    pub(super) fn clear_filters(&mut self, cx: &mut Context<Self>) {
-        if self.filter.is_empty() {
-            return;
-        }
-        self.filter.clear();
-        self.filter_menu = None;
-        self.save_project_filter(cx);
-        self.list_query_changed(cx);
         cx.notify();
     }
 
@@ -272,43 +219,43 @@ impl WorkspaceView {
 /// How many values a facet has selected.
 fn selected_count(filter: &TaskFilter, facet: Facet) -> usize {
     match facet {
-        Facet::Status => filter.statuses.len(),
         Facet::Priority => filter.priorities.len(),
         Facet::Assignee => filter.assignees.len(),
-        Facet::Tag => filter.tags.len(),
     }
 }
 
-/// The filter bar above the board. Its controls keep the press, so a click on them doesn't close the
-/// open menu through the board's own press handling.
-pub(super) fn bar(
+/// The two filter selects, in a row. Each select's text names what it filters by, or says "All" while
+/// nothing is selected for it. The row keeps the press, so a click on a select doesn't close its open
+/// menu through the board's own press handling.
+pub(super) fn facets(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let active = view.filter.active_facets();
-    let badge = if active == 0 {
-        "Filters".to_string()
-    } else {
-        // The number counts facets, not values, so "Filters (2)" is two facets with a value each.
-        format!("Filters ({active})")
-    };
-
-    let mut facets = div()
+    let mut row = div()
+        .id("filter-facets")
         .flex()
         .flex_row()
-        .flex_wrap()
+        .flex_none()
         .items_center()
-        .gap(theme.spacing.xs);
+        .gap(theme.spacing.sm)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
     for facet in Facet::ALL {
-        let selected = selected_count(&view.filter, facet);
-        let label = match selected {
-            0 => facet.label().to_string(),
-            count => format!("{} · {count}", facet.label()),
+        // The select names what is chosen, or says "All" while nothing is. Several choices are listed together.
+        let chosen: Vec<String> = view
+            .options(facet)
+            .into_iter()
+            .filter(|(choice, _)| !matches!(choice, Choice::All(_)) && view.is_selected(choice))
+            .map(|(_, label)| label)
+            .collect();
+        let label = if chosen.is_empty() {
+            facet.all_label().to_string()
+        } else {
+            chosen.join(", ")
         };
         let open = view.filter_menu.is_some_and(|menu| menu.facet == facet);
-        facets = facets.child(
-            crate::components::pill(("filter-facet", facet.index() as u64), &label, open, theme)
+        let trigger =
+            crate::components::select(("filter-facet", facet.index() as u64), &label, open, theme)
                 .track_focus(&view.filter_focus[facet.index()])
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.toggle_filter_menu(facet, cx)
@@ -318,111 +265,31 @@ pub(super) fn bar(
                         cx.stop_propagation();
                         this.toggle_filter_menu(facet, cx);
                     }
-                })),
-        );
+                }));
+        // The menu floats over the page below its own select, so opening it moves nothing.
+        let mut item = div().relative().child(trigger);
+        if open {
+            let rows = menu_rows(view, facet, theme, cx);
+            item = item.child(
+                deferred(crate::components::dropdown_menu(
+                    ("filter-menu", facet.index() as u64),
+                    rows,
+                    theme,
+                ))
+                .with_priority(1),
+            );
+        }
+        row = row.child(item);
     }
-
-    let clearable = active > 0;
-    let clear = crate::components::pill(("filter-clear", 0_u64), "Clear filters", false, theme)
-        .track_focus(&view.filter_focus[CLEAR_CONTROL])
-        .when(!clearable, |button| {
-            button.text_color(theme.palette.text_disabled)
-        })
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_filters(cx)))
-        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                cx.stop_propagation();
-                this.clear_filters(cx);
-            }
-        }));
-
-    let mut bar = div()
-        .id("filter-bar")
-        .flex()
-        .flex_col()
-        .gap(theme.spacing.xs)
-        .px(theme.spacing.lg)
-        .py(theme.spacing.xs)
-        .border_b_1()
-        .border_color(theme.palette.border)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .child(
-                    div()
-                        .text_size(theme.typography.caption)
-                        .text_color(theme.palette.text_secondary)
-                        .child(badge),
-                )
-                .child(facets)
-                .child(clear),
-        );
-
-    if let Some(menu) = view.filter_menu {
-        bar = bar.child(menu_panel(view, menu, theme, cx));
-    }
-    bar.into_any_element()
+    row.into_any_element()
 }
 
-/// The open facet menu: one row per choice, with a tick on the selected ones and a highlight on the one
-/// the keyboard is on.
-fn menu_panel(
-    view: &WorkspaceView,
-    menu: FilterMenu,
-    theme: &Theme,
-    cx: &mut Context<WorkspaceView>,
-) -> AnyElement {
-    let mut list = div()
-        .id("filter-menu")
-        .flex()
-        .flex_col()
-        .gap(theme.spacing.xs)
-        .p(theme.spacing.xs)
-        .max_h(px(240.))
-        .overflow_y_scroll()
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .bg(theme.palette.surface_raised);
-    for (index, (choice, label)) in view.options(menu.facet).into_iter().enumerate() {
-        let selected = view.is_selected(&choice);
-        let highlighted = menu.highlight == index;
-        list = list.child(
-            div()
-                .id(("filter-option", index as u64))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.sm)
-                .cursor_pointer()
-                .when(highlighted, |row| row.bg(theme.palette.surface_selected))
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child(crate::components::check_mark(selected, theme))
-                .child(label)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.choose_option(index, choice.clone(), cx)
-                })),
-        );
-    }
-    list.into_any_element()
-}
-
-/// The note shown when the filters hide every task of a project that has tasks. The columns stay, and
-/// each says "No matches", so the board still shows where the cards would be. A project with no tasks
-/// at all shows nothing here, and keeps its own empty state.
+/// The empty result notice: shown when the filters hide every card. Nothing here clears them. The menus
+/// have "All" rows for that.
 pub(super) fn empty_notice(
     view: &WorkspaceView,
     shown: usize,
     theme: &Theme,
-    cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     if shown > 0 || view.board.is_empty() || view.filter.is_empty() {
         return None;
@@ -432,27 +299,42 @@ pub(super) fn empty_notice(
             .flex()
             .flex_row()
             .items_center()
-            .justify_between()
             .px(theme.spacing.lg)
             .py(theme.spacing.sm)
-            .child(
-                div()
-                    .text_color(theme.palette.text_secondary)
-                    .child("No tasks match these filters."),
-            )
-            .child(
-                div()
-                    .id(("filter-clear", 1_u64))
-                    .px(theme.spacing.sm)
-                    .py(theme.spacing.xs)
-                    .rounded(theme.radius.md)
-                    .cursor_pointer()
-                    .border_1()
-                    .border_color(theme.palette.border_control)
-                    .hover(|style| style.bg(theme.palette.surface_hover))
-                    .child("Clear filters")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_filters(cx))),
-            )
+            .text_color(theme.palette.text_secondary)
+            .child("No tasks match these filters.")
             .into_any_element(),
     )
+}
+
+/// The rows of a facet's menu: "All" first, then one per value. A chosen value is ringed, and the one the
+/// keys are on is highlighted. Clicking a row chooses it.
+fn menu_rows(
+    view: &WorkspaceView,
+    facet: Facet,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> Vec<AnyElement> {
+    let highlight = view
+        .filter_menu
+        .filter(|menu| menu.facet == facet)
+        .map(|menu| menu.highlight);
+    view.options(facet)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (choice, label))| {
+            let selected = view.is_selected(&choice);
+            crate::components::dropdown_row(
+                ("filter-option", index as u64),
+                &label,
+                selected,
+                highlight == Some(index),
+                theme,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.choose_option(index, choice.clone(), cx)
+            }))
+            .into_any_element()
+        })
+        .collect()
 }

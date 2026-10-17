@@ -10,7 +10,7 @@ use crate::{
     theme::{ActiveTheme, Theme},
 };
 
-const SIDEBAR_WIDTH: Pixels = px(224.);
+pub(super) const SIDEBAR_WIDTH: Pixels = px(224.);
 
 pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
@@ -21,12 +21,16 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
         .flex_shrink_0()
         .gap(theme.spacing.xs)
         .w(SIDEBAR_WIDTH)
-        .h_full()
+        .flex_1()
+        .min_h_0()
         .p(theme.spacing.sm)
         .bg(theme.palette.surface_raised)
         .border_r_1()
         .border_color(theme.palette.border)
         .text_size(theme.typography.body)
+        .on_mouse_down(MouseButton::Left, |event, window, _| {
+            crate::window_move::drag_from(event, window)
+        })
         .child(switcher::render(view, cx))
         .child(
             div()

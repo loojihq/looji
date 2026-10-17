@@ -36,6 +36,8 @@ impl WorkspaceView {
                     count,
                     target,
                 });
+                // The confirmation shows under the In review setting on the Preferences screen.
+                self.open_screen(super::screen::Screen::Preferences, cx);
                 cx.notify();
                 return;
             }
@@ -85,29 +87,14 @@ pub(super) fn dialog(
 ) -> AnyElement {
     let noun = if pending.count == 1 { "task" } else { "tasks" };
     div()
-        .id("column-backdrop")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.palette.scrim)
-        .occlude()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_column_hide(cx)))
-        .child(
-            div()
                 .id("column-panel")
                 .flex()
                 .flex_col()
                 .gap(theme.spacing.md)
-                .w(px(380.))
+                .w_full()
                 .p(theme.spacing.lg)
-                .rounded(theme.radius.lg)
-                .bg(theme.palette.surface_raised)
-                .shadow(theme.elevation.overlay.clone())
-                .border_1()
-                .border_color(theme.palette.border)
-                .on_click(|_, _, cx| cx.stop_propagation())
+                                .bg(theme.palette.surface_raised)
+                                                .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     div()
                         .text_size(theme.typography.title)
@@ -160,8 +147,7 @@ pub(super) fn dialog(
                                     this.confirm_column_hide(cx)
                                 })),
                         ),
-                ),
-        )
+                )
         .into_any_element()
 }
 

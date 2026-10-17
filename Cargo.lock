@@ -3448,6 +3448,7 @@ dependencies = [
  "looji-report",
  "looji-updates",
  "pulldown-cmark",
+ "raw-window-handle",
  "unicode-segmentation",
  "uuid",
  "windows 0.61.3",

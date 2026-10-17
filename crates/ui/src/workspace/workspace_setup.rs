@@ -103,7 +103,12 @@ pub(super) fn render(
         .child(div().flex_1().min_w_0().child(projects))
         .child(div().flex_none().w(px(300.)).child(team));
 
-    let delete = div()
+    // While this workspace's delete is being confirmed, the card shows the confirmation in place of its button.
+    let confirming = view
+        .pending_delete
+        .as_ref()
+        .filter(|pending| pending.id == id);
+    let delete_card = div()
         .flex()
         .flex_row()
         .items_center()
@@ -117,6 +122,7 @@ pub(super) fn render(
             div()
                 .flex()
                 .flex_col()
+                .flex_1()
                 .min_w_0()
                 .child(
                     div()
@@ -142,6 +148,10 @@ pub(super) fn render(
                 this.begin_delete(id, window, cx);
             })),
         );
+    let delete = match confirming {
+        Some(pending) => super::delete::dialog(pending, theme, cx).into_any_element(),
+        None => delete_card.into_any_element(),
+    };
 
     div()
         .id("workspace-body")
@@ -257,6 +267,7 @@ fn panel(
                     div()
                         .flex()
                         .flex_col()
+                        .flex_1()
                         .min_w_0()
                         .child(
                             div()
@@ -278,6 +289,10 @@ fn panel(
 /// The projects panel: each project with an Open button, and New project in the header.
 fn projects_panel(view: &WorkspaceView, theme: &Theme, cx: &mut Context<WorkspaceView>) -> Div {
     let mut rows = div().flex().flex_col().gap(theme.spacing.xs);
+    // The create form opens at the top of this list, above the projects.
+    if let Some(form) = view.project_dialog.as_ref() {
+        rows = rows.child(super::projects::dialog(form, theme, cx));
+    }
     if view.projects.items().is_empty() {
         rows = rows.child(
             div()
@@ -320,22 +335,38 @@ fn projects_panel(view: &WorkspaceView, theme: &Theme, cx: &mut Context<Workspac
         );
     }
 
-    let new_project = components::button(
-        "workspace-new-project",
-        "New project",
-        components::Variant::Primary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-        this.open_project_dialog(window, cx);
-    }))
-    .into_any_element();
+    // The button turns into Cancel while the form is open, as the form's own Cancel does.
+    let (label, variant) = if view.project_dialog.is_some() {
+        ("Cancel", components::Variant::Secondary)
+    } else {
+        ("New project", components::Variant::Primary)
+    };
+    let new_project = components::button("workspace-new-project", label, variant, theme)
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.open_project_dialog(window, cx);
+        }))
+        .into_any_element();
     let detail = plural(view.projects.items().len(), "project", "projects");
     panel("Projects", &detail, new_project, rows, theme)
 }
 
 /// The team panel: the workspace's members, each with their colour mark, and Manage team in the header.
 fn team_panel(view: &WorkspaceView, theme: &Theme, cx: &mut Context<WorkspaceView>) -> Div {
+    // While the team is being edited, the card holds the editor, and its button is Done.
+    if view.team_dialog.is_some() {
+        let done = components::button(
+            "workspace-team-done",
+            "Done",
+            components::Variant::Secondary,
+            theme,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_team_dialog(cx)))
+        .into_any_element();
+        let detail = plural(view.members.len(), "person", "people");
+        let body =
+            super::team_dialog::inline(view, theme, cx).unwrap_or_else(|| div().into_any_element());
+        return panel("Team", &detail, done, body, theme);
+    }
     let mut rows = div().flex().flex_col().gap(theme.spacing.xs);
     if view.members.is_empty() {
         rows = rows.child(

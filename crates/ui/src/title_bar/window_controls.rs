@@ -94,20 +94,17 @@ impl RenderOnce for CaptionButton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let (hover_bg, hover_fg, active_bg, active_fg) = match self {
+            // As JLC draws them: close turns Windows red, and the others take the hover fill, with
+            // the selected-row colour while pressed.
             Self::Close => {
-                let danger = theme.palette.danger;
-                let on_danger = theme.palette.on_danger;
-                (
-                    danger,
-                    on_danger,
-                    danger.opacity(0.8),
-                    on_danger.opacity(0.8),
-                )
+                let red = theme.palette.caption_close;
+                let on_red = theme.palette.on_caption_close;
+                (red, on_red, red.opacity(0.8), on_red.opacity(0.8))
             }
             _ => (
                 theme.palette.surface_hover,
                 theme.palette.text_primary,
-                theme.palette.surface_active,
+                theme.palette.surface_selected,
                 theme.palette.text_primary,
             ),
         };

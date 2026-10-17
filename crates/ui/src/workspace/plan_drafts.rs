@@ -56,6 +56,10 @@ impl WorkspaceView {
         let Some(project) = self.projects.active_id() else {
             return;
         };
+        let main = cx.entity();
+        cx.defer(move |cx| {
+            super::dialog_window::open(cx, main, super::dialog_window::Kind::Drafts)
+        });
         self.plan_drafts = Some(PlanDraftsDialog {
             project,
             drafts: Vec::new(),
@@ -322,7 +326,7 @@ fn row(
 }
 
 /// The list, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
@@ -388,18 +392,5 @@ pub(super) fn overlay(
                 ),
             ));
 
-    Some(
-        div()
-            .id("plan-drafts-backdrop")
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.palette.scrim)
-            .occlude()
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_plan_drafts(cx)))
-            .child(panel)
-            .into_any_element(),
-    )
+    Some(panel.into_any_element())
 }

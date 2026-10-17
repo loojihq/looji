@@ -138,6 +138,8 @@ impl WorkspaceView {
             let _ = store(cx).set_setting(&model_key(task_id), &default);
         }
         self.chat_scroll.scroll_to_bottom();
+        let main = cx.entity();
+        cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Chat));
         self.focus_handle.focus(window);
         cx.notify();
     }
@@ -615,8 +617,8 @@ fn fake_provider(request: &ChatRequest) -> Option<Arc<dyn ChatProvider>> {
 #[cfg(debug_assertions)]
 const MARKDOWN_SAMPLE: &str = "## Plan\n\nThe **login** fix has *three* parts:\n\n- check `verify_password`\n- add a test\n- update the [notes](https://example.com)\n\n| File | Change |\n| --- | --- |\n| login.rs | refuse empty |\n| invoice.py | round totals |\n\n```rust\nif password.is_empty() {\n    return None;\n}\n```\n\n```\nno language here\n```\n\nDone.\n";
 
-/// The chat dialog, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+/// The chat's panel, which the chat window fills. Nothing is drawn when the chat isn't open.
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     window: &Window,
@@ -665,20 +667,9 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(680.))
-        .h(px(600.))
+        .size_full()
         .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
-        .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .text_size(theme.typography.title)
-                .child(format!("Chat: {}", dialog.title)),
-        )
         .child(model_row)
         .child(
             div()
@@ -712,23 +703,5 @@ pub(super) fn overlay(
         ),
     );
 
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .child(
-                div()
-                    .id("chat-backdrop")
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.palette.scrim)
-                    .occlude()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_chat(cx)))
-                    .child(panel),
-            )
-            .into_any_element(),
-    )
+    Some(panel.into_any_element())
 }
