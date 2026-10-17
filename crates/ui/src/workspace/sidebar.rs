@@ -61,14 +61,17 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
         )
         .child(projects::sidebar_section(view, &theme, cx))
         .child(div().flex_1())
-        .child(screen_item(
-            Screen::Preferences,
-            "settings",
-            "Preferences",
-            view,
-            &theme,
-            cx,
-        ))
+        .child(
+            crate::components::nav_item(
+                "sidebar-preferences",
+                "settings",
+                "Preferences",
+                false,
+                None,
+                &theme,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_preferences(cx))),
+        )
         .when_some(view.status.as_ref(), |sidebar, message| {
             sidebar.child(
                 div()
@@ -92,7 +95,6 @@ fn screen_item(
     let id: &'static str = match screen {
         Screen::Today => "sidebar-today",
         Screen::Week => "sidebar-week",
-        Screen::Preferences => "sidebar-preferences",
         Screen::Workspace => "sidebar-workspace",
     };
     // Today shows how many tasks need attention, as the notification settings choose.

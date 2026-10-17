@@ -213,7 +213,7 @@ impl WorkspaceView {
             anchor,
         ));
         // The form shows under Working hours on the Preferences screen.
-        self.open_screen(super::screen::Screen::Preferences, cx);
+        self.open_preferences(cx);
         self.schedule_focus[0].focus(window);
         cx.notify();
     }

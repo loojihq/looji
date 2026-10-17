@@ -29,7 +29,6 @@ const MONTHS: [&str; 12] = [
 pub enum Screen {
     Today,
     Week,
-    Preferences,
     /// The active workspace's own screen: its name, icon, projects, and delete.
     Workspace,
 }
@@ -74,7 +73,7 @@ impl WorkspaceView {
     /// whole workspace rather than one board.
     pub(super) fn open_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         // Preferences reads its settings directly, so it gathers no tasks.
-        if matches!(screen, Screen::Preferences | Screen::Workspace) {
+        if matches!(screen, Screen::Workspace) {
             self.screen = Some(screen);
             return cx.notify();
         }
@@ -137,10 +136,6 @@ pub(super) fn header(view: &WorkspaceView, screen: Screen, theme: &Theme) -> Any
             "Plan the week".to_string(),
             "The next seven days".to_string(),
         ),
-        Screen::Preferences => (
-            "Preferences".to_string(),
-            "Appearance, updates, the board, and this workspace".to_string(),
-        ),
         Screen::Workspace => (
             workspace_name,
             "Set up the workspace, then add a project".to_string(),
@@ -174,13 +169,11 @@ pub(super) fn render(
     view: &WorkspaceView,
     screen: Screen,
     theme: &Theme,
-    window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     match screen {
         Screen::Today => today(view, theme, cx),
         Screen::Week => week(view, theme, cx),
-        Screen::Preferences => super::preferences_panel::render(view, theme, window, cx),
         Screen::Workspace => super::workspace_setup::render(view, theme, cx),
     }
 }

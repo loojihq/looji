@@ -21,6 +21,7 @@ mod landing;
 mod layout;
 mod list_view;
 mod markdown;
+mod markdown_view;
 mod members;
 mod moves;
 mod palette;
@@ -173,6 +174,10 @@ pub struct WorkspaceView {
     filter_menu: Option<filter_bar::FilterMenu>,
     /// Whether the Columns menu is open on the project header.
     board_columns_open: bool,
+    /// The calendar open under a date field, in the task form or the planning window.
+    open_calendar: Option<date_picker::Calendar>,
+    /// Whether the Preferences window is open.
+    preferences_open: bool,
     /// One focus handle for each control in the filter bar, in tab order.
     filter_focus: Vec<FocusHandle>,
     /// The command palette, while it's open.
@@ -246,6 +251,8 @@ impl WorkspaceView {
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     board_columns_open: false,
+                    open_calendar: None,
+                    preferences_open: false,
                     palette: None,
                     screen: None,
                     screen_entries: Vec::new(),
@@ -601,7 +608,7 @@ impl Render for WorkspaceView {
         let theme = cx.theme().clone();
         let header = project_header(self, &theme, cx);
         let body = match self.screen {
-            Some(screen) => screen::render(self, screen, &theme, window, cx),
+            Some(screen) => screen::render(self, screen, &theme, cx),
             None => projects::content(self, &theme, cx),
         };
 
@@ -769,7 +776,11 @@ fn project_header(
                         .child(board::new_task_button(view, theme, cx)),
                 ),
         )
-        .child(progress(done, total, theme));
+        .child(progress(done, total, theme))
+        // The forms open inside the card, under its summary, so they read as part of the project.
+        .children(
+            task_dialog::new_task_form(view, theme, cx).map(|form| inline_section(form, theme)),
+        );
 
     // The views share one row: the segmented switch on the left, and the project's other windows on the right.
     let views = div()
@@ -799,8 +810,6 @@ fn project_header(
         .pt(theme.spacing.md)
         .child(crumb)
         .child(card)
-        // The new-task form opens right under the card, where the New task button is.
-        .children(task_dialog::new_task_form(view, theme, cx).map(|form| div().child(form)))
         .child(views)
         .into_any_element()
 }
@@ -851,7 +860,15 @@ fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> 
         .min_w_0()
         .h_full()
         .child(TitleBar)
-        .child(header)
+        // The header scrolls when a panel makes it tall, so the page under it stays in reach.
+        .child(
+            div()
+                .id("header-scroll")
+                .flex_shrink_0()
+                .max_h(relative(0.6))
+                .overflow_y_scroll()
+                .child(header),
+        )
         .child(
             div()
                 .flex()
@@ -881,4 +898,13 @@ pub(super) fn typed_text(keystroke: &Keystroke) -> Option<&str> {
         None if keystroke.key == "space" => Some(" "),
         None => None,
     }
+}
+
+/// A form inside the project card: a divider above it, and its own space.
+fn inline_section(form: AnyElement, theme: &Theme) -> impl IntoElement {
+    div()
+        .pt(theme.spacing.md)
+        .border_t_1()
+        .border_color(theme.palette.border)
+        .child(form)
 }

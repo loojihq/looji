@@ -273,6 +273,8 @@ pub fn select(id: impl Into<ElementId>, label: &str, open: bool, theme: &Theme) 
         .text_size(theme.typography.body)
         .text_color(theme.palette.text_primary)
         .cursor_pointer()
+        .border_1()
+        .border_color(theme.palette.border_control)
         .when(open, |select| select.bg(theme.palette.surface_selected))
         .when(!open, |select| {
             select

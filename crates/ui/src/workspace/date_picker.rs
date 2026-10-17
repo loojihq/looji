@@ -1,11 +1,10 @@
-//! The date picker for a task's start and due dates: a small trigger that shows the date, and a month
-//! calendar that opens under it. Picking a day sets the date, and Clear empties it.
+//! The date picker: a small trigger that shows a date, and a month calendar that opens under it. It serves the task
+//! form's start and due dates and the planning window's target date. Picking a day sets the date, and Clear empties it.
 
 use gpui::{prelude::*, *};
 
 use super::WorkspaceView;
 use super::card::civil_from_days;
-use super::task_dialog::TaskDialog;
 use super::task_form::Field;
 use crate::{components, theme::Theme};
 
@@ -28,6 +27,14 @@ const SHORT_MONTHS: [&str; 12] = [
 ];
 const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
+/// Which date a calendar sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DateTarget {
+    TaskStart,
+    TaskDue,
+    PlanTarget,
+}
+
 /// A calendar day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Day {
@@ -39,7 +46,7 @@ pub(super) struct Day {
 /// The calendar while it's open: which date it sets, and the month it shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Calendar {
-    pub field: Field,
+    pub target: DateTarget,
     pub year: i32,
     pub month: u32,
 }
@@ -87,13 +94,26 @@ fn format(day: Day) -> String {
 }
 
 /// Today's date. It's taken in UTC, so it can be a day off near midnight.
-fn today() -> Day {
+pub(super) fn today() -> Day {
     let days = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| (elapsed.as_secs() / 86_400) as i64)
         .unwrap_or(0);
     let (year, month, day) = civil_from_days(days);
     Day { year, month, day }
+}
+
+/// The date a month after today, as a `YYYY-MM-DD` value. A day the later month doesn't have is clamped to its last
+/// day, so the 31st becomes the 30th in a thirty-day month.
+pub(super) fn one_month_ahead() -> String {
+    let now = today();
+    let (year, month) = if now.month == 12 {
+        (now.year + 1, 1)
+    } else {
+        (now.year, now.month + 1)
+    };
+    let day = now.day.min(days_in_month(year, month));
+    format(Day { year, month, day })
 }
 
 /// The date as the trigger shows it, such as "18 Oct 2026".
@@ -106,16 +126,15 @@ fn label(day: Day) -> String {
     )
 }
 
-/// The date field's control: its date, or a prompt while it's empty, and the calendar under it when
-/// it's the open one.
+/// The date field's control: its date, or a prompt while it's empty, and the calendar under it when it's the open one.
 pub(super) fn date_field(
-    field: Field,
+    target: DateTarget,
     value: &str,
     calendar: Option<Calendar>,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let open = calendar.is_some_and(|open| open.field == field);
+    let open = calendar.is_some_and(|open| open.target == target);
     let chosen = parse(value);
     let shown = match chosen {
         Some(day) => div().child(label(day)),
@@ -123,9 +142,10 @@ pub(super) fn date_field(
             .text_color(theme.palette.text_secondary)
             .child("Pick a date"),
     };
-    let id = match field {
-        Field::Start => "task-start",
-        _ => "task-due",
+    let id = match target {
+        DateTarget::TaskStart => "task-start",
+        DateTarget::TaskDue => "task-due",
+        DateTarget::PlanTarget => "plan-date",
     };
     let trigger = div()
         .id(id)
@@ -143,7 +163,7 @@ pub(super) fn date_field(
         } else {
             theme.palette.border_control
         })
-        .bg(theme.palette.surface)
+        .bg(theme.palette.surface_raised)
         .text_size(theme.typography.body)
         .cursor_pointer()
         .child(shown)
@@ -152,7 +172,7 @@ pub(super) fn date_field(
             15.,
             theme.palette.text_secondary,
         ))
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_calendar(field, cx)));
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_calendar(target, cx)));
     let mut item = div()
         .relative()
         // Presses on the control and its calendar stay with them, so the form doesn't close its menus.
@@ -164,8 +184,8 @@ pub(super) fn date_field(
     item.into_any_element()
 }
 
-/// The month calendar: the month's name with arrows to move between months, the weekdays, the days, and
-/// Clear and Today.
+/// The month calendar: the month's name with arrows to move between months, the weekdays, the days, and Clear and
+/// Today.
 fn month_grid(
     calendar: Calendar,
     chosen: Option<Day>,
@@ -334,43 +354,56 @@ fn day_cell(
         .into_any_element()
 }
 
-/// The text of a date field, by which field it is.
-fn value_of(dialog: &mut TaskDialog, field: Field) -> &mut String {
-    match field {
-        Field::Start => &mut dialog.form.values.start,
-        _ => &mut dialog.form.values.due,
-    }
-}
-
 impl WorkspaceView {
-    /// Opens the calendar for a date field, or closes it when it's the open one. The other menus close.
-    fn toggle_calendar(&mut self, field: Field, cx: &mut Context<Self>) {
-        let Some(dialog) = self.task_dialog.as_mut() else {
-            return;
-        };
-        dialog.form.focus(field);
-        dialog.priority_open = false;
-        dialog.assignee_open = false;
-        if dialog.calendar.is_some_and(|open| open.field == field) {
-            dialog.calendar = None;
-        } else {
-            let shown = parse(value_of(dialog, field)).unwrap_or_else(today_day);
-            dialog.calendar = Some(Calendar {
-                field,
-                year: shown.year,
-                month: shown.month,
-            });
+    /// The text a target holds right now.
+    fn date_text(&self, target: DateTarget) -> String {
+        match target {
+            DateTarget::TaskStart => self
+                .task_dialog
+                .as_ref()
+                .map(|dialog| dialog.form.values.start.clone())
+                .unwrap_or_default(),
+            DateTarget::TaskDue => self
+                .task_dialog
+                .as_ref()
+                .map(|dialog| dialog.form.values.due.clone())
+                .unwrap_or_default(),
+            DateTarget::PlanTarget => self
+                .plan_wizard
+                .as_ref()
+                .map(|dialog| dialog.wizard.target_text().to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Opens the calendar for a date, or closes it when it's the open one. The task form's other menus close, and
+    /// its field takes the focus.
+    pub(super) fn toggle_calendar(&mut self, target: DateTarget, cx: &mut Context<Self>) {
+        if self.open_calendar.is_some_and(|open| open.target == target) {
+            self.open_calendar = None;
+            return cx.notify();
+        }
+        let shown = parse(&self.date_text(target)).unwrap_or_else(today);
+        self.open_calendar = Some(Calendar {
+            target,
+            year: shown.year,
+            month: shown.month,
+        });
+        if let Some(dialog) = self.task_dialog.as_mut() {
+            dialog.priority_open = false;
+            dialog.assignee_open = false;
+            match target {
+                DateTarget::TaskStart => dialog.form.focus(Field::Start),
+                DateTarget::TaskDue => dialog.form.focus(Field::Due),
+                DateTarget::PlanTarget => {}
+            }
         }
         cx.notify();
     }
 
     /// Moves the open calendar a month forward or back.
-    fn shift_calendar(&mut self, step: i32, cx: &mut Context<Self>) {
-        let Some(calendar) = self
-            .task_dialog
-            .as_mut()
-            .and_then(|dialog| dialog.calendar.as_mut())
-        else {
+    pub(super) fn shift_calendar(&mut self, step: i32, cx: &mut Context<Self>) {
+        let Some(calendar) = self.open_calendar.as_mut() else {
             return;
         };
         let index = calendar.year * 12 + calendar.month as i32 - 1 + step;
@@ -380,19 +413,30 @@ impl WorkspaceView {
     }
 
     /// Sets the open calendar's date, or clears it, and closes the calendar.
-    fn pick_date(&mut self, value: Option<String>, cx: &mut Context<Self>) {
-        let Some(dialog) = self.task_dialog.as_mut() else {
+    pub(super) fn pick_date(&mut self, value: Option<String>, cx: &mut Context<Self>) {
+        let Some(calendar) = self.open_calendar.take() else {
             return;
         };
-        let Some(calendar) = dialog.calendar.take() else {
-            return;
-        };
-        *value_of(dialog, calendar.field) = value.unwrap_or_default();
-        dialog.form.focus(calendar.field);
+        let value = value.unwrap_or_default();
+        match calendar.target {
+            DateTarget::TaskStart => {
+                if let Some(dialog) = self.task_dialog.as_mut() {
+                    dialog.form.values.start = value;
+                    dialog.form.focus(Field::Start);
+                }
+            }
+            DateTarget::TaskDue => {
+                if let Some(dialog) = self.task_dialog.as_mut() {
+                    dialog.form.values.due = value;
+                    dialog.form.focus(Field::Due);
+                }
+            }
+            DateTarget::PlanTarget => {
+                if let Some(dialog) = self.plan_wizard.as_mut() {
+                    dialog.wizard.set_target_text(&value);
+                }
+            }
+        }
         cx.notify();
     }
-}
-
-fn today_day() -> Day {
-    today()
 }

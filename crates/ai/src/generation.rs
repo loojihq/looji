@@ -26,11 +26,12 @@ pub enum Update {
 /// Stops quietly when `cancel` is cancelled. Nothing is reported after a cancel, so a late chunk can't reach
 /// the caller.
 pub async fn run_request(
+    provider: crate::Provider,
     request: ChatRequest,
     cancel: CancellationToken,
     send: impl Fn(Update) + Send,
 ) {
-    let provider = match crate::connect() {
+    let provider = match crate::connect(provider) {
         Ok(provider) => provider,
         Err(err) => return send(Update::Failed(err)),
     };

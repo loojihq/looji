@@ -10,17 +10,20 @@
 use gpui::{prelude::*, *};
 
 use super::WorkspaceView;
-use super::{chat, plan_drafts, plan_wizard, repo_dialog, task_dialog, task_form::Mode};
+use super::{
+    chat, plan_drafts, plan_wizard, preferences_panel, repo_dialog, task_dialog, task_form::Mode,
+};
 use crate::{components, theme::ActiveTheme, title_bar::TITLE_BAR_HEIGHT, window_move};
 
 /// Which dialog a window shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Repository,
-    Plan,
     Drafts,
     Task,
     Chat,
+    Plan,
+    Preferences,
 }
 
 impl Kind {
@@ -28,12 +31,13 @@ impl Kind {
     fn title(self, view: &WorkspaceView) -> String {
         match self {
             Kind::Repository => "Repository".to_string(),
-            Kind::Plan => "Plan a project".to_string(),
             Kind::Drafts => "Planning drafts".to_string(),
             Kind::Task => match view.task_dialog.as_ref().map(|dialog| &dialog.form.mode) {
                 Some(Mode::Edit(_)) => "Edit task".to_string(),
                 _ => "New task".to_string(),
             },
+            Kind::Preferences => "Preferences".to_string(),
+            Kind::Plan => "Generate with AI".to_string(),
             Kind::Chat => match view.chat_dialog.as_ref() {
                 Some(dialog) => format!("Chat: {}", dialog.title),
                 None => "Chat".to_string(),
@@ -46,21 +50,28 @@ impl Kind {
     fn size(self) -> Size<Pixels> {
         match self {
             Kind::Repository => size(px(492.), px(420.)),
-            Kind::Plan => size(px(640.), px(640.)),
             Kind::Drafts => size(px(560.), px(460.)),
             Kind::Task => size(px(552.), px(520.)),
             Kind::Chat => size(px(680.), px(640.)),
+            Kind::Preferences => size(px(720.), px(680.)),
+            Kind::Plan => size(px(1040.), px(800.)),
         }
+    }
+
+    /// Whether the window can be resized. The planning window grows with its review.
+    fn resizable(self) -> bool {
+        matches!(self, Kind::Plan)
     }
 
     /// Whether this dialog is open in the main window's state.
     fn is_open(self, view: &WorkspaceView) -> bool {
         match self {
             Kind::Repository => view.repo_dialog.is_some(),
-            Kind::Plan => view.plan_wizard.is_some(),
             Kind::Drafts => view.plan_drafts.is_some(),
             Kind::Task => view.task_dialog.is_some(),
             Kind::Chat => view.chat_dialog.is_some(),
+            Kind::Preferences => view.preferences_open,
+            Kind::Plan => view.plan_wizard.is_some(),
         }
     }
 
@@ -68,10 +79,11 @@ impl Kind {
     fn clear(self, view: &mut WorkspaceView) {
         match self {
             Kind::Repository => view.repo_dialog = None,
-            Kind::Plan => view.plan_wizard = None,
             Kind::Drafts => view.plan_drafts = None,
             Kind::Task => view.task_dialog = None,
             Kind::Chat => view.chat_dialog = None,
+            Kind::Preferences => view.preferences_open = false,
+            Kind::Plan => view.plan_wizard = None,
         }
     }
 
@@ -84,10 +96,11 @@ impl Kind {
     ) {
         match self {
             Kind::Repository => view.close_repo_dialog(cx),
-            Kind::Plan => view.request_plan_close(window, cx),
             Kind::Drafts => view.close_plan_drafts(cx),
             Kind::Task => view.request_task_dialog_close(cx),
             Kind::Chat => view.close_chat(cx),
+            Kind::Preferences => view.close_preferences(cx),
+            Kind::Plan => view.request_plan_close(window, cx),
         }
     }
 
@@ -101,10 +114,11 @@ impl Kind {
     ) -> Option<AnyElement> {
         match self {
             Kind::Repository => repo_dialog::panel(view, theme, cx),
-            Kind::Plan => plan_wizard::panel(view, theme, window, cx),
             Kind::Drafts => plan_drafts::panel(view, theme, cx),
             Kind::Task => task_dialog::panel(view, theme, cx),
             Kind::Chat => chat::panel(view, theme, window, cx),
+            Kind::Plan => plan_wizard::panel(view, theme, window, cx),
+            Kind::Preferences => Some(preferences_panel::render(view, theme, window, cx)),
         }
     }
 }
@@ -132,7 +146,7 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
             appears_transparent: true,
             traffic_light_position: None,
         }),
-        is_resizable: false,
+        is_resizable: kind.resizable(),
         ..Default::default()
     };
 

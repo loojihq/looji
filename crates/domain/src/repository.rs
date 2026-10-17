@@ -145,13 +145,14 @@ pub trait PlanDraftRepository {
     -> RepoResult<Vec<crate::plan_draft::PlanDraft>>;
     /// Deletes a draft and its stories and tasks. This is how a draft is discarded.
     fn delete(&self, id: crate::ids::PlanDraftId) -> RepoResult<()>;
-    /// Publishes a ready plan's tasks into the project's Backlog, in one transaction, skipping titles the project
-    /// already has. The draft is marked published in the same transaction. A failure part way writes nothing. `None`
-    /// means there is no such draft.
+    /// Publishes a ready plan's tasks into the project's Backlog or To do column (`status`), in one transaction,
+    /// skipping titles the project already has. The draft is marked published in the same transaction. A failure
+    /// part way writes nothing. `None` means there is no such draft.
     fn publish(
         &self,
         id: crate::ids::PlanDraftId,
         at: crate::time::Timestamp,
+        status: crate::status::Status,
     ) -> RepoResult<Option<crate::plan_draft::Publication>>;
     /// Applies one change to a ready draft and saves it. The change is checked against the project's current team.
     /// A refused change is `Rejected` and writes nothing. `None` means there is no such draft.

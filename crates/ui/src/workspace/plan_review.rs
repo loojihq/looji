@@ -8,7 +8,7 @@
 use gpui::{prelude::*, *};
 use looji_domain::{
     PlanDraft, PlanDraftRepository, PlanEdit, Priority, Publication, RefineTarget, RepoError,
-    TeamMember, TeamMemberId, Timestamp, display_labels, parse_estimate_hours,
+    Status, TeamMember, TeamMemberId, Timestamp, display_labels, parse_estimate_hours,
 };
 
 use super::fields::text_box;
@@ -336,7 +336,7 @@ impl WorkspaceView {
     /// Publishes the plan's tasks to the Backlog. An edit still open is saved or cancelled first, so what's published
     /// is what's on screen. The store does the whole publication in one transaction. A failure adds nothing, and the
     /// plan stays as it was.
-    pub(super) fn publish_plan(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn publish_plan(&mut self, status: Status, cx: &mut Context<Self>) {
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };
@@ -347,7 +347,7 @@ impl WorkspaceView {
         let Some(id) = dialog.draft.as_ref().map(PlanDraft::id) else {
             return;
         };
-        let outcome = PlanDraftRepository::publish(store(cx), id, now());
+        let outcome = PlanDraftRepository::publish(store(cx), id, now(), status);
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };
@@ -357,7 +357,7 @@ impl WorkspaceView {
                 if let Ok(Some(updated)) = PlanDraftRepository::find(store(cx), id) {
                     dialog.draft = Some(updated);
                 }
-                dialog.notice = Some(publish_message(&publication));
+                dialog.notice = Some(publish_message(&publication, status));
                 published = true;
             }
             Ok(None) => dialog.notice = Some("This plan is no longer stored.".to_string()),
@@ -371,6 +371,14 @@ impl WorkspaceView {
         // The published tasks are on the board now. The board only reloads when its project changes, so reload it
         // here, or the Backlog would show nothing until the user switched away and back.
         if published {
+            if status == Status::Backlog
+                && self
+                    .projects
+                    .active()
+                    .is_some_and(|project| !project.is_status_visible(Status::Backlog))
+            {
+                self.request_column_visibility(Status::Backlog, true, cx);
+            }
             self.reload_board(cx);
         }
         cx.notify();
@@ -498,8 +506,11 @@ fn editable(
         div()
             .text_color(theme.palette.text_secondary)
             .child(placeholder.to_string())
+            .into_any_element()
+    } else if target.multiline() {
+        super::markdown_view::view(&shown, theme).into_any_element()
     } else {
-        div().child(shown)
+        div().child(shown).into_any_element()
     };
     div()
         .id(id)
@@ -513,41 +524,16 @@ fn editable(
         .into_any_element()
 }
 
-/// One task the publish will create, as a row in the side panel. The check shows it's included.
-fn candidate_row(title: &str, estimate: &str, theme: &Theme) -> AnyElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .border_b_1()
-        .border_color(theme.palette.border)
-        .child(crate::components::check_mark(true, theme).mt(px(2.)))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(div().child(title.to_string()))
-                .child(
-                    div()
-                        .text_size(theme.typography.caption)
-                        .text_color(theme.palette.text_secondary)
-                        .child(estimate.to_string()),
-                ),
-        )
-        .into_any_element()
-}
-
-fn section_heading(text: String, theme: &Theme) -> Div {
-    crate::components::section_label(&text, theme)
-}
-
 /// What a publication says in the notice: how many tasks went in, and which titles were already there.
-fn publish_message(publication: &Publication) -> String {
+fn publish_message(publication: &Publication, status: Status) -> String {
     let count = publication.published.len();
     let noun = if count == 1 { "task" } else { "tasks" };
-    let mut message = format!("Published {count} {noun} to the backlog.");
+    let place = if status == Status::Todo {
+        "To do"
+    } else {
+        "the backlog"
+    };
+    let mut message = format!("Published {count} {noun} to {place}.");
     if !publication.skipped.is_empty() {
         message.push_str(&format!(
             " Skipped {} the backlog already has: {}.",
@@ -560,12 +546,8 @@ fn publish_message(publication: &Publication) -> String {
 
 /// The publish control. Before publishing it says what will happen. Afterwards it says the plan is in the backlog.
 fn publish_row(dialog: &PlanWizardDialog, theme: &Theme, cx: &mut Context<WorkspaceView>) -> Div {
-    let row = div()
-        .flex()
-        .flex_row()
-        .justify_between()
-        .items_center()
-        .gap(theme.spacing.sm);
+    // Stacked, so the note and the button both fit the side column.
+    let row = div().flex().flex_col().items_start().gap(theme.spacing.sm);
     let Some(draft) = dialog.draft.as_ref() else {
         return row;
     };
@@ -586,17 +568,32 @@ fn publish_row(dialog: &PlanWizardDialog, theme: &Theme, cx: &mut Context<Worksp
     )
     .child({
         // An empty plan has nothing to publish, and publishing it would still mark the plan as published.
-        let publish = button(
-            "review-publish",
-            &format!("Publish {count} {noun} to the backlog"),
-            true,
-            theme,
-        );
-        if count == 0 {
-            publish.opacity(0.5).cursor_default()
-        } else {
-            publish.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.publish_plan(cx)))
+        let mut actions = div().flex().flex_row().flex_wrap().gap(theme.spacing.sm);
+        for (id, status, place, primary) in [
+            (
+                "review-publish-backlog",
+                Status::Backlog,
+                "the backlog",
+                true,
+            ),
+            ("review-publish-todo", Status::Todo, "To do", false),
+        ] {
+            let publish = button(
+                id,
+                &format!("Publish {count} {noun} to {place}"),
+                primary,
+                theme,
+            );
+            let publish = if count == 0 {
+                publish.opacity(0.5).cursor_default()
+            } else {
+                publish.on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.publish_plan(status, cx)),
+                )
+            };
+            actions = actions.child(publish);
         }
+        actions
     })
 }
 
@@ -621,6 +618,142 @@ fn refine_button(
 }
 
 /// The review, drawn over the window in place of the wizard's form. Nothing is drawn when the wizard isn't open.
+/// Stories shown on one page of the review.
+const STORIES_PER_PAGE: usize = 3;
+/// Tasks shown on one page of the review. Tasks carry more detail than stories, so fewer fit.
+const TASKS_PER_PAGE: usize = 4;
+
+/// The pages a list of `count` items fills. An empty list still has one page, so the pager always reads correctly.
+fn page_count(count: usize, per_page: usize) -> usize {
+    count.div_ceil(per_page).max(1)
+}
+
+/// The items on a page, as their indexes in the whole list.
+fn page_range(page: usize, count: usize, per_page: usize) -> std::ops::Range<usize> {
+    let start = (page * per_page).min(count);
+    start..(start + per_page).min(count)
+}
+
+impl WorkspaceView {
+    /// Moves a review list to its next or previous page, within its last page at the end.
+    pub(super) fn step_review_page(&mut self, tasks: bool, delta: isize, cx: &mut Context<Self>) {
+        let Some(dialog) = self.plan_wizard.as_mut() else {
+            return;
+        };
+        let (count, per_page) = match dialog.draft.as_ref() {
+            Some(draft) if tasks => (draft.tasks().len(), TASKS_PER_PAGE),
+            Some(draft) => (draft.stories().len(), STORIES_PER_PAGE),
+            None => (0, 1),
+        };
+        let pages = page_count(count, per_page) as isize;
+        let page = if tasks {
+            &mut dialog.task_page
+        } else {
+            &mut dialog.story_page
+        };
+        *page = (*page as isize + delta).clamp(0, pages - 1) as usize;
+        cx.notify();
+    }
+}
+
+/// The pager under a list: previous, the page and its count, and next.
+fn pager(
+    tasks: bool,
+    page: usize,
+    pages: usize,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let page = page.min(pages - 1);
+    let key = usize::from(tasks);
+    let previous =
+        button(("review-page-previous", key), "‹ Previous", false, theme)
+            .when(page == 0, |b| b.opacity(0.5).cursor_default())
+            .when(page > 0, |b| {
+                b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.step_review_page(tasks, -1, cx)
+                }))
+            });
+    let next = button(("review-page-next", key), "Next ›", false, theme)
+        .when(page + 1 >= pages, |b| b.opacity(0.5).cursor_default())
+        .when(page + 1 < pages, |b| {
+            b.on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.step_review_page(tasks, 1, cx)),
+            )
+        });
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.sm)
+        .pt(theme.spacing.sm)
+        .border_t_1()
+        .border_color(theme.palette.border)
+        .child(previous)
+        .child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(format!("Page {} of {}", page + 1, pages)),
+        )
+        .child(next)
+        .into_any_element()
+}
+
+/// A card in the review's grid: a heading, the scrolling content, and whatever sits under it.
+fn review_card(
+    id: &'static str,
+    heading: AnyElement,
+    content: impl IntoElement,
+    footer: AnyElement,
+    theme: &Theme,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .p(theme.spacing.md)
+        .gap(theme.spacing.sm)
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .bg(theme.palette.surface_raised)
+        .child(heading)
+        .child(
+            div()
+                .id(id)
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .gap(theme.spacing.sm)
+                .overflow_y_scroll()
+                .child(content),
+        )
+        .child(footer)
+}
+
+/// A card's heading: its name, the count, and any action on the right.
+fn card_heading(name: String, action: Option<AnyElement>, theme: &Theme) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.sm)
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(theme.typography.body)
+                .child(name),
+        )
+        .children(action)
+        .into_any_element()
+}
+
 pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
@@ -638,18 +771,110 @@ pub(super) fn panel(
             .and_then(|index| labels.get(index).cloned())
             .unwrap_or_else(|| "Unassigned".to_string()),
     };
+    let project = view
+        .projects
+        .active()
+        .map(|project| project.name().to_string())
+        .unwrap_or_default();
 
+    // The summary: the counts, the total estimate, and how many tasks are high priority.
+    let total_minutes: u32 = draft
+        .tasks()
+        .iter()
+        .filter_map(|task| task.estimate.map(|estimate| estimate.minutes()))
+        .sum();
+    let high = draft
+        .tasks()
+        .iter()
+        .filter(|task| task.priority == Priority::High)
+        .count();
+    let chip = |text: String| {
+        div()
+            .px(theme.spacing.sm)
+            .py(px(3.))
+            .rounded(px(12.))
+            .bg(theme.palette.surface_hover)
+            .text_size(theme.typography.caption)
+            .child(text)
+    };
+    let summary = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(theme.spacing.xs)
+        .child(chip(format!(
+            "{} {}",
+            draft.stories().len(),
+            if draft.stories().len() == 1 {
+                "story"
+            } else {
+                "stories"
+            }
+        )))
+        .child(chip(format!(
+            "{} {}",
+            draft.tasks().len(),
+            if draft.tasks().len() == 1 {
+                "task"
+            } else {
+                "tasks"
+            }
+        )))
+        .child(chip(format!("{} h planned", hours_text(total_minutes))))
+        .child(chip(format!("{high} high priority")));
+
+    let header = div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .justify_between()
+        .gap(theme.spacing.md)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme.spacing.xs)
+                .min_w_0()
+                .child(
+                    div()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(format!("{project} / Drafts")),
+                )
+                .child(
+                    div()
+                        .text_size(theme.typography.heading)
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Review the plan"),
+                )
+                .child(
+                    div()
+                        .text_color(theme.palette.text_secondary)
+                        .child("Each change is saved as you make it. Nothing reaches the board until you publish."),
+                ),
+        )
+        .child(summary);
+
+    // The spec, on the left, scrolls on its own so a long one doesn't push the lists off the page.
     let spec = div()
         .flex()
         .flex_col()
-        .gap(theme.spacing.xs)
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .p(theme.spacing.md)
+        .gap(theme.spacing.sm)
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .bg(theme.palette.surface_raised)
         .child(
             div()
                 .flex()
                 .flex_row()
                 .justify_between()
                 .items_center()
-                .child(section_heading("Spec".to_string(), theme))
+                .child(card_heading("Spec".to_string(), None, theme))
                 .children(draft.spec_edited().then(|| edited_mark(theme)))
                 .child(refine_button(
                     ("review-refine-spec", 0),
@@ -659,42 +884,62 @@ pub(super) fn panel(
                 )),
         )
         .children(plan_refine::form(dialog, RefineTarget::Spec, theme, cx))
-        .child(editable(
-            dialog,
-            Target::Spec,
-            ("review-spec", 0),
-            draft.spec().to_string(),
-            "No spec",
-            theme,
-            cx,
-        ));
+        .child(
+            div()
+                .id("review-spec-scroll")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(editable(
+                    dialog,
+                    Target::Spec,
+                    ("review-spec", 0),
+                    draft.spec().to_string(),
+                    "No spec",
+                    theme,
+                    cx,
+                )),
+        );
 
-    let mut stories = div()
-        .flex()
-        .flex_col()
-        .gap(theme.spacing.sm)
-        .child(section_heading(
-            format!("User stories ({})", draft.stories().len()),
-            theme,
-        ));
+    // The stories: one page at a time.
+    let story_count = draft.stories().len();
+    let story_pages = page_count(story_count, STORIES_PER_PAGE);
+    let story_page = dialog.story_page.min(story_pages - 1);
+    let mut story_list = div().flex().flex_col().gap(theme.spacing.sm);
     if draft.stories().is_empty() {
-        stories = stories.child(
+        story_list = story_list.child(
             div()
                 .text_color(theme.palette.text_secondary)
                 .child("No user stories."),
         );
     }
-    for (index, story) in draft.stories().iter().enumerate() {
-        stories = stories.child(
+    for index in page_range(story_page, story_count, STORIES_PER_PAGE) {
+        let story = &draft.stories()[index];
+        story_list = story_list.child(
             div()
                 .flex()
                 .flex_col()
                 .gap(theme.spacing.xs)
                 .p(theme.spacing.sm)
-                .rounded(theme.radius.lg)
+                .rounded(theme.radius.md)
                 .border_1()
                 .border_color(theme.palette.border)
-                .children(story.edited.then(|| edited_mark(theme)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(theme.typography.caption)
+                                .text_color(theme.palette.text_secondary)
+                                .child(format!("Story {}", index + 1)),
+                        )
+                        .children(story.edited.then(|| edited_mark(theme))),
+                )
                 .child(editable(
                     dialog,
                     Target::StoryTitle(index),
@@ -740,31 +985,28 @@ pub(super) fn panel(
                 ),
         );
     }
+    let stories_card = review_card(
+        "review-stories",
+        card_heading(format!("User stories ({story_count})"), None, theme),
+        story_list,
+        pager(false, story_page, story_pages, theme, cx),
+        theme,
+    );
 
-    let mut backlog = div()
-        .flex()
-        .flex_col()
-        .gap(theme.spacing.sm)
-        .child(section_heading(
-            format!(
-                "Backlog ({} {})",
-                draft.tasks().len(),
-                if draft.tasks().len() == 1 {
-                    "task"
-                } else {
-                    "tasks"
-                }
-            ),
-            theme,
-        ));
+    // The tasks: one page at a time, each with its detail and its actions.
+    let task_count = draft.tasks().len();
+    let task_pages = page_count(task_count, TASKS_PER_PAGE);
+    let task_page = dialog.task_page.min(task_pages - 1);
+    let last = task_count.saturating_sub(1);
+    let mut task_list = div().flex().flex_col().gap(theme.spacing.sm);
     if draft.tasks().is_empty() {
-        backlog =
-            backlog.child(div().text_color(theme.palette.text_secondary).child(
+        task_list =
+            task_list.child(div().text_color(theme.palette.text_secondary).child(
                 "The backlog is empty. Add a task, or close this and generate a plan again.",
             ));
     }
-    let last = draft.tasks().len().saturating_sub(1);
-    for (index, task) in draft.tasks().iter().enumerate() {
+    for index in page_range(task_page, task_count, TASKS_PER_PAGE) {
+        let task = &draft.tasks()[index];
         let estimate = task
             .estimate
             .map(|estimate| format!("{} h", hours_text(estimate.minutes())))
@@ -774,16 +1016,29 @@ pub(super) fn panel(
         } else {
             task.tags.join(", ")
         };
-        backlog = backlog.child(
+        task_list = task_list.child(
             div()
                 .flex()
                 .flex_col()
                 .gap(theme.spacing.xs)
                 .p(theme.spacing.sm)
-                .rounded(theme.radius.lg)
+                .rounded(theme.radius.md)
                 .border_1()
                 .border_color(theme.palette.border)
-                .children(task.edited.then(|| edited_mark(theme)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(theme.typography.caption)
+                                .text_color(theme.palette.text_secondary)
+                                .child(format!("Task {}", index + 1)),
+                        )
+                        .children(task.edited.then(|| edited_mark(theme))),
+                )
                 .child(editable(
                     dialog,
                     Target::TaskTitle(index),
@@ -902,11 +1157,15 @@ pub(super) fn panel(
                 ),
         );
     }
-    backlog = backlog.child(
-        div().flex().flex_row().justify_end().child(
-            button("review-add-task", "Add task", true, theme)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_plan_task(cx))),
-        ),
+    let add_task = button("review-add-task", "Add task", true, theme)
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_plan_task(cx)))
+        .into_any_element();
+    let tasks_card = review_card(
+        "review-tasks",
+        card_heading(format!("Tasks ({task_count})"), Some(add_task), theme),
+        task_list,
+        pager(true, task_page, task_pages, theme, cx),
+        theme,
     );
 
     let warnings = dialog.plan.as_ref().and_then(|plan| {
@@ -918,59 +1177,35 @@ pub(super) fn panel(
         })
     });
 
-    let project = view
-        .projects
-        .active()
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
-
-    // Every backlog task becomes a task on publish, so each one is listed with a check.
-    let candidates: Vec<AnyElement> = draft
-        .tasks()
-        .iter()
-        .map(|task| {
-            let estimate = task
-                .estimate
-                .map(|estimate| format!("{} h", hours_text(estimate.minutes())))
-                .unwrap_or_else(|| "No estimate".to_string());
-            candidate_row(&task.title, &estimate, theme)
-        })
-        .collect();
+    // The grid: the spec on the left; the stories above the tasks on the right.
+    let lists = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .gap(theme.spacing.lg)
+        .child(stories_card)
+        .child(tasks_card);
+    let grid = div()
+        .flex()
+        .flex_row()
+        .flex_1()
+        .min_h_0()
+        .gap(theme.spacing.lg)
+        .child(spec)
+        .child(lists);
 
     let panel = div()
         .id("plan-review-panel")
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w_full()
+        .size_full()
         .p(theme.spacing.lg)
-        .bg(theme.palette.surface_raised)
+        .bg(theme.palette.surface)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_size(theme.typography.caption)
-                        .text_color(theme.palette.text_secondary)
-                        .child(format!("{project} / Drafts")),
-                )
-                .child(
-                    div()
-                        .mt(theme.spacing.xs)
-                        .text_size(theme.typography.heading)
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Review the plan"),
-                )
-                .child(
-                    div()
-                        .mt(px(2.))
-                        .text_size(theme.typography.caption)
-                        .text_color(theme.palette.text_secondary)
-                        .child("Each change is saved as you make it."),
-                ),
-        )
+        .child(header)
         .when_some(warnings, |panel, warning| {
             panel.child(
                 div()
@@ -979,69 +1214,16 @@ pub(super) fn panel(
             )
         })
         .when_some(dialog.notice.clone(), |panel, notice| {
-            panel.child(div().text_color(theme.palette.danger).child(notice))
+            // A notice that reports a success is plain text. Anything else is a problem, so it's shown in red.
+            let colour = if notice.starts_with("Published") {
+                theme.palette.text_primary
+            } else {
+                theme.palette.danger
+            };
+            panel.child(div().text_color(colour).child(notice))
         })
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(theme.spacing.lg)
-                .min_h_0()
-                .child(
-                    div()
-                        .id("plan-review-scroll")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(theme.spacing.lg)
-                        .max_h(px(560.))
-                        .overflow_y_scroll()
-                        .child(spec)
-                        .child(stories)
-                        .child(backlog),
-                )
-                // The side panel turns the backlog into tasks, as in the design.
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_none()
-                        .w(px(260.))
-                        .gap(theme.spacing.sm)
-                        .pl(theme.spacing.lg)
-                        .border_l_1()
-                        .border_color(theme.palette.border)
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Turn into tasks"),
-                        )
-                        .child(
-                            div()
-                                .text_size(theme.typography.caption)
-                                .text_color(theme.palette.text_secondary)
-                                .child("Each backlog task becomes a task on the board."),
-                        )
-                        .children(candidates)
-                        .child(publish_row(dialog, theme, cx))
-                        .child(
-                            div().flex().flex_row().justify_end().child(
-                                crate::components::button(
-                                    "plan-close",
-                                    "Close",
-                                    crate::components::Variant::Ghost,
-                                    theme,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _: &ClickEvent, window, cx| {
-                                        this.request_plan_close(window, cx)
-                                    },
-                                )),
-                            ),
-                        ),
-                ),
-        );
+        .child(grid)
+        .child(publish_row(dialog, theme, cx));
 
     Some(panel.into_any_element())
 }

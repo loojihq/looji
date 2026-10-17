@@ -15,7 +15,6 @@ use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken, ChatMessage, ChatRequest,
     generation::{Update, run_request},
-    models::DEFAULT_MODEL,
     planning::{ParsedPlan, build_prompt, parse_plan},
 };
 use looji_domain::{
@@ -24,7 +23,7 @@ use looji_domain::{
     Timestamp, WizardPhase, display_labels,
 };
 
-use super::fields::{field, text_box};
+use super::fields::{field, member_mark};
 use super::plan_review;
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
@@ -93,6 +92,9 @@ pub(super) struct PlanWizardDialog {
     pub notice: Option<String>,
     /// Counts reads while generating, to turn the spinner.
     pub frame: usize,
+    /// The page each review list shows, counted from zero. Stories and tasks page separately.
+    pub story_page: usize,
+    pub task_page: usize,
 }
 
 impl PlanWizardDialog {
@@ -129,6 +131,17 @@ impl WorkspaceView {
         let Some(project) = self.projects.active_id() else {
             return;
         };
+        // One inline form at a time. A task form with edits asks before it closes.
+        if self
+            .task_dialog
+            .as_ref()
+            .is_some_and(|dialog| matches!(dialog.form.mode, super::task_form::Mode::Create))
+        {
+            self.request_task_dialog_close(cx);
+            if self.task_dialog.is_some() {
+                return;
+            }
+        }
         let mut notice = None;
         let members = match TeamMemberRepository::list_for_workspace(
             store(cx),
@@ -151,7 +164,7 @@ impl WorkspaceView {
         };
         self.plan_wizard = Some(PlanWizardDialog {
             project,
-            wizard: PlanWizard::new(DueDate::today_utc(), None),
+            wizard: default_plan_wizard(),
             draft: None,
             run: None,
             interrupted,
@@ -162,6 +175,8 @@ impl WorkspaceView {
             refine: None,
             notice,
             frame: 0,
+            story_page: 0,
+            task_page: 0,
         });
         let main = cx.entity();
         cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Plan));
@@ -259,7 +274,7 @@ impl WorkspaceView {
         let brief = format!("{}{target}", generation.goal);
         let prompt = build_prompt(&brief, &dialog.members);
         let request = ChatRequest {
-            model: DEFAULT_MODEL.to_string(),
+            model: super::preferences_panel::plan_model(cx),
             system: None,
             messages: vec![ChatMessage::user(prompt)],
             max_tokens: MAX_TOKENS,
@@ -268,11 +283,16 @@ impl WorkspaceView {
         let cancel = CancellationToken::new();
         let queue = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&queue);
-        let request_future = run_request(request, cancel.clone(), move |update| {
-            if let Ok(mut queue) = sink.lock() {
-                queue.push(update);
-            }
-        });
+        let request_future = run_request(
+            super::preferences_panel::ai_provider(cx),
+            request,
+            cancel.clone(),
+            move |update| {
+                if let Ok(mut queue) = sink.lock() {
+                    queue.push(update);
+                }
+            },
+        );
         // The task is detached: the reader below is the only thing that waits for it, and cancelling stops it.
         drop(looji_ai::runtime().spawn(request_future));
 
@@ -493,22 +513,6 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn cycle_plan_team(&mut self, cx: &mut Context<Self>) {
-        let Some(dialog) = self.plan_wizard.as_mut() else {
-            return;
-        };
-        let mut options: Vec<Option<TeamMemberId>> = vec![None];
-        options.extend(dialog.member_ids().into_iter().map(Some));
-        let current = options
-            .iter()
-            .position(|option| *option == dialog.wizard.team())
-            .unwrap_or(0);
-        dialog
-            .wizard
-            .set_team(options[(current + 1) % options.len()]);
-        cx.notify();
-    }
-
     /// Enter, and the primary button, do what the phase needs: generate, cancel, or close once done.
     fn primary_plan_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.plan_wizard.as_ref() else {
@@ -577,7 +581,9 @@ impl WorkspaceView {
         let focused = self.focused_plan_control(window);
         let modifier = modifiers.control || modifiers.alt || modifiers.platform;
         match focused {
-            Some(Control::Goal) if key == "enter" => self.submit_plan(cx),
+            Some(Control::Goal) if key == "enter" && event.keystroke.modifiers.control => {
+                self.submit_plan(cx)
+            }
             Some(Control::Date) if key == "enter" => self.submit_plan(cx),
             Some(Control::Goal) => {
                 self.edit_plan_text(Control::Goal, &event.keystroke, modifier, cx)
@@ -616,6 +622,8 @@ impl WorkspaceView {
         };
         if keystroke.key == "backspace" {
             text.pop();
+        } else if keystroke.key == "enter" && control == Control::Goal {
+            text.push('\n');
         } else if !modifier
             && let Some(typed) = typed_text(keystroke)
             && (control == Control::Goal || {
@@ -688,66 +696,32 @@ pub(super) fn panel(
         Err(err) => Some(err.to_string()),
         Ok(_) => None,
     };
-    let team_label = {
-        let labels = display_labels(&dialog.members);
-        match dialog.wizard.team() {
-            None => "No one".to_string(),
-            Some(id) => dialog
-                .members
-                .iter()
-                .position(|member| member.id() == id)
-                .and_then(|index| labels.get(index).cloned())
-                .unwrap_or_else(|| "No one".to_string()),
-        }
-    };
 
     let goal = div()
         .id("plan-goal")
+        .h_full()
         .track_focus(&focus[0])
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.focus_plan_control(Control::Goal, window);
             cx.notify();
         }))
-        .child(text_box(
+        .child(plan_box(
             dialog.wizard.goal(),
             "For example: launch the beta to the first group of users",
             focused(Control::Goal),
+            240.,
             theme,
         ));
 
-    let team = div()
-        .id("plan-team")
-        .track_focus(&focus[2])
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(if focused(Control::Team) {
-            theme.palette.accent
-        } else {
-            theme.palette.border_control
-        })
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child(format!("Team: {team_label}"))
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-            this.focus_plan_control(Control::Team, window);
-            this.cycle_plan_team(cx);
-        }));
+    let team = team_choice(&dialog.members, dialog.wizard.team(), &focus[2], theme, cx);
 
-    let date = div()
-        .id("plan-date")
-        .track_focus(&focus[1])
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-            this.focus_plan_control(Control::Date, window);
-            cx.notify();
-        }))
-        .child(text_box(
-            dialog.wizard.target_text(),
-            "YYYY-MM-DD",
-            focused(Control::Date),
-            theme,
-        ));
+    let date = super::date_picker::date_field(
+        super::date_picker::DateTarget::PlanTarget,
+        dialog.wizard.target_text(),
+        view.open_calendar,
+        theme,
+        cx,
+    );
 
     let body = match &phase {
         WizardPhase::Editing => None,
@@ -808,13 +782,24 @@ pub(super) fn panel(
         .then(|| "This date is in the past. You can still generate a plan.".to_string());
 
     let (primary_label, primary_enabled) = match &phase {
-        WizardPhase::Editing => ("Generate", dialog.wizard.can_generate()),
+        WizardPhase::Editing => ("Generate plan", dialog.wizard.can_generate()),
         WizardPhase::Generating { .. } => ("Cancel", true),
         WizardPhase::Failed { .. } => ("Retry", dialog.wizard.can_generate()),
         WizardPhase::Done => ("Done", true),
     };
     let primary_focus = &focus[3];
-    let primary = button("plan-primary", primary_label, true, theme).track_focus(primary_focus);
+    let primary = if matches!(phase, WizardPhase::Editing | WizardPhase::Failed { .. }) {
+        crate::components::button_icon(
+            "plan-primary",
+            "sparkles",
+            primary_label,
+            crate::components::Variant::Primary,
+            theme,
+        )
+    } else {
+        button("plan-primary", primary_label, true, theme)
+    }
+    .track_focus(primary_focus);
     let primary = if primary_enabled {
         primary.on_click(
             cx.listener(|this, _: &ClickEvent, window, cx| this.primary_plan_action(window, cx)),
@@ -855,69 +840,102 @@ pub(super) fn panel(
             )
     });
 
+    let header = div()
+        .text_color(theme.palette.text_secondary)
+        .child(format!(
+            "Describe what you want to build for {project}. The AI drafts the spec, the user stories and the tasks, and you review every change before anything reaches the board."
+        ));
+
+    // The grid. The goal takes the main column and fills its height; the side column holds each setting in a card.
+    let goal_column = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .gap(theme.spacing.md)
+        .children(interrupted)
+        .child(div().flex().flex_col().flex_1().min_h_0().child(field(
+            "What do you want to build?",
+            goal_error.as_deref(),
+            div().flex_1().min_h_0().child(goal),
+            theme,
+        )));
+
+    let schedule = card(
+        "Schedule",
+        theme,
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.sm)
+            .child(field("Target date", date_error.as_deref(), date, theme))
+            .children(date_warning.map(|warning| {
+                div()
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.text_secondary)
+                    .child(warning)
+            })),
+    );
+    let team_card = card("Team", theme, field("Who works on it", None, team, theme));
+    let side = div()
+        .flex()
+        .flex_col()
+        .w(px(300.))
+        .flex_none()
+        .gap(theme.spacing.md)
+        .child(schedule)
+        .child(team_card);
+
+    let grid = div()
+        .flex()
+        .flex_row()
+        .gap(theme.spacing.lg)
+        .flex_1()
+        .min_h_0()
+        .child(goal_column)
+        .child(side);
+
+    // The footer: what the plan is doing or what went wrong, then the action.
+    let status_line = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .children(body)
+        .when_some(dialog.notice.clone(), |line, notice| {
+            // A notice that reports a success is plain text. Anything else is a problem, so it's shown in red.
+            let colour = if notice.starts_with("Published") {
+                theme.palette.text_primary
+            } else {
+                theme.palette.danger
+            };
+            line.child(div().text_color(colour).child(notice))
+        });
+    let footer = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.md)
+        .pt(theme.spacing.md)
+        .border_t_1()
+        .border_color(theme.palette.border)
+        .child(status_line)
+        .child(primary);
+
     let panel = div()
         .id("plan-panel")
         .flex()
         .flex_col()
-        .gap(theme.spacing.md)
-        .w_full()
+        .gap(theme.spacing.lg)
+        .size_full()
         .p(theme.spacing.lg)
-        .bg(theme.palette.surface_raised)
+        .bg(theme.palette.surface)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .text_size(theme.typography.title)
-                .child("Plan from a goal"),
-        )
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(project),
-        )
-        .children(interrupted)
-        .child(field("Goal", goal_error.as_deref(), goal, theme))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_end()
-                .gap(theme.spacing.md)
-                .child(team)
-                .child(div().w(px(180.)).child(field(
-                    "Target date",
-                    date_error.as_deref(),
-                    date,
-                    theme,
-                ))),
-        )
-        .when_some(date_warning, |panel, warning| {
-            panel.child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child(warning),
-            )
-        })
-        .children(body)
-        .when_some(dialog.notice.clone(), |panel, notice| {
-            panel.child(div().text_color(theme.palette.danger).child(notice))
-        })
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .justify_end()
-                .gap(theme.spacing.sm)
-                .child(
-                    button("plan-close", "Close", false, theme)
-                        .track_focus(&focus[4])
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.request_plan_close(window, cx)
-                        })),
-                )
-                .child(primary),
-        );
+        .child(header)
+        .child(grid)
+        .child(footer);
 
     // The panel fills the window. An unsaved-changes prompt is drawn over it, in the same window.
     let mut layer = div().relative().size_full().child(panel);
@@ -975,4 +993,171 @@ fn discard_prompt(theme: &Theme, cx: &mut Context<WorkspaceView>) -> AnyElement 
                 ),
         )
         .into_any_element()
+}
+
+/// A box for typing, with a muted outline and no focus colour. The goal and the target date use it.
+fn plan_box(value: &str, placeholder: &str, active: bool, min_height: f32, theme: &Theme) -> Div {
+    let text = if value.is_empty() && !active {
+        div()
+            .text_color(theme.palette.text_secondary)
+            .child(placeholder.to_string())
+    } else {
+        let caret = if active { "|" } else { "" };
+        let mut lines = div().flex().flex_col();
+        let mut text_lines: Vec<String> = value.split('\n').map(str::to_string).collect();
+        if let Some(last) = text_lines.last_mut() {
+            last.push_str(caret);
+        }
+        for line in text_lines {
+            lines = lines.child(div().min_h(px(18.)).child(if line.is_empty() {
+                " ".to_string()
+            } else {
+                line
+            }));
+        }
+        lines
+    };
+    div()
+        .h_full()
+        .min_h(px(min_height))
+        .w_full()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .bg(theme.palette.surface_raised)
+        .text_size(theme.typography.body)
+        .child(text)
+}
+
+/// One choice in the team box: a chip, filled when it's the chosen one.
+fn team_chip(
+    id: impl Into<ElementId>,
+    label: &str,
+    mark: Option<AnyElement>,
+    selected: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.xs)
+        .h(px(28.))
+        .px(theme.spacing.sm)
+        .rounded(px(14.))
+        .cursor_pointer()
+        .when(selected, |chip| {
+            chip.bg(theme.palette.surface_selected)
+                .text_color(theme.palette.text_primary)
+        })
+        .when(!selected, |chip| {
+            chip.text_color(theme.palette.text_secondary)
+                .hover(|style| {
+                    style
+                        .bg(theme.palette.surface_hover)
+                        .text_color(theme.palette.text_primary)
+                })
+        })
+        .children(mark)
+        .child(label.to_string())
+}
+
+/// The team, in a dotted muted box. With no team it says so. With one it offers "No one" and each member.
+fn team_choice(
+    members: &[TeamMember],
+    selected: Option<TeamMemberId>,
+    focus: &FocusHandle,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let base = div()
+        .id("plan-team")
+        .track_focus(focus)
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .min_h(px(44.))
+        .px(theme.spacing.sm)
+        .py(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_dashed()
+        .border_color(theme.palette.border_control)
+        .text_size(theme.typography.body);
+    if members.is_empty() {
+        return base
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_color(theme.palette.text_secondary)
+                    .child("No team members yet. Generated tasks will be unassigned."),
+            )
+            .into_any_element();
+    }
+    let labels = display_labels(members);
+    let mut row = base.child(
+        team_chip("plan-team-none", "No one", None, selected.is_none(), theme)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_plan_team(None, cx))),
+    );
+    for (index, member) in members.iter().enumerate() {
+        let id = member.id();
+        let mark = member_mark(&member.initials(), member.colour(), px(18.), theme);
+        let label = labels.get(index).cloned().unwrap_or_default();
+        row = row.child(
+            team_chip(
+                ("plan-team-member", index as u64),
+                &label,
+                Some(mark.into_any_element()),
+                selected == Some(id),
+                theme,
+            )
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.set_plan_team(Some(id), cx)),
+            ),
+        );
+    }
+    row.into_any_element()
+}
+
+impl WorkspaceView {
+    /// Chooses who the plan's team is, or no one.
+    fn set_plan_team(&mut self, team: Option<TeamMemberId>, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.plan_wizard.as_mut() {
+            dialog.wizard.set_team(team);
+        }
+        cx.notify();
+    }
+}
+
+/// A settings card in the side column: a small title over its content, inside a border.
+fn card(title: &str, theme: &Theme, body: impl IntoElement) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.sm)
+        .p(theme.spacing.md)
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .child(
+            div()
+                .text_size(theme.typography.caption)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.palette.text_secondary)
+                .child(title.to_string()),
+        )
+        .child(body)
+}
+
+/// A new plan's wizard. Its target date is a month from today, so a plan is planned ahead without typing a date.
+fn default_plan_wizard() -> PlanWizard {
+    let mut wizard = PlanWizard::new(DueDate::today_utc(), None);
+    wizard.set_target_text(&super::date_picker::one_month_ahead());
+    wizard
 }

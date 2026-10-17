@@ -27,8 +27,6 @@ pub(super) struct TaskDialog {
     pub assignee_open: bool,
     /// The priority menu is open under its select.
     pub priority_open: bool,
-    /// The calendar is open under a date field.
-    pub calendar: Option<super::date_picker::Calendar>,
     pub status: Status,
 }
 
@@ -43,6 +41,12 @@ impl WorkspaceView {
     ) {
         let creating = matches!(mode, Mode::Create);
         if creating {
+            if self.plan_wizard.is_some() {
+                self.request_plan_close(window, cx);
+                if self.plan_wizard.is_some() {
+                    return;
+                }
+            }
             if self
                 .task_dialog
                 .as_ref()
@@ -75,7 +79,6 @@ impl WorkspaceView {
             confirming: false,
             assignee_open: false,
             priority_open: false,
-            calendar: None,
             status,
         });
         if !creating {
@@ -219,7 +222,7 @@ impl WorkspaceView {
             dialog.form.focus(Field::Assignee);
             dialog.assignee_open = !dialog.assignee_open;
             dialog.priority_open = false;
-            dialog.calendar = None;
+            self.open_calendar = None;
             cx.notify();
         }
     }
@@ -382,13 +385,25 @@ pub(super) fn panel(
     let start = field(
         "Start",
         errors.start.as_deref(),
-        super::date_picker::date_field(Field::Start, &values.start, dialog.calendar, theme, cx),
+        super::date_picker::date_field(
+            super::date_picker::DateTarget::TaskStart,
+            &values.start,
+            view.open_calendar,
+            theme,
+            cx,
+        ),
         theme,
     );
     let due = field(
         "Due",
         errors.due.as_deref(),
-        super::date_picker::date_field(Field::Due, &values.due, dialog.calendar, theme, cx),
+        super::date_picker::date_field(
+            super::date_picker::DateTarget::TaskDue,
+            &values.due,
+            view.open_calendar,
+            theme,
+            cx,
+        ),
         theme,
     );
     let estimate = field(
@@ -702,7 +717,7 @@ impl WorkspaceView {
             dialog.form.focus(Field::Priority);
             dialog.priority_open = !dialog.priority_open;
             dialog.assignee_open = false;
-            dialog.calendar = None;
+            self.open_calendar = None;
             cx.notify();
         }
     }
@@ -718,11 +733,11 @@ impl WorkspaceView {
     /// Closes any menu or calendar the form has open. A press outside them calls this.
     pub(super) fn close_task_menus(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.task_dialog.as_mut()
-            && (dialog.priority_open || dialog.assignee_open || dialog.calendar.is_some())
+            && (dialog.priority_open || dialog.assignee_open || self.open_calendar.is_some())
         {
             dialog.priority_open = false;
             dialog.assignee_open = false;
-            dialog.calendar = None;
+            self.open_calendar = None;
             cx.notify();
         }
     }

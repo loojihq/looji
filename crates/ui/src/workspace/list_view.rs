@@ -299,59 +299,75 @@ pub(super) fn switch(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    // One segmented control: the chosen view is filled, and the others sit in the same box.
-    let mut row = div()
+    // One tab group: a bordered box holding the four views. The chosen view is filled, and the others sit
+    // transparent in the same box until hovered.
+    let mut group = div()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(2.))
-        .p(px(2.))
+        .p(px(3.))
         .rounded(theme.radius.lg)
         .border_1()
         .border_color(theme.palette.border)
-        .bg(theme.palette.surface);
+        .bg(theme.palette.surface_raised);
     for (index, mode) in ViewMode::ALL.into_iter().enumerate() {
         let selected = view.view_mode == mode;
-        row = row.child(
-            crate::components::segment(selected, theme)
-                .id(("view-switch", index as u64))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(theme.spacing.xs)
-                        .child(crate::components::icon(
-                            view_icon(mode),
-                            14.,
-                            if selected {
-                                theme.palette.text_primary
-                            } else {
-                                theme.palette.text_secondary
-                            },
-                        ))
-                        .child(view_label(mode)),
-                )
-                .track_focus(&view.view_focus[index])
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.set_view_mode(mode, cx);
-                    this.view_focus[index].focus(window);
-                }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    let step: isize = match event.keystroke.key.as_str() {
-                        "left" => -1,
-                        "right" => 1,
-                        _ => return,
-                    };
-                    cx.stop_propagation();
-                    let next =
-                        (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
-                    this.set_view_mode(ViewMode::ALL[next], cx);
-                    this.view_focus[next].focus(window);
-                })),
-        );
+        let tab = div()
+            .id(("view-switch", index as u64))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.spacing.xs)
+            .h(px(28.))
+            .px(px(12.))
+            .rounded(theme.radius.md)
+            .text_size(theme.typography.body)
+            .cursor_pointer()
+            .track_focus(&view.view_focus[index])
+            .when(selected, |tab| {
+                tab.bg(theme.palette.surface_selected)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.palette.text_primary)
+            })
+            .when(!selected, |tab| {
+                tab.font_weight(FontWeight::NORMAL)
+                    .text_color(theme.palette.text_secondary)
+                    .hover(|style| {
+                        style
+                            .bg(theme.palette.surface_hover)
+                            .text_color(theme.palette.text_primary)
+                    })
+            })
+            .child(crate::components::icon(
+                view_icon(mode),
+                14.,
+                if selected {
+                    theme.palette.text_primary
+                } else {
+                    theme.palette.text_secondary
+                },
+            ))
+            .child(view_label(mode))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.set_view_mode(mode, cx);
+                this.view_focus[index].focus(window);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let step: isize = match event.keystroke.key.as_str() {
+                    "left" => -1,
+                    "right" => 1,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                let next =
+                    (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
+                this.set_view_mode(ViewMode::ALL[next], cx);
+                this.view_focus[next].focus(window);
+            }));
+        group = group.child(tab);
     }
-    row.into_any_element()
+    group.into_any_element()
 }
 
 /// The icon that stands for a view in the switch.

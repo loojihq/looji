@@ -316,7 +316,8 @@ impl WorkspaceView {
             Some(active) if active.position == launch.position => Arc::clone(&active.queue),
             _ => return,
         };
-        spawn_reply(request, cancel, queue);
+        let provider = super::preferences_panel::ai_provider(cx);
+        spawn_reply(request, cancel, queue, provider);
         cx.notify();
     }
 
@@ -552,7 +553,12 @@ fn retrieve_code(
 
 /// Runs the request on the AI runtime and pushes what happens into the queue the reader drains. A debug build with
 /// `LOOJI_FAKE_AI` set uses a scripted provider, so streaming and failures can be checked without a key.
-fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex<Vec<Update>>>) {
+fn spawn_reply(
+    request: ChatRequest,
+    cancel: CancellationToken,
+    queue: Arc<Mutex<Vec<Update>>>,
+    provider: looji_ai::Provider,
+) {
     let future = async move {
         let sink = queue;
         let push = move |update: Update| {
@@ -560,7 +566,7 @@ fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex
                 queue.push(update);
             }
         };
-        match provider_for(&request) {
+        match provider_for(&request, provider) {
             Ok(provider) => run_with(provider.as_ref(), request, cancel, push).await,
             Err(err) => push(Update::Failed(err)),
         }
@@ -569,12 +575,15 @@ fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex
 }
 
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-fn provider_for(request: &ChatRequest) -> Result<Arc<dyn ChatProvider>, AiError> {
+fn provider_for(
+    request: &ChatRequest,
+    choice: looji_ai::Provider,
+) -> Result<Arc<dyn ChatProvider>, AiError> {
     #[cfg(debug_assertions)]
     if let Some(provider) = fake_provider(request) {
         return Ok(provider);
     }
-    looji_ai::connect()
+    looji_ai::connect(choice)
 }
 
 /// A scripted reply for manual checks: "fail" in the message breaks the stream partway, "slow" makes the reply long,
