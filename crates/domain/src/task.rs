@@ -56,6 +56,8 @@ pub struct Task {
     assignee_id: Option<TeamMemberId>,
     priority: Option<Priority>,
     due_on: Option<DueDate>,
+    /// When the work starts. A task with a start and a due date can be drawn on the roadmap.
+    start_on: Option<DueDate>,
     tags: Vec<String>,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -80,6 +82,7 @@ impl Task {
             assignee_id: None,
             priority: None,
             due_on: None,
+            start_on: None,
             tags: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -120,6 +123,10 @@ impl Task {
 
     pub fn due_on(&self) -> Option<DueDate> {
         self.due_on
+    }
+
+    pub fn start_on(&self) -> Option<DueDate> {
+        self.start_on
     }
 
     /// The tags, sorted and without duplicates.
@@ -175,6 +182,13 @@ impl Task {
 
     pub fn set_due_on(&mut self, due_on: Option<DueDate>) {
         self.due_on = due_on;
+        self.touch();
+    }
+
+    /// The start is stored as given. A start after the due date is allowed, and the roadmap flags it, so bad
+    /// data stays visible rather than being swapped.
+    pub fn set_start_on(&mut self, start_on: Option<DueDate>) {
+        self.start_on = start_on;
         self.touch();
     }
 
@@ -240,6 +254,7 @@ pub struct TaskRecord {
     pub assignee_id: Option<TeamMemberId>,
     pub priority: Option<Priority>,
     pub due_on: Option<DueDate>,
+    pub start_on: Option<DueDate>,
     pub tags: Vec<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -263,6 +278,7 @@ impl TryFrom<TaskRecord> for Task {
             assignee_id: record.assignee_id,
             priority: record.priority,
             due_on: record.due_on,
+            start_on: record.start_on,
             tags: record.tags,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -415,6 +431,7 @@ mod tests {
             assignee_id: None,
             priority: None,
             due_on: None,
+            start_on: None,
             tags: Vec::new(),
             created_at: Timestamp::from_unix_millis(0),
             updated_at: Timestamp::from_unix_millis(0),

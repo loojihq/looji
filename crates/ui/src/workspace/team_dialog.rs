@@ -607,7 +607,7 @@ fn member_row(
         .into_any_element()
 }
 
-fn error_text(message: String, theme: &Theme) -> impl IntoElement {
+pub(super) fn error_text(message: String, theme: &Theme) -> impl IntoElement {
     div()
         .text_size(theme.typography.caption)
         .text_color(theme.palette.danger)

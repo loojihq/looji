@@ -3,11 +3,16 @@
 //! All SQL lives here. Each aggregate reads rows into a domain `*Record`, and the
 //! record is validated on the way into an entity, so a bad row fails loudly.
 
+mod code_source;
 mod column;
 mod filter;
+mod list_view;
+pub(crate) mod plan_draft;
 mod project;
+mod project_view;
 pub(crate) mod settings;
 mod task;
+mod task_chat;
 pub(crate) mod task_history;
 pub(crate) mod task_list;
 pub(crate) mod task_move;

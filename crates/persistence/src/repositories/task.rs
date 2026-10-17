@@ -13,11 +13,12 @@ use super::{
 use crate::SqliteStore;
 
 pub(super) const TASK_COLUMNS: &str = "id, project_id, title, description, status, position, \
-     estimate_minutes, assignee_id, created_at, updated_at, priority, due_on";
+     estimate_minutes, assignee_id, created_at, updated_at, priority, due_on, start_on";
 
 pub(super) fn read_task(row: &Row<'_>) -> RepoResult<TaskRecord> {
     let priority: Option<String> = get(row, 10)?;
     let due_on: Option<String> = get(row, 11)?;
+    let start_on: Option<String> = get(row, 12)?;
     Ok(TaskRecord {
         id: read_id(row, 0, TaskId::from_uuid)?,
         project_id: read_id(row, 1, ProjectId::from_uuid)?,
@@ -29,6 +30,7 @@ pub(super) fn read_task(row: &Row<'_>) -> RepoResult<TaskRecord> {
         assignee_id: read_optional_id(row, 7, TeamMemberId::from_uuid)?,
         priority: priority.map(|text| text.parse::<Priority>()).transpose()?,
         due_on: due_on.map(|text| text.parse::<DueDate>()).transpose()?,
+        start_on: start_on.map(|text| text.parse::<DueDate>()).transpose()?,
         // Filled in from the tags table by the caller.
         tags: Vec::new(),
         created_at: read_timestamp(row, 8)?,
@@ -55,7 +57,7 @@ pub(super) fn load_tags(
 impl TaskRepository for SqliteStore {
     /// Writes the task and replaces its tags in one transaction, so a task never has half its tags.
     fn save(&self, task: &Task) -> RepoResult<()> {
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         write_task(&transaction, task)?;
         transaction.commit().map_err(storage)
     }
@@ -156,9 +158,9 @@ pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResu
     transaction
         .execute(
             "INSERT INTO tasks (id, project_id, title, description, status, position,
-                                    estimate_minutes, assignee_id, priority, due_on,
+                                    estimate_minutes, assignee_id, priority, due_on, start_on,
                                     created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT (id) DO UPDATE SET
                      project_id = excluded.project_id,
                      title = excluded.title,
@@ -169,6 +171,7 @@ pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResu
                      assignee_id = excluded.assignee_id,
                      priority = excluded.priority,
                      due_on = excluded.due_on,
+                     start_on = excluded.start_on,
                      updated_at = excluded.updated_at",
             params![
                 id,
@@ -182,6 +185,7 @@ pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResu
                 task.assignee_id().map(|id| id_text(id.as_uuid())),
                 task.priority().map(Priority::as_str),
                 task.due_on().map(|due| due.to_string()),
+                task.start_on().map(|start| start.to_string()),
                 task.created_at().unix_millis(),
                 task.updated_at().unix_millis(),
             ],

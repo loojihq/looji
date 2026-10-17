@@ -5,8 +5,9 @@
 //! database, so a stale view in the UI can't produce a wrong key.
 
 use looji_domain::{
-    ActivityId, ActivityKind, DomainError, RepoError, RepoResult, TaskActivity, TaskId, TaskMove,
-    Timestamp, key_between, needs_rebalance, rebalance,
+    ActivityId, ActivityKind, DomainError, DueDate, LocalMoment, RepoError, RepoResult, Status,
+    TaskActivity, TaskId, TaskMove, Timestamp, WorkingSchedule, add_working_minutes, key_between,
+    needs_rebalance, rebalance, schedules_on_move,
 };
 use rusqlite::{OptionalExtension, Row, Transaction, params};
 use thiserror::Error;
@@ -56,7 +57,7 @@ impl SqliteStore {
         let to = mv.to().as_str();
         // Dropping the transaction without committing rolls back, so every early return below
         // leaves the database as it was.
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
 
         let current: Option<(String, String)> = transaction
             .query_row(
@@ -92,6 +93,10 @@ impl SqliteStore {
                 params![to, key, at.unix_millis(), task],
             )
             .map_err(storage)?;
+
+        // A first move into In progress sets the due date from the estimate, in this same transaction, so the
+        // board never shows the status without it.
+        schedule_on_move(&transaction, &task, &project, mv.from(), mv.to(), at)?;
 
         let activity = (mv.from() != mv.to()).then(|| TaskActivity {
             id: ActivityId::new(),
@@ -235,4 +240,62 @@ fn query_all_text(
 ) -> rusqlite::Result<Vec<String>> {
     let mut statement = transaction.prepare(sql)?;
     statement.query_map(params, |row| row.get(0))?.collect()
+}
+
+/// Sets the due date when a move first takes a task into In progress without one, from its estimate and the
+/// project's working schedule. Anything else leaves the task as it is. Changing the estimate later doesn't move a
+/// date that's already set, and the start is the moment of the move, read in UTC, since the project has no zone yet. The new date is recorded in the task's
+/// history as an edit to the due date.
+fn schedule_on_move(
+    transaction: &Transaction<'_>,
+    task: &str,
+    project: &str,
+    from: Status,
+    to: Status,
+    at: Timestamp,
+) -> Result<(), MoveError> {
+    let storage = |err: rusqlite::Error| MoveError::Storage(err.to_string());
+    let (due, estimate): (Option<String>, Option<i64>) = transaction
+        .query_row(
+            "SELECT due_on, estimate_minutes FROM tasks WHERE id = ?1",
+            params![task],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(storage)?;
+    let due = due
+        .map(|text| text.parse::<DueDate>())
+        .transpose()
+        .map_err(MoveError::Domain)?;
+    let estimate = estimate.and_then(|minutes| u32::try_from(minutes).ok());
+    if !schedules_on_move(from, to, due, estimate) {
+        return Ok(());
+    }
+    let minutes = estimate.unwrap_or_default();
+
+    let (start, end, mask): (i64, i64, i64) = transaction
+        .query_row(
+            "SELECT working_start_min, working_end_min, workdays_mask FROM projects WHERE id = ?1",
+            params![project],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(storage)?;
+    let schedule = WorkingSchedule::from_stored(start, end, mask)
+        .map_err(|err| MoveError::Domain(DomainError::Schedule(err)))?;
+
+    let finish = add_working_minutes(&schedule, LocalMoment::from_timestamp_utc(at), minutes)
+        .map_err(MoveError::Domain)?;
+    transaction
+        .execute(
+            "UPDATE tasks SET due_on = ?1 WHERE id = ?2",
+            params![finish.day.to_string(), task],
+        )
+        .map_err(storage)?;
+    transaction
+        .execute(
+            "INSERT INTO task_events (id, task_id, kind, payload, created_at)
+             VALUES (?1, ?2, 'edited', '[\"due\"]', ?3)",
+            params![id_text(Uuid::new_v4()), task, at.unix_millis()],
+        )
+        .map_err(storage)?;
+    Ok(())
 }

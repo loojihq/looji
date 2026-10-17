@@ -123,6 +123,8 @@ pub struct CardView<'a> {
     pub tags: Vec<String>,
     /// Where the board search matched this card. `None` when no search is running.
     pub search: Option<Hits>,
+    /// The task is in progress with no date and no estimate, so the card says how to schedule it.
+    pub hint: bool,
 }
 
 /// The assignee as the card shows them: initials on the member's colour, with the label in the
@@ -179,6 +181,7 @@ fn card_layout(
         .child(title_row(view, density, theme))
         .children(snippet_row(view.search.as_ref(), theme))
         .children(tag_row(&view.tags, view.search.as_ref(), theme))
+        .children(hint_row(view.hint, theme))
         .child(footer(view, today, avatar, theme))
         .children(extra)
 }
@@ -690,6 +693,7 @@ pub(super) fn gallery(theme: &Theme) -> impl IntoElement + use<> {
                             due: *due,
                             tags: Vec::new(),
                             search: None,
+                            hint: false,
                         },
                         density,
                         today,
@@ -709,6 +713,16 @@ pub(super) fn gallery(theme: &Theme) -> impl IntoElement + use<> {
         .p(theme.spacing.lg)
         .child(column(CardDensity::Compact))
         .child(column(CardDensity::Detailed))
+}
+
+/// The line that says why a task in progress has no date. Small and quiet: it doesn't block anything.
+fn hint_row(hint: bool, theme: &Theme) -> Option<Div> {
+    hint.then(|| {
+        div()
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child("Add an estimate to schedule this task.")
+    })
 }
 
 #[cfg(test)]

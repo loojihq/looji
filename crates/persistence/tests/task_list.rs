@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use looji_domain::{
-    PAGE_SIZE, PageCursor, Position, Priority, Project, ProjectId, ProjectRepository, Status,
-    TagMatch, Task, TaskFilter, TaskId, TaskQuery, TaskRepository, TeamMember,
+    PAGE_SIZE, PageCursor, Position, Priority, Project, ProjectId, ProjectRepository, SortValue,
+    Status, TagMatch, Task, TaskFilter, TaskId, TaskQuery, TaskRepository, TeamMember,
     TeamMemberRepository, Workspace, WorkspaceRepository,
 };
 use looji_persistence::SqliteStore;
@@ -87,7 +87,7 @@ fn walk(store: &SqliteStore, project: ProjectId, query: &TaskQuery) -> Vec<Vec<T
             .unwrap();
         pages.push(page.tasks.iter().map(Task::id).collect());
         match page.tasks.last() {
-            Some(last) if page.has_next => cursor = Some(PageCursor::after(last)),
+            Some(last) if page.has_next => cursor = Some(cursor_after(last)),
             _ => break,
         }
     }
@@ -183,7 +183,7 @@ fn editing_rows_during_a_walk_skips_and_repeats_nothing() {
         .into_iter()
         .flatten()
         .collect();
-    let cursor = PageCursor::after(first.tasks.last().unwrap());
+    let cursor = cursor_after(first.tasks.last().unwrap());
 
     // Edit a row already seen, and one further on that hasn't been reached. Neither moves in the order.
     let seen = tasks[0].id();
@@ -205,7 +205,7 @@ fn editing_rows_during_a_walk_skips_and_repeats_nothing() {
             .tasks
             .last()
             .filter(|_| page.has_next)
-            .map(PageCursor::after);
+            .map(cursor_after);
     }
 
     assert_eq!(
@@ -226,7 +226,7 @@ fn moving_a_row_changes_only_where_it_appears_and_never_repeats_it() {
     let first = store
         .list_page(project.id(), &query, None, PAGE_SIZE)
         .unwrap();
-    let cursor = PageCursor::after(first.tasks.last().unwrap());
+    let cursor = cursor_after(first.tasks.last().unwrap());
 
     let moved = tasks[0].id();
     let task = tasks.iter_mut().find(|task| task.id() == moved).unwrap();
@@ -294,7 +294,7 @@ fn a_cursor_survives_deletion_of_the_row_it_was_taken_from() {
     let first = store
         .list_page(project.id(), &query, None, PAGE_SIZE)
         .unwrap();
-    let cursor = PageCursor::after(first.tasks.last().unwrap());
+    let cursor = cursor_after(first.tasks.last().unwrap());
 
     TaskRepository::delete(&store, first.tasks.last().unwrap().id()).unwrap();
 
@@ -422,7 +422,7 @@ fn the_page_query_walks_the_position_index_without_sorting() {
     let first = store
         .list_page(project.id(), &query, None, PAGE_SIZE)
         .unwrap();
-    let cursor = PageCursor::after(first.tasks.last().unwrap());
+    let cursor = cursor_after(first.tasks.last().unwrap());
 
     for after in [None, Some(&cursor)] {
         let plan = store
@@ -518,7 +518,7 @@ fn a_page_costs_about_the_same_deep_in_a_large_list() {
     let mut cursor = None;
     let mut deep = first;
     for _ in 0..149 {
-        let after = PageCursor::after(deep.tasks.last().unwrap());
+        let after = cursor_after(deep.tasks.last().unwrap());
         cursor = Some(after.clone());
         deep = store
             .list_page(project.id(), &query, Some(&after), PAGE_SIZE)
@@ -526,4 +526,12 @@ fn a_page_costs_about_the_same_deep_in_a_large_list() {
     }
     let (deep_time, _) = timed(cursor.as_ref());
     println!("page 1: {first_time:?}, page 150: {deep_time:?}");
+}
+
+/// The cursor after a task in manual order: its position, with its id as the tiebreaker.
+fn cursor_after(task: &Task) -> PageCursor {
+    PageCursor {
+        value: Some(SortValue::Text(task.position().as_str().to_string())),
+        id: task.id(),
+    }
 }

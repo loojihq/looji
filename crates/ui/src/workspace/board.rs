@@ -24,6 +24,10 @@ const HEADER_HEIGHT: Pixels = px(36.);
 const DROP_ZONE_HEIGHT: Pixels = px(96.);
 /// The placeholder's height in an empty column, where there's no dragged card to measure.
 const EMPTY_SLOT_HEIGHT: f32 = 56.;
+/// The height assumed for a card that has never been drawn, until it has been measured.
+const ESTIMATED_CARD_HEIGHT: f32 = 80.;
+/// How much of a column is drawn in full on the first frame, before its size is known.
+const FIRST_FRAME_WINDOW: f32 = 1200.;
 /// How long siblings take to slide out of the way of the placeholder.
 const SHIFT_DURATION: Duration = Duration::from_millis(150);
 
@@ -191,24 +195,80 @@ fn body(
     };
 
     let gap = f32::from(theme.spacing.xs);
-    let (tops, earlier_tops) = {
-        let layout = drag.layout.borrow();
+    let handle = drag.scroll_handle(status);
+    // A card nobody has measured is assumed to be a typical card, or the dragged card's height during a drag.
+    let unmeasured = if source.is_some() {
+        placeholder_height
+    } else {
+        ESTIMATED_CARD_HEIGHT
+    };
+    let (tops, earlier_tops, heights_now) = {
+        let mut layout = drag.layout.borrow_mut();
+        // What the last frame laid out is measured now. A card drawn in full gives its true height, which is kept for
+        // when it scrolls out of view and a spacer of that height takes its place.
+        let previous: Vec<Option<TaskId>> = layout
+            .items
+            .iter()
+            .find(|(column, _)| *column == status)
+            .map(|(_, items)| items.clone())
+            .unwrap_or_default();
+        for (position, item) in previous.iter().enumerate() {
+            if let Some(task) = item
+                && layout
+                    .real
+                    .get(&status)
+                    .is_some_and(|real| real.contains(task))
+                && let Some(bounds) = handle.bounds_for_item(position)
+            {
+                layout.measured.insert(*task, f32::from(bounds.size.height));
+            }
+        }
         let heights = |sequence: &[Slot]| -> Vec<f32> {
             sequence
                 .iter()
                 .map(|slot| match slot {
-                    Slot::Task(task) => layout
-                        .card(*task)
-                        .map_or(placeholder_height, |card| card.bounds.height),
+                    Slot::Task(task) => layout.measured.get(task).copied().unwrap_or(unmeasured),
                     Slot::Placeholder => placeholder_height,
                 })
                 .collect()
         };
+        let now_heights = heights(&sequence);
         (
-            stack_tops(&heights(&sequence), gap),
+            stack_tops(&now_heights, gap),
             stack_tops(&heights(&earlier), gap),
+            now_heights,
         )
     };
+
+    // Only the cards near the visible part of the column are drawn in full. The rest are spacers of the same height,
+    // one per card, so every card keeps its place and its index in the column, which the drag reads. A screenful of
+    // margin is drawn each side so a scroll doesn't show empty space before the next frame.
+    let viewport = f32::from(handle.bounds().size.height);
+    let scroll_top = (-f32::from(handle.offset().y)).max(0.0);
+    let (window_start, window_end) = if viewport > 0.0 {
+        (scroll_top - viewport, scroll_top + 2.0 * viewport)
+    } else {
+        (0.0, FIRST_FRAME_WINDOW)
+    };
+    let drawn_in_full: std::collections::HashSet<TaskId> = sequence
+        .iter()
+        .enumerate()
+        .filter_map(|(position, slot)| match slot {
+            Slot::Task(id) => {
+                let (top, height) = (tops[position], heights_now[position]);
+                let near = top + height >= window_start && top <= window_end;
+                // The card being dragged or edited is always real, wherever it is.
+                let pinned =
+                    dragged == Some(*id) || source_task == Some(*id) || cards.editing == Some(*id);
+                (near || pinned).then_some(*id)
+            }
+            Slot::Placeholder => None,
+        })
+        .collect();
+    drag.layout
+        .borrow_mut()
+        .real
+        .insert(status, drawn_in_full.clone());
 
     // Each item slides from where it was in the last landing to where it is now.
     let key_base = format!(
@@ -227,20 +287,29 @@ fn body(
     let content = if sequence.is_empty() {
         content.child(drop_zone(index, !cards.terms.is_empty(), theme))
     } else {
+        // Both lookups are built once. Searching the column for each card would cost a pass over every card for every
+        // card, on every frame, which is what made a large column slow.
+        let earlier_position: std::collections::HashMap<Slot, usize> = earlier
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| (*slot, index))
+            .collect();
+        let by_id: std::collections::HashMap<TaskId, &Task> =
+            column.tasks.iter().map(|task| (task.id(), *task)).collect();
         let items = sequence.iter().enumerate().map(|(position, slot)| {
-            let offset = earlier
-                .iter()
-                .position(|earlier_slot| earlier_slot == slot)
-                .map_or(0.0, |earlier_position| {
-                    earlier_tops[earlier_position] - tops[position]
-                });
+            let offset = earlier_position.get(slot).map_or(0.0, |earlier_position| {
+                earlier_tops[*earlier_position] - tops[position]
+            });
             let key = SharedString::from(format!("{key_base}-{position}"));
             match slot {
+                Slot::Task(id) if !drawn_in_full.contains(id) => {
+                    // Off screen: a spacer as tall as the card, so the column's length and every card's index hold.
+                    div().flex_shrink_0().h(px(heights_now[position]))
+                }
                 Slot::Task(id) => {
-                    let task = column
-                        .tasks
-                        .iter()
-                        .find(|task| task.id() == *id)
+                    let task = by_id
+                        .get(id)
+                        .copied()
                         .expect("the sequence only holds this column's tasks");
                     let focus = drag.focus_handle(*id, cx);
                     shifted(
@@ -470,6 +539,11 @@ pub(super) fn card_view<'a>(task: &'a Task, cards: &CardContext) -> CardView<'a>
             .and_then(|due| CalendarDate::new(due.year(), due.month(), due.day())),
         tags: task.tags().to_vec(),
         search: (!cards.terms.is_empty()).then(|| search::hits(task, &cards.terms)),
+        hint: looji_domain::needs_estimate_hint(
+            task.status(),
+            task.due_on(),
+            task.estimate().map(|estimate| estimate.minutes()),
+        ),
     }
 }
 

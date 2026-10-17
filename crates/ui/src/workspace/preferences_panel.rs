@@ -54,6 +54,27 @@ pub(super) fn section(
             theme,
             cx,
         ))
+        .child(
+            div()
+                .id("replay-tour")
+                .flex()
+                .flex_row()
+                .justify_between()
+                .gap(theme.spacing.sm)
+                .px(theme.spacing.sm)
+                .py(theme.spacing.xs)
+                .rounded(theme.radius.md)
+                .cursor_pointer()
+                .text_size(theme.typography.body)
+                .hover(|style| style.bg(theme.palette.surface_hover))
+                .child("Welcome tour")
+                .child(
+                    div()
+                        .text_color(theme.palette.text_secondary)
+                        .child("show again"),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.replay_tour(cx))),
+        )
 }
 
 fn row(

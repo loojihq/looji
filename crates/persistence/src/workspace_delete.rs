@@ -28,8 +28,36 @@ const WORKSPACE_SCOPED: &[(&str, &str)] = &[
         "DELETE FROM team_members WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
     ),
     (
+        "project_view_state",
+        "DELETE FROM project_view_state WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "project_list_view",
+        "DELETE FROM project_list_view WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
         "project_filters",
         "DELETE FROM project_filters WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "plan_drafts",
+        "DELETE FROM plan_drafts WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "project_repository",
+        "DELETE FROM project_repository WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "index_symbols",
+        "DELETE FROM index_symbols WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "index_files",
+        "DELETE FROM index_files WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "index_entries",
+        "DELETE FROM index_entries WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
     ),
     ("projects", "DELETE FROM projects WHERE workspace_id = ?1"),
 ];
@@ -119,7 +147,7 @@ impl SqliteStore {
         let storage = |err: rusqlite::Error| DeleteError::Storage(err.to_string());
         let key = id.as_uuid().to_string();
 
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
 
         let icon_file: Option<Option<String>> = transaction
             .query_row(

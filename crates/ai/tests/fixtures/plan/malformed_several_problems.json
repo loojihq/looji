@@ -1,0 +1,8 @@
+{
+  "spec": "Plan the beta rollout.",
+  "user_stories": [],
+  "tasks": [
+    {"title": "", "priority": "medium", "estimate_hours": 2, "assignee": null, "tags": []},
+    {"title": "Brief the support team", "priority": "medium", "estimate_hours": -1, "assignee": null, "tags": []}
+  ]
+}

@@ -74,7 +74,7 @@ pub fn landing_at(
 }
 
 /// One item in a column, top to bottom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {
     Task(TaskId),
     Placeholder,

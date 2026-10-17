@@ -10,7 +10,7 @@ use looji_domain::{
 use super::{
     WorkspaceView, board, board_search, filter_bar, list_view,
     project_state::{ProjectList, load_board},
-    store, typed_text,
+    roadmap, store, typed_text, workload_view,
 };
 use crate::theme::Theme;
 
@@ -56,7 +56,10 @@ impl WorkspaceView {
             }
         }
         self.load_project_filter(cx);
+        self.load_list_settings(cx);
+        self.load_project_view(cx);
         self.reload_board(cx);
+        self.refresh_code_source(cx);
     }
 
     /// Loads the board and the team for the selected project. Nothing is loaded when no project is
@@ -72,17 +75,22 @@ impl WorkspaceView {
         };
         self.cancel_keyboard_if_gone(cx);
         self.close_panel_if_gone(cx);
+        self.close_plan_drafts_if_gone();
         self.close_tag_editors_if_gone();
         self.prune_project_filter(cx);
         self.refresh_list(cx);
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
+        self.save_project_view(cx);
         self.reset_search();
         self.reset_list_position();
         self.projects.select(id);
         self.load_project_filter(cx);
+        self.load_list_settings(cx);
+        self.load_project_view(cx);
         self.reload_board(cx);
+        self.refresh_code_source(cx);
         cx.notify();
     }
 
@@ -301,6 +309,16 @@ pub(super) fn content(
                         .into_any_element();
                     (column, shown.len(), notice)
                 }
+                list_view::ViewMode::Workload => (
+                    workload_view::render(view, theme, cx),
+                    board_search::shown_tasks(view).len(),
+                    None,
+                ),
+                list_view::ViewMode::Roadmap => (
+                    roadmap::render(view, theme, cx),
+                    board_search::shown_tasks(view).len(),
+                    None,
+                ),
                 list_view::ViewMode::List => (
                     list_view::render(view, theme, cx),
                     view.task_list.total as usize,
@@ -316,7 +334,11 @@ pub(super) fn content(
                 .child(filters)
                 .child(search)
                 .children(notice)
-                .child(div().flex_1().min_h_0().child(column))
+                .child(
+                    // A flex column, so the view inside fills the height left under the bars. A plain wrapper would let the
+                    // board grow to the height of all its cards instead of scrolling inside its columns.
+                    div().flex().flex_col().flex_1().min_h_0().child(column),
+                )
                 .into_any_element()
         }
     }

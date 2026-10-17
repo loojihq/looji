@@ -10,4 +10,5 @@ publish = false
 [workspace.dependencies]
 looji-domain = { path = "crates/domain" }
 looji-persistence = { path = "crates/persistence" }
+looji-ai = { path = "crates/ai" }
 gpui = "0.2.2"

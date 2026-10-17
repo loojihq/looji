@@ -5,29 +5,31 @@
 //! Reads run on a background connection. Each request takes a sequence number, and a response is applied
 //! only if no newer request was made, so a slow page can't overwrite a newer one. The filters and the
 //! search are the same ones the board uses, through one query, so the total here is the board's count.
+//!
+//! The sort and the shown columns belong to the project. A header click sorts, and the column picker
+//! shows or hides columns. Both are saved as they change, and loaded when the project opens.
 
 use gpui::{prelude::*, *};
-use looji_domain::{PAGE_SIZE, PageCursor, Task, TaskPage, TaskQuery, TaskRepository};
+use looji_domain::{
+    ListColumn, ListView, ListViewRepository, PAGE_SIZE, PageCursor, SortDirection, Task,
+    TaskQuery, TaskRepository, ToggleOutcome,
+};
 use looji_persistence::SqliteStore;
 
-use super::WorkspaceView;
 use super::board::status_label;
 use super::fields::member_mark;
 use super::members;
 use super::task_editors::priority_label;
 use super::task_form::format_hours;
+use super::{WorkspaceView, store};
 use crate::database::AppDatabase;
 use crate::theme::Theme;
 
 const ROW_HEIGHT: Pixels = px(36.);
 
-/// Which body the board area shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum ViewMode {
-    #[default]
-    Board,
-    List,
-}
+/// Which body the board area shows. The views are the domain's, so the saved view and the one on screen are the
+/// same type.
+pub(super) use looji_domain::ProjectView as ViewMode;
 
 /// The list's paging state. `cursors[p]` is where page `p` starts, so the page after the current one is
 /// always `cursors[page + 1]`, taken from the last row shown.
@@ -88,14 +90,18 @@ impl WorkspaceView {
         }
     }
 
+    /// Switches the view. The view being left is recorded, the project's state is saved, and the view entered
+    /// gets its saved scroll position back. Its filters, search, and list page are the same as before, so
+    /// nothing is re-filtered and a deep list page stays where it was.
     pub(super) fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if self.view_mode == mode {
             return;
         }
+        self.capture_scroll(self.view_mode);
         self.view_mode = mode;
-        if mode == ViewMode::List {
-            self.restart_list(cx);
-        }
+        self.pending_scroll = true;
+        self.save_project_view(cx);
+        self.refresh_list(cx);
         cx.notify();
     }
 
@@ -113,6 +119,68 @@ impl WorkspaceView {
         }
     }
 
+    /// Reads the project's saved list settings. A project that never saved any gets the defaults. Called
+    /// when a project opens, before its list is read.
+    pub(super) fn load_list_settings(&mut self, cx: &mut Context<Self>) {
+        self.list_columns_open = false;
+        let Some(project) = self.projects.active_id() else {
+            self.list_settings = ListView::default();
+            return;
+        };
+        self.list_settings = match store(cx).load_list_view(project) {
+            Ok(view) => view,
+            Err(err) => {
+                eprintln!("could not load the list settings: {err}");
+                self.status = Some("Could not load this board's list settings.".to_string());
+                ListView::default()
+            }
+        };
+    }
+
+    /// Sorts the list by a column. The same column again flips the direction. The list starts from its
+    /// first page, since the rows are in a new order.
+    pub(super) fn sort_list(&mut self, column: ListColumn, cx: &mut Context<Self>) {
+        self.list_settings.sort_by(column);
+        self.save_list_settings(cx);
+        self.restart_list(cx);
+    }
+
+    /// Shows or hides a column from the picker. The last shown column can't be hidden. Hiding the column
+    /// being sorted by puts the sort back to manual order, and the user is told why.
+    pub(super) fn toggle_list_column(&mut self, column: ListColumn, cx: &mut Context<Self>) {
+        match self.list_settings.toggle_column(column) {
+            ToggleOutcome::Refused => {
+                self.status = Some("At least one column must stay visible.".to_string());
+            }
+            ToggleOutcome::Shown | ToggleOutcome::Hidden => {
+                self.save_list_settings(cx);
+            }
+            ToggleOutcome::HiddenAndSortReset => {
+                self.status = Some(
+                    "The list was sorted by that column, so it's back in board order.".to_string(),
+                );
+                self.save_list_settings(cx);
+                self.restart_list(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn toggle_columns_menu(&mut self, cx: &mut Context<Self>) {
+        self.list_columns_open = !self.list_columns_open;
+        cx.notify();
+    }
+
+    fn save_list_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        if let Err(err) = store(cx).save_list_view(project, &self.list_settings) {
+            eprintln!("could not save the list settings: {err}");
+            self.status = Some("Could not save the list settings.".to_string());
+        }
+    }
+
     /// Reads the current page on a background connection. The result is applied only if it's still the
     /// latest request when it arrives.
     fn request_list_page(&mut self, cx: &mut Context<Self>) {
@@ -127,7 +195,8 @@ impl WorkspaceView {
             .active()
             .map(|project| project.visible_statuses())
             .unwrap_or_default();
-        let query = TaskQuery::new(statuses, self.filter.clone(), &self.search_query);
+        let query = TaskQuery::new(statuses, self.filter.clone(), &self.search_query)
+            .with_sort(self.list_settings.sort);
         let cursor = self
             .task_list
             .cursors
@@ -159,7 +228,7 @@ impl WorkspaceView {
         &mut self,
         seq: u64,
         page_index: usize,
-        result: Result<TaskPage, String>,
+        result: Result<looji_domain::TaskPage, String>,
         cx: &mut Context<Self>,
     ) {
         if seq != self.task_list.seq {
@@ -174,8 +243,8 @@ impl WorkspaceView {
                 }
                 self.task_list.error = None;
                 self.task_list.cursors.truncate(self.task_list.page + 1);
-                if let Some(last) = page.tasks.last().filter(|_| page.has_next) {
-                    self.task_list.cursors.push(Some(PageCursor::after(last)));
+                if let Some(next) = page.next.clone() {
+                    self.task_list.cursors.push(Some(next));
                 }
                 self.task_list.rows = page.tasks;
                 self.task_list.total = page.total;
@@ -191,20 +260,22 @@ impl WorkspaceView {
 }
 
 /// The Board and List switch in the header.
+/// The view switcher in the header: Board, List, Roadmap, and Workload. The selected one is marked. Each
+/// option can take focus, and the left and right arrows move between them and switch, as a radio group
+/// does. The app can't yet announce the selected option to a screen reader, since GPUI 0.2 has no
+/// accessibility interface on Windows.
 pub(super) fn switch(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let mut row = div().flex().flex_row().gap(theme.spacing.xs);
-    for (index, (mode, label)) in [(ViewMode::Board, "Board"), (ViewMode::List, "List")]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, mode) in ViewMode::ALL.into_iter().enumerate() {
         let selected = view.view_mode == mode;
         row = row.child(
             div()
                 .id(("view-switch", index as u64))
+                .track_focus(&view.view_focus[index])
                 .px(theme.spacing.sm)
                 .py(theme.spacing.xs)
                 .rounded(theme.radius.md)
@@ -216,16 +287,38 @@ pub(super) fn switch(
                 .when(!selected, |button| {
                     button.hover(|style| style.bg(theme.palette.surface_hover))
                 })
-                .child(label)
-                .on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.set_view_mode(mode, cx)),
-                ),
+                .child(view_label(mode))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.set_view_mode(mode, cx);
+                    this.view_focus[index].focus(window);
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    let step: isize = match event.keystroke.key.as_str() {
+                        "left" => -1,
+                        "right" => 1,
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    let next =
+                        (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
+                    this.set_view_mode(ViewMode::ALL[next], cx);
+                    this.view_focus[next].focus(window);
+                })),
         );
     }
     row.into_any_element()
 }
 
-/// The list body: the header, one row per task, and the paging footer.
+fn view_label(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::Board => "Board",
+        ViewMode::List => "List",
+        ViewMode::Roadmap => "Roadmap",
+        ViewMode::Workload => "Workload",
+    }
+}
+
+/// The list body: the header, one row per task, the column picker when it's open, and the footer.
 pub(super) fn render(
     view: &WorkspaceView,
     theme: &Theme,
@@ -238,46 +331,64 @@ pub(super) fn render(
         .flex_col()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll();
-    body = body.child(header_row(theme));
+        .overflow_y_scroll()
+        .track_scroll(&view.scroll_list);
+    body = body.child(header_row(view, theme, cx));
     for (index, task) in view.task_list.rows.iter().enumerate() {
-        body = body.child(row(index, task, &entries, theme, cx));
+        body = body.child(row(index, task, view, &entries, theme, cx));
     }
     if view.task_list.rows.is_empty() && view.task_list.total == 0 {
         body = body.child(empty(view, theme));
     }
 
-    div()
-        .flex()
-        .flex_col()
-        .size_full()
-        .min_h_0()
-        .child(body)
-        .child(footer(view, theme, cx))
-        .into_any_element()
+    let mut column = div().flex().flex_col().size_full().min_h_0().child(body);
+    if view.list_columns_open {
+        column = column.child(columns_menu(view, theme, cx));
+    }
+    column.child(footer(view, theme, cx)).into_any_element()
 }
 
-/// The column headings. The widths here are the widths of the cells in each row.
-fn columns() -> [(&'static str, Option<f32>); 7] {
-    [
-        ("Title", None),
-        ("Status", Some(110.)),
-        ("Priority", Some(90.)),
-        ("Assignee", Some(150.)),
-        ("Tags", Some(180.)),
-        ("Due", Some(100.)),
-        ("Estimate", Some(80.)),
-    ]
-}
-
-fn cell(width: Option<f32>) -> Div {
-    match width {
-        Some(width) => div().w(px(width)).flex_shrink_0().min_w_0().truncate(),
-        None => div().flex_1().min_w_0().truncate(),
+fn column_label(column: ListColumn) -> &'static str {
+    match column {
+        ListColumn::Title => "Title",
+        ListColumn::Status => "Status",
+        ListColumn::Priority => "Priority",
+        ListColumn::Assignee => "Assignee",
+        ListColumn::Tags => "Tags",
+        ListColumn::DueDate => "Due",
+        ListColumn::Estimate => "Estimate",
     }
 }
 
-fn header_row(theme: &Theme) -> impl IntoElement {
+/// The fixed width of a column, or `None` for the one that takes the rest of the row.
+fn column_width(column: ListColumn) -> Option<f32> {
+    match column {
+        ListColumn::Title => None,
+        ListColumn::Status => Some(110.),
+        ListColumn::Priority => Some(90.),
+        ListColumn::Assignee => Some(150.),
+        ListColumn::Tags => Some(180.),
+        ListColumn::DueDate => Some(100.),
+        ListColumn::Estimate => Some(80.),
+    }
+}
+
+fn cell(id: (&'static str, u64), column: ListColumn) -> Stateful<Div> {
+    let base = div().id(id).min_w_0().truncate();
+    match column_width(column) {
+        Some(width) => base.w(px(width)).flex_shrink_0(),
+        None => base.flex_1(),
+    }
+}
+
+/// The column headings. A click sorts by the column; the column the list is sorted by shows an arrow in
+/// the direction of the sort.
+fn header_row(
+    view: &WorkspaceView,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    let sort = view.list_settings.sort;
     let mut row = div()
         .flex()
         .flex_row()
@@ -289,8 +400,21 @@ fn header_row(theme: &Theme) -> impl IntoElement {
         .border_color(theme.palette.border)
         .text_size(theme.typography.caption)
         .text_color(theme.palette.text_secondary);
-    for (label, width) in columns() {
-        row = row.child(cell(width).child(label));
+    for (index, column) in view.list_settings.columns.iter().copied().enumerate() {
+        let arrow = match (sort.column == column.sort(), sort.direction) {
+            (false, _) => "",
+            (true, SortDirection::Ascending) => " ↑",
+            (true, SortDirection::Descending) => " ↓",
+        };
+        row = row.child(
+            cell(("list-heading", index as u64), column)
+                .cursor_pointer()
+                .hover(|style| style.text_color(theme.palette.text_primary))
+                .child(format!("{}{arrow}", column_label(column)))
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.sort_list(column, cx)),
+                ),
+        );
     }
     row
 }
@@ -298,38 +422,13 @@ fn header_row(theme: &Theme) -> impl IntoElement {
 fn row(
     index: usize,
     task: &Task,
+    view: &WorkspaceView,
     entries: &[members::Entry],
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
     let id = task.id();
-    let assignee = task
-        .assignee_id()
-        .and_then(|assignee| entries.iter().find(|entry| entry.id == assignee));
-    let assignee_cell = match assignee {
-        Some(entry) => div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(theme.spacing.xs)
-            .child(member_mark(&entry.initials, entry.colour, px(20.), theme))
-            .child(entry.label.clone())
-            .into_any_element(),
-        None => div()
-            .text_color(theme.palette.text_secondary)
-            .child("Unassigned")
-            .into_any_element(),
-    };
-    let estimate = task
-        .estimate()
-        .map(|estimate| format!("{}h", format_hours(estimate.minutes())))
-        .unwrap_or_else(|| "—".to_string());
-    let due = task
-        .due_on()
-        .map(|due| due.to_string())
-        .unwrap_or_else(|| "—".to_string());
-
-    div()
+    let mut row = div()
         .id(("list-row", index as u64))
         .flex()
         .flex_row()
@@ -341,15 +440,107 @@ fn row(
         .border_color(theme.palette.border)
         .text_size(theme.typography.body)
         .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child(cell(None).child(task.title().to_string()))
-        .child(cell(Some(110.)).child(status_label(task.status())))
-        .child(cell(Some(90.)).child(priority_label(task.priority())))
-        .child(cell(Some(150.)).child(assignee_cell))
-        .child(cell(Some(180.)).child(task.tags().join(", ")))
-        .child(cell(Some(100.)).child(due))
-        .child(cell(Some(80.)).child(estimate))
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_panel(id, cx)))
+        .hover(|style| style.bg(theme.palette.surface_hover));
+    for (column_index, column) in view.list_settings.columns.iter().copied().enumerate() {
+        let content = cell_content(column, task, entries, theme);
+        row = row
+            .child(cell(("list-cell", (index * 16 + column_index) as u64), column).child(content));
+    }
+    row.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_panel(id, cx)))
+}
+
+/// What one column shows for a task.
+fn cell_content(
+    column: ListColumn,
+    task: &Task,
+    entries: &[members::Entry],
+    theme: &Theme,
+) -> AnyElement {
+    match column {
+        ListColumn::Title => task.title().to_string().into_any_element(),
+        ListColumn::Status => status_label(task.status()).into_any_element(),
+        ListColumn::Priority => priority_label(task.priority()).into_any_element(),
+        ListColumn::Assignee => {
+            let assignee = task
+                .assignee_id()
+                .and_then(|assignee| entries.iter().find(|entry| entry.id == assignee));
+            match assignee {
+                Some(entry) => div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.spacing.xs)
+                    .child(member_mark(&entry.initials, entry.colour, px(20.), theme))
+                    .child(entry.label.clone())
+                    .into_any_element(),
+                None => div()
+                    .text_color(theme.palette.text_secondary)
+                    .child("Unassigned")
+                    .into_any_element(),
+            }
+        }
+        ListColumn::Tags => task.tags().join(", ").into_any_element(),
+        ListColumn::DueDate => task
+            .due_on()
+            .map(|due| due.to_string())
+            .unwrap_or_else(|| "—".to_string())
+            .into_any_element(),
+        ListColumn::Estimate => task
+            .estimate()
+            .map(|estimate| format!("{}h", format_hours(estimate.minutes())))
+            .unwrap_or_else(|| "—".to_string())
+            .into_any_element(),
+    }
+}
+
+/// The column picker: a checkbox per column. The last shown column is disabled, so the list can't end up
+/// with no columns.
+fn columns_menu(
+    view: &WorkspaceView,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let shown = view.list_settings.columns.len();
+    let mut menu = div()
+        .id("list-columns-menu")
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .p(theme.spacing.xs)
+        .mx(theme.spacing.lg)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .bg(theme.palette.surface_raised)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+    for (index, column) in ListColumn::ALL.into_iter().enumerate() {
+        let checked = view.list_settings.shows(column);
+        let locked = checked && shown == 1;
+        let tick = if checked { "✓" } else { " " };
+        let mut option = div()
+            .id(("list-column-option", index as u64))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.spacing.sm)
+            .px(theme.spacing.sm)
+            .py(theme.spacing.xs)
+            .rounded(theme.radius.sm)
+            .child(div().w(px(14.)).child(tick))
+            .child(column_label(column));
+        option = if locked {
+            option.text_color(theme.palette.text_disabled)
+        } else {
+            option
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.palette.surface_hover))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.toggle_list_column(column, cx)
+                }))
+        };
+        menu = menu.child(option);
+    }
+    menu.into_any_element()
 }
 
 /// The message for a list with no rows: no tasks at all, or none that the filters and search let through.
@@ -366,8 +557,8 @@ fn empty(view: &WorkspaceView, theme: &Theme) -> impl IntoElement {
         .child(text)
 }
 
-/// "Showing 101–150 of 137", with Previous and Next. Next is off on the last page, so it never leads to
-/// an empty page.
+/// The columns button, the count, and Previous and Next. Next is off on the last page, so it never leads
+/// to an empty page.
 fn footer(
     view: &WorkspaceView,
     theme: &Theme,
@@ -381,21 +572,35 @@ fn footer(
         let end = start + list.rows.len() - 1;
         format!("Showing {start}–{end} of {}", list.total)
     };
-    let previous_enabled = list.page > 0;
-    let next_enabled = list.has_next;
+
+    let columns_button = div()
+        .id("list-columns-open")
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        .child("Columns")
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_columns_menu(cx)));
 
     let mut row = div()
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
+        .gap(theme.spacing.sm)
         .h(px(40.))
         .px(theme.spacing.lg)
         .border_t_1()
         .border_color(theme.palette.border)
         .text_size(theme.typography.caption)
+        .child(columns_button)
         .child(
             div()
+                .flex_1()
                 .text_color(theme.palette.text_secondary)
                 .child(summary),
         );
@@ -408,11 +613,11 @@ fn footer(
             .flex_row()
             .gap(theme.spacing.xs)
             .child(
-                pager("list-previous", "Previous", previous_enabled, theme)
+                pager("list-previous", "Previous", list.page > 0, theme)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.list_previous(cx))),
             )
             .child(
-                pager("list-next", "Next", next_enabled, theme)
+                pager("list-next", "Next", list.has_next, theme)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.list_next(cx))),
             ),
     )
@@ -440,12 +645,22 @@ fn pager(id: &'static str, label: &str, enabled: bool, theme: &Theme) -> Statefu
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
-    use super::ListState;
+    use super::{ListState, column_width};
+    use looji_domain::ListColumn;
 
     #[test]
     fn a_fresh_list_starts_at_the_first_page_with_no_cursor() {
         let state = ListState::default();
         assert_eq!(state.page, 0);
         assert_eq!(state.cursors, [None]);
+    }
+
+    #[test]
+    fn only_the_title_takes_the_rest_of_the_row() {
+        let flexible: Vec<ListColumn> = ListColumn::ALL
+            .into_iter()
+            .filter(|column| column_width(*column).is_none())
+            .collect();
+        assert_eq!(flexible, [ListColumn::Title]);
     }
 }

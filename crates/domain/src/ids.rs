@@ -34,3 +34,5 @@ id_type!(TaskId);
 id_type!(ColumnId);
 id_type!(TeamMemberId);
 id_type!(ActivityId);
+id_type!(PlanDraftId);
+id_type!(ChatThreadId);

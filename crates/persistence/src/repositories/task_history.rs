@@ -65,7 +65,7 @@ impl SqliteStore {
             }
         };
         let storage = |err: rusqlite::Error| RepoError::Storage(err.to_string());
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         write_task(&transaction, task)?;
         transaction
             .execute(

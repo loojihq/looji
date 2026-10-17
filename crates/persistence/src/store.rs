@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use looji_domain::WorkspaceId;
+use looji_domain::{Timestamp, WorkspaceId};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{
@@ -16,9 +16,11 @@ pub struct SqliteStore {
 impl SqliteStore {
     /// Opens the app database at `path`, creating and migrating it as needed.
     pub fn open(path: &Path) -> Result<Self> {
-        Ok(Self {
-            connection: crate::open_database(path)?,
-        })
+        let connection = crate::open_database(path)?;
+        // A generation runs in the process that started it. One still generating when the store opens was cut
+        // off when the app closed, so it is interrupted now, and its text is kept.
+        crate::repositories::plan_draft::interrupt_generating(&connection, Timestamp::now())?;
+        Ok(Self { connection })
     }
 
     /// An in-memory store with the app's schema. For tests.
@@ -64,7 +66,7 @@ impl SqliteStore {
         let id = workspace.as_uuid().to_string();
         let database = |err: rusqlite::Error| IconError::Database(err.to_string());
 
-        let transaction = self.connection.unchecked_transaction().map_err(database)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(database)?;
         let previous: Option<Option<String>> = transaction
             .query_row(
                 "SELECT icon_file FROM workspaces WHERE id = ?1",

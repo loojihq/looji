@@ -1,0 +1,11 @@
+{
+  "spec": "# Launch plan\n\nShip the planning draft flow to the beta group by 30 October.",
+  "user_stories": [
+    {"title": "Plan from a brief", "body": "As a planner, I describe the work and get a draft plan to review."}
+  ],
+  "tasks": [
+    {"title": "Draft the brief template", "priority": "high", "estimate_hours": 3, "assignee": "Alex Kim", "tags": ["docs"]},
+    {"title": "Wire the streaming view", "priority": "medium", "estimate_hours": 5.5, "assignee": "Sam Lee", "tags": ["ui", "streaming"]},
+    {"title": "Review the warning copy", "priority": "low", "estimate_hours": 0, "assignee": null, "tags": []}
+  ]
+}

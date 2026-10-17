@@ -5,7 +5,9 @@
 //! Text is compared lowercased one character at a time, with the same rule everywhere. That keeps the
 //! database's search function and the in-memory check in step, including for the capital dotted I.
 
-use crate::{ids::TaskId, position::Position, status::Status, task::Task, task_filter::TaskFilter};
+use crate::{
+    ids::TaskId, list_view::ListSort, status::Status, task::Task, task_filter::TaskFilter,
+};
 
 /// How many tasks a page of the list holds.
 pub const PAGE_SIZE: usize = 50;
@@ -49,6 +51,8 @@ pub struct TaskQuery {
     pub filter: TaskFilter,
     /// Lowercase search terms. Each must match somewhere on a task (AND).
     pub terms: Vec<String>,
+    /// The order of the rows. Manual order unless the user chose a column.
+    pub sort: ListSort,
 }
 
 impl TaskQuery {
@@ -57,7 +61,14 @@ impl TaskQuery {
             statuses,
             filter,
             terms: search_terms(search),
+            sort: ListSort::default(),
         }
+    }
+
+    /// The same query, in a different order.
+    pub fn with_sort(mut self, sort: ListSort) -> Self {
+        self.sort = sort;
+        self
     }
 
     /// Whether a task is shown: its status is visible, it passes the filter, and every search term
@@ -69,21 +80,21 @@ impl TaskQuery {
     }
 }
 
-/// Where a page ends: the sort key of its last task, with the task id as the tiebreaker. The next page
-/// starts after this value, not after a row, so it isn't moved by edits to rows already seen.
+/// The value a page ends on: the sort field of its last task. Text for the text fields and the manual
+/// order, a number for the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageCursor {
-    pub position: Position,
-    pub id: TaskId,
+pub enum SortValue {
+    Text(String),
+    Integer(i64),
 }
 
-impl PageCursor {
-    pub fn after(task: &Task) -> Self {
-        Self {
-            position: task.position().clone(),
-            id: task.id(),
-        }
-    }
+/// Where a page ends: the sort value of its last task, with the task id as the tiebreaker. The next page
+/// starts after this value, not after a row, so it isn't moved by edits to rows already seen. A task
+/// with no value for the sort field (a due date that's empty, say) has `value: None`, and sorts last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageCursor {
+    pub value: Option<SortValue>,
+    pub id: TaskId,
 }
 
 /// One page of matching tasks, in order, with what the list needs to page on.
@@ -92,6 +103,8 @@ pub struct TaskPage {
     pub tasks: Vec<Task>,
     /// Whether more matching tasks follow this page.
     pub has_next: bool,
+    /// Where the next page starts. `Some` exactly when `has_next` is true.
+    pub next: Option<PageCursor>,
     /// How many tasks match the query in all, counted in the same read as the page.
     pub total: u64,
 }

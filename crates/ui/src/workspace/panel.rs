@@ -332,10 +332,19 @@ pub(super) fn render(
         .estimate()
         .map(|estimate| format!("{} minutes", estimate.minutes()))
         .unwrap_or_else(|| "No estimate".to_string());
+    let start = task
+        .start_on()
+        .map(|start| start.to_string())
+        .unwrap_or_else(|| "No start date".to_string());
     let due = task
         .due_on()
         .map(|due| due.to_string())
         .unwrap_or_else(|| "No due date".to_string());
+    let needs_hint = looji_domain::needs_estimate_hint(
+        task.status(),
+        task.due_on(),
+        task.estimate().map(|estimate| estimate.minutes()),
+    );
     let mut history = div().flex().flex_col().gap(theme.spacing.xs);
     if panel.history.is_empty() {
         history = history.child(
@@ -434,7 +443,13 @@ pub(super) fn render(
                 .flex_col()
                 .gap(theme.spacing.xs)
                 .child(format!("Estimate: {estimate}"))
+                .child(format!("Start: {start}"))
                 .child(format!("Due: {due}"))
+                .children(needs_hint.then(|| {
+                    div()
+                        .text_color(theme.palette.text_secondary)
+                        .child("Add an estimate to schedule this task.")
+                }))
                 .child(assignee_row(
                     task.assignee_id(),
                     &members::entries(&view.members),
@@ -462,12 +477,8 @@ pub(super) fn render(
                     segment(false, theme)
                         .id("panel-chat")
                         .child("Chat")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            if let Some(panel) = this.panel.as_mut() {
-                                panel.notice =
-                                    Some("Chat about this task arrives with the chat task.".into());
-                            }
-                            cx.notify();
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_chat(window, cx)
                         })),
                 )
                 .child(

@@ -5,22 +5,36 @@ mod avatar;
 mod board;
 mod board_search;
 mod card;
+mod chat;
+mod chat_render;
 mod columns;
 mod delete;
 mod drag;
 mod dragging;
+mod export;
 mod fields;
 mod filter_bar;
 mod keyboard;
 mod landing;
 mod layout;
 mod list_view;
+mod markdown;
 mod members;
 mod moves;
 mod panel;
+mod plan_drafts;
+mod plan_refine;
+mod plan_review;
+mod plan_wizard;
 mod preferences_panel;
+mod profile;
 mod project_state;
+mod project_views;
 mod projects;
+mod repo_dialog;
+mod roadmap;
+mod roadmap_layout;
+mod schedule_dialog;
 mod search;
 mod sidebar;
 mod state;
@@ -29,6 +43,9 @@ mod task_edit;
 mod task_editors;
 mod task_form;
 mod team_dialog;
+mod tour;
+mod updates;
+mod workload_view;
 
 use delete::PendingDelete;
 use project_state::ProjectList;
@@ -88,6 +105,30 @@ pub struct WorkspaceView {
     task_dialog: Option<task_dialog::TaskDialog>,
     /// The team dialog, while it's open.
     team_dialog: Option<team_dialog::TeamDialog>,
+    /// The task chat, while it is open.
+    chat_dialog: Option<chat::ChatDialog>,
+    /// Follows the newest message in the chat, so a streaming reply stays in view.
+    chat_scroll: ScrollHandle,
+    /// The check for a newer release, running in the background, and the notice it produced, if any.
+    update_task: Option<gpui::Task<()>>,
+    update_notice: Option<looji_updates::UpdateStatus>,
+    update_install: Option<updates::Install>,
+    update_worker: Option<gpui::Task<()>>,
+    /// The first-run tour, while it is showing.
+    tour: Option<looji_domain::Tour>,
+    /// The repository dialog, while it's open, and the status of the selected project's folder. A check
+    /// numbered `code_check_seq` is the only one allowed to replace the status it set.
+    repo_dialog: Option<repo_dialog::RepoDialog>,
+    code_source: Option<repo_dialog::Source>,
+    code_check_seq: u64,
+    /// The working hours dialog, while it's open, and one focus handle for each of its controls.
+    schedule_dialog: Option<schedule_dialog::ScheduleDialog>,
+    schedule_focus: Vec<FocusHandle>,
+    /// The planning wizard, while it's open, and one focus handle for each of its controls.
+    plan_wizard: Option<plan_wizard::PlanWizardDialog>,
+    /// The planning drafts of the selected project, while their list is open.
+    plan_drafts: Option<plan_drafts::PlanDraftsDialog>,
+    plan_focus: Vec<FocusHandle>,
     /// The task detail panel beside the board, while a task is open in it.
     panel: Option<panel::PanelState>,
     /// The tag being typed for a task, while the tag input has the keyboard.
@@ -103,6 +144,26 @@ pub struct WorkspaceView {
     /// Whether the board area shows the board or the list, and the list's paging state.
     view_mode: list_view::ViewMode,
     task_list: list_view::ListState,
+    /// The sort and the shown columns of the selected project's list, and whether the column picker is open.
+    list_settings: looji_domain::ListView,
+    list_columns_open: bool,
+    /// The roadmap's scale, grouping, and the day it is centred on.
+    roadmap: roadmap::RoadmapState,
+    /// The workload view's period and whether done tasks count.
+    workload: workload_view::WorkloadState,
+    /// Each project's view state, as it was loaded, and the active project's scroll positions. The positions
+    /// are read from the live handles below when the user leaves a view.
+    loaded_view_state: looji_domain::ProjectViewState,
+    view_scroll: std::collections::BTreeMap<String, looji_domain::ScrollOffset>,
+    /// Set when a view was entered or a project loaded, so its scroll positions are put back on the next frame.
+    pending_scroll: bool,
+    scroll_list: ScrollHandle,
+    scroll_roadmap: ScrollHandle,
+    scroll_workload: ScrollHandle,
+    /// One focus handle per view option in the switcher, in order.
+    view_focus: Vec<FocusHandle>,
+    /// Saves the active project when the app quits.
+    quit_subscription: Option<Subscription>,
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
@@ -128,6 +189,25 @@ impl WorkspaceView {
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
                     team_dialog: None,
+                    chat_dialog: None,
+                    chat_scroll: ScrollHandle::new(),
+                    update_task: None,
+                    update_notice: None,
+                    update_install: None,
+                    update_worker: None,
+                    tour: None,
+                    repo_dialog: None,
+                    code_source: None,
+                    code_check_seq: 0,
+                    schedule_dialog: None,
+                    plan_wizard: None,
+                    plan_drafts: None,
+                    plan_focus: (0..plan_wizard::CONTROLS.len())
+                        .map(|_| cx.focus_handle().tab_stop(true))
+                        .collect(),
+                    schedule_focus: (0..schedule_dialog::CONTROL_COUNT)
+                        .map(|_| cx.focus_handle().tab_stop(true))
+                        .collect(),
                     panel: None,
                     tag_edit: None,
                     card_editing: None,
@@ -137,6 +217,20 @@ impl WorkspaceView {
                     search_debounce: search::Debounce::default(),
                     view_mode: list_view::ViewMode::default(),
                     task_list: list_view::ListState::default(),
+                    list_settings: looji_domain::ListView::default(),
+                    list_columns_open: false,
+                    roadmap: roadmap::RoadmapState::default(),
+                    workload: workload_view::WorkloadState::default(),
+                    loaded_view_state: looji_domain::ProjectViewState::default(),
+                    view_scroll: std::collections::BTreeMap::new(),
+                    pending_scroll: false,
+                    scroll_list: ScrollHandle::new(),
+                    scroll_roadmap: ScrollHandle::new(),
+                    scroll_workload: ScrollHandle::new(),
+                    view_focus: (0..looji_domain::ProjectView::ALL.len())
+                        .map(|_| cx.focus_handle().tab_stop(true))
+                        .collect(),
+                    quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
@@ -144,11 +238,20 @@ impl WorkspaceView {
                         .collect(),
                 };
                 view.reload_projects(cx);
+                view.start_update_checks(cx);
+                view.start_tour_if_new(cx);
                 view
             });
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
             let focus = view.read(cx).focus_handle.clone();
             focus.focus(window);
+            // The active project's view is saved when the app quits, after the last window has gone.
+            let weak = view.downgrade();
+            let quit = cx.on_app_quit(move |cx| {
+                let _ = weak.update(cx, |view, cx| view.save_on_quit(cx));
+                async {}
+            });
+            view.update(cx, |view, _| view.quit_subscription = Some(quit));
             view
         })
     }
@@ -162,6 +265,8 @@ impl WorkspaceView {
         // Write first; only move the selection once the write has succeeded.
         match SettingsRepository::set_active_workspace(store(cx), id) {
             Ok(()) => {
+                // The project being left keeps its view and scroll, saved before the switch.
+                self.save_project_view(cx);
                 self.list.set_active(id);
                 // The previous workspace's project must not stay selected.
                 self.reload_projects(cx);
@@ -318,6 +423,10 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The tour is on top of everything, so it takes the keys first.
+        if self.tour.is_some() {
+            return self.tour_key(event, cx);
+        }
         // The search field takes its keys first, so shortcuts and card moves don't fire while typing.
         if self.search_focused && self.search_key(event, window, cx) {
             return;
@@ -334,6 +443,21 @@ impl WorkspaceView {
         }
         if self.task_dialog.is_some() {
             return self.task_dialog_key(event, cx);
+        }
+        if self.chat_dialog.is_some() {
+            return self.chat_key(event, cx);
+        }
+        if self.plan_drafts.is_some() && event.keystroke.key == "escape" {
+            return self.close_plan_drafts(cx);
+        }
+        if self.plan_wizard.is_some() {
+            return self.plan_wizard_key(event, window, cx);
+        }
+        if self.schedule_dialog.is_some() {
+            return self.schedule_dialog_key(event, window, cx);
+        }
+        if self.repo_dialog.is_some() {
+            return self.repo_dialog_key(event, cx);
         }
         if self.team_dialog.is_some() {
             return self.team_dialog_key(event, cx);
@@ -443,7 +567,11 @@ fn window_options(cx: &App) -> WindowOptions {
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _frame = profile::frame(window);
+        if std::mem::take(&mut self.pending_scroll) {
+            self.schedule_scroll_restore(window);
+        }
         let theme = cx.theme().clone();
         let header = match self.projects.active() {
             Some(project) => format!("{} / {}", self.list.active().name(), project.name()),
@@ -457,6 +585,11 @@ impl Render for WorkspaceView {
                 .items_center()
                 .gap(theme.spacing.sm)
                 .child(list_view::switch(self, &theme, cx))
+                .child(export::open_button(&theme, cx))
+                .child(plan_drafts::open_button(&theme, cx))
+                .child(plan_wizard::open_button(&theme, cx))
+                .child(schedule_dialog::open_button(&theme, cx))
+                .child(repo_dialog::open_button(&theme, cx))
                 .child(team_dialog::open_button(&theme, cx))
                 .into_any_element()
         });
@@ -484,6 +617,7 @@ impl Render for WorkspaceView {
                     this.blur_tag_editor(cx);
                     this.blur_search(cx);
                     this.filter_menu = None;
+                    this.list_columns_open = false;
                 }),
             )
             .flex()
@@ -509,6 +643,13 @@ impl Render for WorkspaceView {
             )
             .children(task_dialog::overlay(self, &theme, cx))
             .children(team_dialog::overlay(self, &theme, cx))
+            .children(chat::overlay(self, &theme, window, cx))
+            .children(updates::notice(self, &theme, cx))
+            .children(tour::overlay(self, &theme, cx))
+            .children(repo_dialog::overlay(self, &theme, cx))
+            .children(schedule_dialog::overlay(self, &theme, window, cx))
+            .children(plan_wizard::overlay(self, &theme, window, cx))
+            .children(plan_drafts::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
             .children(delete_dialog)
             .children(project_dialog)
@@ -551,7 +692,17 @@ fn main_pane(
                 .flex_row()
                 .flex_1()
                 .min_h_0()
-                .child(div().flex_1().min_w_0().min_h_0().child(body))
+                .child(
+                    // A flex column, so the board inside it fills the height and its columns scroll. Without it the board
+                    // takes the height of all its cards and runs off the bottom of the window.
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(body),
+                )
                 .children(side),
         )
 }

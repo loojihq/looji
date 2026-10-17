@@ -75,6 +75,66 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_list_index",
         sql: include_str!("sql/0014_task_list_index.sql"),
     },
+    Migration {
+        version: 15,
+        name: "project_list_view",
+        sql: include_str!("sql/0015_project_list_view.sql"),
+    },
+    Migration {
+        version: 16,
+        name: "task_start_date",
+        sql: include_str!("sql/0016_task_start_date.sql"),
+    },
+    Migration {
+        version: 17,
+        name: "project_view_state",
+        sql: include_str!("sql/0017_project_view_state.sql"),
+    },
+    Migration {
+        version: 18,
+        name: "project_working_schedule",
+        sql: include_str!("sql/0018_project_working_schedule.sql"),
+    },
+    Migration {
+        version: 19,
+        name: "plan_drafts",
+        sql: include_str!("sql/0019_plan_drafts.sql"),
+    },
+    Migration {
+        version: 20,
+        name: "plan_draft_review",
+        sql: include_str!("sql/0020_plan_draft_review.sql"),
+    },
+    Migration {
+        version: 21,
+        name: "plan_draft_refinement",
+        sql: include_str!("sql/0021_plan_draft_refinement.sql"),
+    },
+    Migration {
+        version: 22,
+        name: "plan_draft_publish",
+        sql: include_str!("sql/0022_plan_draft_publish.sql"),
+    },
+    Migration {
+        version: 23,
+        name: "project_repository",
+        sql: include_str!("sql/0023_project_repository.sql"),
+    },
+    Migration {
+        version: 24,
+        name: "repo_index",
+        sql: include_str!("sql/0024_repo_index.sql"),
+    },
+    Migration {
+        version: 25,
+        name: "task_chat_and_notes",
+        sql: include_str!("sql/0025_task_chat_and_notes.sql"),
+    },
+    Migration {
+        version: 26,
+        name: "chat_reply_state",
+        sql: include_str!("sql/0026_chat_reply_state.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -405,5 +465,218 @@ mod tests {
             sql.contains("position, id"),
             "the index ends in the id: {sql}"
         );
+    }
+
+    #[test]
+    fn a_database_from_before_list_settings_keeps_its_tasks_and_gets_the_table() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..14]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a0', 30, NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let title: String = connection
+            .query_row("SELECT title FROM tasks WHERE id = 't'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(title, "Write copy", "existing tasks are kept");
+        let table: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'project_list_view'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table, 1, "the settings table exists");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM project_list_view", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "a project with no saved settings has no row");
+    }
+
+    #[test]
+    fn tasks_from_before_the_start_date_keep_their_data_with_no_start() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..15]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);
+                 INSERT INTO tasks (id, project_id, title, description, status, position,
+                                    estimate_minutes, assignee_id, due_on, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', '', 'todo', 'a0', NULL, NULL, '2026-10-16', 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let (title, due, start): (String, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT title, due_on, start_on FROM tasks WHERE id = 't'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Write copy");
+        assert_eq!(due.as_deref(), Some("2026-10-16"), "the due date is kept");
+        assert_eq!(start, None, "existing tasks have no start");
+    }
+
+    #[test]
+    fn a_database_from_before_view_state_keeps_its_projects_and_gets_the_table() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..16]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM projects WHERE id = 'p'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM project_view_state", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "a project with no saved view has no row");
+    }
+
+    #[test]
+    fn a_project_from_before_working_hours_reads_back_as_monday_to_friday_nine_to_five() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..17]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let (name, start, end, mask): (String, i64, i64, i64) = connection
+            .query_row(
+                "SELECT name, working_start_min, working_end_min, workdays_mask FROM projects WHERE id = 'p'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        assert_eq!(
+            (start, end, mask),
+            (540, 1020, 31),
+            "Monday to Friday, 09:00 to 17:00"
+        );
+    }
+
+    #[test]
+    fn a_project_from_before_the_repository_connection_keeps_its_data_and_gets_no_path() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..22]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM projects WHERE id = 'p'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM project_repository", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "a project with no folder connected has no row");
+    }
+
+    #[test]
+    fn a_project_from_before_the_repository_index_keeps_its_data_and_gets_empty_caches() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..23]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM projects WHERE id = 'p'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        for table in [
+            "index_entries",
+            "index_files",
+            "index_symbols",
+            "task_threads",
+            "task_messages",
+        ] {
+            let rows: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(rows, 0, "{table} starts empty");
+        }
     }
 }
