@@ -103,8 +103,6 @@ pub struct WorkspaceView {
     members: Vec<TeamMember>,
     /// The create-project dialog, while it's open.
     project_dialog: Option<ProjectDialog>,
-    /// A column hide waiting for confirmation.
-    pending_column: Option<columns::PendingColumn>,
     /// The card drag in progress, and the last drag's outcome.
     drag: dragging::DragSession,
     /// The create or edit task dialog, while it's open.
@@ -173,6 +171,8 @@ pub struct WorkspaceView {
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
+    /// Whether the Columns menu is open on the project header.
+    board_columns_open: bool,
     /// One focus handle for each control in the filter bar, in tab order.
     filter_focus: Vec<FocusHandle>,
     /// The command palette, while it's open.
@@ -198,7 +198,6 @@ impl WorkspaceView {
                     board: Vec::new(),
                     members: Vec::new(),
                     project_dialog: None,
-                    pending_column: None,
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
                     team_dialog: None,
@@ -246,6 +245,7 @@ impl WorkspaceView {
                     quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
+                    board_columns_open: false,
                     palette: None,
                     screen: None,
                     screen_entries: Vec::new(),
@@ -503,10 +503,8 @@ impl WorkspaceView {
             return;
         }
         // Tab moves between cards and other controls, unless a dialog or a rename owns the keyboard.
-        let modal = self.pending_column.is_some()
-            || self.project_dialog.is_some()
-            || self.pending_delete.is_some()
-            || self.rename.is_some();
+        let modal =
+            self.project_dialog.is_some() || self.pending_delete.is_some() || self.rename.is_some();
         if self.drag.keyboard != keyboard::Hold::Idle {
             if let Some(key) = keyboard::Key::from_name(&event.keystroke.key)
                 && self.keyboard_key(None, key, window, cx)
@@ -522,12 +520,6 @@ impl WorkspaceView {
                 window.focus_next();
             }
             cx.notify();
-            return;
-        }
-        if self.pending_column.is_some() {
-            if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
-                self.cancel_column_hide(cx);
-            }
             return;
         }
         if self.project_dialog.is_some() {
@@ -625,6 +617,7 @@ impl Render for WorkspaceView {
                     this.blur_search(cx);
                     this.close_task_menus(cx);
                     this.filter_menu = None;
+                    this.board_columns_open = false;
                     this.list_columns_open = false;
                     this.close_workspace_menu(cx);
                 }),
@@ -772,7 +765,7 @@ fn project_header(
                         .gap(theme.spacing.sm)
                         .child(plan_wizard::open_button(theme, cx))
                         .child(export::open_button(theme, cx))
-                        .child(board::columns_button(project, theme, cx))
+                        .child(board::columns_button(view, project, theme, cx))
                         .child(board::new_task_button(view, theme, cx)),
                 ),
         )

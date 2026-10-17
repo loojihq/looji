@@ -4,7 +4,7 @@
 use gpui::{prelude::*, *};
 use looji_domain::{DefaultView, Preference, Status, UpdateChannel};
 
-use super::{WorkspaceView, columns, schedule_dialog};
+use super::{WorkspaceView, schedule_dialog};
 use crate::{
     components, settings,
     theme::{Mode, Theme},
@@ -55,11 +55,7 @@ pub(super) fn render(
         .into_any_element(),
     };
 
-    // The column and hours confirmations open under their settings, and close the same way.
-    let column = view
-        .pending_column
-        .as_ref()
-        .map(|pending| columns::dialog(pending, theme, cx));
+    // The hours form opens under its setting, and closes the same way.
     let hours = schedule_dialog::panel(view, theme, window, cx);
 
     let body = div()
@@ -158,7 +154,6 @@ pub(super) fn render(
                     )),
                 )
                 .child(board_row)
-                .children(column)
                 .children(hours)
                 .child(components::section_label("Assistant", theme))
                 .child(

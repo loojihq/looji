@@ -204,8 +204,9 @@ impl WorkspaceView {
 
 /// The Drafts button in the header.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button(
+    crate::components::button_icon(
         "plan-drafts-open",
+        "copy",
         "Drafts",
         crate::components::Variant::Secondary,
         theme,

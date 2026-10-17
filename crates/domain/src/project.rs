@@ -19,6 +19,8 @@ pub struct Project {
     description: Option<String>,
     /// Whether the In review column is shown. The defaults are always shown.
     show_in_review: bool,
+    /// Whether the Backlog column is shown. The defaults are always shown.
+    show_backlog: bool,
     /// When the project works. A new project gets the default: Monday to Friday, 09:00 to 17:00.
     working_schedule: WorkingSchedule,
     created_at: Timestamp,
@@ -34,6 +36,7 @@ impl Project {
             name: trimmed_text(name, DomainError::EmptyName)?,
             description: None,
             show_in_review: true,
+            show_backlog: true,
             working_schedule: WorkingSchedule::default(),
             created_at: now,
             updated_at: now,
@@ -54,6 +57,10 @@ impl Project {
 
     pub fn show_in_review(&self) -> bool {
         self.show_in_review
+    }
+
+    pub fn show_backlog(&self) -> bool {
+        self.show_backlog
     }
 
     pub fn working_schedule(&self) -> WorkingSchedule {
@@ -77,8 +84,9 @@ impl Project {
 
     pub fn is_status_visible(&self, status: Status) -> bool {
         match status {
+            Status::Backlog => self.show_backlog,
             Status::InReview => self.show_in_review,
-            other => other.is_default() || self.show_in_review,
+            _ => true,
         }
     }
 
@@ -89,10 +97,13 @@ impl Project {
         if !visible {
             check_hideable(status)?;
         }
-        if status == Status::InReview {
-            self.show_in_review = visible;
-            self.updated_at = Timestamp::now();
-        }
+        let flag = match status {
+            Status::Backlog => &mut self.show_backlog,
+            Status::InReview => &mut self.show_in_review,
+            _ => return Ok(()),
+        };
+        *flag = visible;
+        self.updated_at = Timestamp::now();
         Ok(())
     }
 
@@ -166,6 +177,7 @@ pub struct ProjectRecord {
     pub name: String,
     pub description: Option<String>,
     pub show_in_review: bool,
+    pub show_backlog: bool,
     pub working_start_min: i64,
     pub working_end_min: i64,
     pub workdays_mask: i64,
@@ -183,6 +195,7 @@ impl TryFrom<ProjectRecord> for Project {
             name: trimmed_text(&record.name, DomainError::EmptyName)?,
             description: clean_description(record.description.as_deref())?,
             show_in_review: record.show_in_review,
+            show_backlog: record.show_backlog,
             working_schedule: WorkingSchedule::from_stored(
                 record.working_start_min,
                 record.working_end_min,

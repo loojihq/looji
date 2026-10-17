@@ -26,7 +26,7 @@ impl SqliteStore {
     /// user has moved since are left where they are. Either way the flag and the task rows change
     /// together, so a failure leaves everything as it was.
     ///
-    /// The four defaults can't be hidden, so hiding one fails. Showing one is a no-op.
+    /// The three defaults can't be hidden, so hiding one fails. Showing one is a no-op.
     pub fn set_status_visible(
         &self,
         project: ProjectId,
@@ -87,9 +87,15 @@ impl SqliteStore {
                 .map_err(storage)?
         };
 
+        // Each optional status has its own flag on the project. The column names come from this match,
+        // not from input.
+        let flag = match status {
+            Status::Backlog => "show_backlog",
+            _ => "show_in_review",
+        };
         transaction
             .execute(
-                "UPDATE projects SET show_in_review = ?1 WHERE id = ?2",
+                &format!("UPDATE projects SET {flag} = ?1 WHERE id = ?2"),
                 params![visible, key],
             )
             .map_err(storage)?;

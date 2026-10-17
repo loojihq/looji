@@ -140,6 +140,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "team_per_workspace",
         sql: include_str!("sql/0027_team_per_workspace.sql"),
     },
+    Migration {
+        version: 28,
+        name: "backlog_column",
+        sql: include_str!("sql/0028_backlog_column.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -187,6 +192,50 @@ mod tests {
         assert_eq!(
             status, "in_progress",
             "the rebuild must keep existing tasks"
+        );
+    }
+
+    #[test]
+    fn the_backlog_rebuild_keeps_the_history_that_references_tasks() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        // Up to the team migration: the version before the Backlog column.
+        migrate(&mut connection, &MIGRATIONS[..27]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, created_at, updated_at)
+                     VALUES ('w', 'Work', 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', 0, 0);
+                 INSERT INTO tasks (id, project_id, title, status, position, created_at, updated_at)
+                     VALUES ('t', 'p', 'Write copy', 'done', 'a0', 0, 0);
+                 INSERT INTO task_activity (id, task_id, kind, from_status, to_status, created_at)
+                     VALUES ('a', 't', 'status_changed', 'todo', 'done', 0);
+                 INSERT INTO task_events (id, task_id, kind, payload, created_at)
+                     VALUES ('e', 't', 'created', '[]', 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let count = |sql: &str| -> i64 { connection.query_row(sql, [], |row| row.get(0)).unwrap() };
+        assert_eq!(count("SELECT COUNT(*) FROM tasks"), 1);
+        assert_eq!(
+            count("SELECT COUNT(*) FROM task_activity"),
+            1,
+            "the rebuild must not cascade into activity"
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) FROM task_events"),
+            1,
+            "the rebuild must not cascade into events"
+        );
+        assert_eq!(
+            count("SELECT show_backlog FROM projects WHERE id = 'p'"),
+            1,
+            "existing projects must default to showing Backlog"
         );
     }
 

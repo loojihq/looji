@@ -389,8 +389,9 @@ impl WorkspaceView {
 
 /// The repository button in the header. It's drawn only while a project is selected.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button(
+    crate::components::button_icon(
         "repo-open",
+        "git-branch",
         "Repository",
         crate::components::Variant::Secondary,
         theme,

@@ -189,8 +189,9 @@ impl ScheduleDialog {
 
 /// The text the Hours button shows.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button(
+    crate::components::button_icon(
         "schedule-open",
+        "clock",
         "Hours",
         crate::components::Variant::Secondary,
         theme,

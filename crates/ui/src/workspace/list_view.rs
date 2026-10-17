@@ -315,7 +315,23 @@ pub(super) fn switch(
         row = row.child(
             crate::components::segment(selected, theme)
                 .id(("view-switch", index as u64))
-                .child(view_label(mode))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.spacing.xs)
+                        .child(crate::components::icon(
+                            view_icon(mode),
+                            14.,
+                            if selected {
+                                theme.palette.text_primary
+                            } else {
+                                theme.palette.text_secondary
+                            },
+                        ))
+                        .child(view_label(mode)),
+                )
                 .track_focus(&view.view_focus[index])
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.set_view_mode(mode, cx);
@@ -336,6 +352,16 @@ pub(super) fn switch(
         );
     }
     row.into_any_element()
+}
+
+/// The icon that stands for a view in the switch.
+fn view_icon(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::Board => "layout-kanban",
+        ViewMode::List => "list",
+        ViewMode::Roadmap => "route",
+        ViewMode::Workload => "chart-bar",
+    }
 }
 
 fn view_label(mode: ViewMode) -> &'static str {

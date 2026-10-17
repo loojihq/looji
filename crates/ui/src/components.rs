@@ -28,6 +28,36 @@ pub fn button(
     variant: Variant,
     theme: &Theme,
 ) -> Stateful<Div> {
+    shell(id, variant, theme).child(label.to_string())
+}
+
+/// A text button with a Tabler icon before its label. The icon takes the label's colour.
+pub fn button_icon(
+    id: impl Into<ElementId>,
+    icon_name: &str,
+    label: &str,
+    variant: Variant,
+    theme: &Theme,
+) -> Stateful<Div> {
+    // The icon takes the label's colour.
+    let label_colour = match variant {
+        Variant::Primary => theme.palette.on_accent,
+        Variant::Secondary => theme.palette.text_primary,
+        Variant::Ghost => theme.palette.text_secondary,
+        Variant::Danger => theme.palette.on_danger,
+    };
+    let content = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.xs)
+        .child(icon(icon_name, 15., label_colour))
+        .child(label.to_string());
+    shell(id, variant, theme).child(content)
+}
+
+/// The button's shape and colours, before its label is added.
+fn shell(id: impl Into<ElementId>, variant: Variant, theme: &Theme) -> Stateful<Div> {
     // Every variant has the same height, corner radius, weight, and 1px edge, so buttons sit in one row
     // without jumping. The edge matches the fill for the filled variants, so it doesn't show.
     let base = div()
@@ -43,8 +73,7 @@ pub fn button(
         .text_size(theme.typography.body)
         .font_weight(FontWeight::MEDIUM)
         .whitespace_nowrap()
-        .cursor_pointer()
-        .child(label.to_string());
+        .cursor_pointer();
     match variant {
         Variant::Primary => base
             .bg(theme.palette.accent)

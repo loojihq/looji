@@ -642,8 +642,9 @@ fn save_message(err: &RepoError) -> String {
 
 /// The Plan button in the header.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button(
+    crate::components::button_icon(
         "plan-open",
+        "sparkles",
         "Generate with AI",
         crate::components::Variant::Primary,
         theme,
