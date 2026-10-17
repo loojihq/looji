@@ -40,6 +40,7 @@ mod screen;
 mod search;
 mod sidebar;
 mod state;
+mod switcher;
 mod task_dialog;
 mod task_edit;
 mod task_editors;
@@ -176,6 +177,8 @@ pub struct WorkspaceView {
     /// The workspace screen in place of a board, if one is open, and the tasks it gathered.
     screen: Option<screen::Screen>,
     screen_entries: Vec<screen::Entry>,
+    /// Whether the workspace switcher's menu is open.
+    workspace_menu: bool,
 }
 
 impl WorkspaceView {
@@ -243,6 +246,7 @@ impl WorkspaceView {
                     palette: None,
                     screen: None,
                     screen_entries: Vec::new(),
+                    workspace_menu: false,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
@@ -440,6 +444,9 @@ impl WorkspaceView {
         if self.tour.is_some() {
             return self.tour_key(event, cx);
         }
+        if self.workspace_menu && event.keystroke.key == "escape" {
+            return self.close_workspace_menu(cx);
+        }
         // The palette takes every key while it's open, so typing doesn't reach the board.
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
@@ -623,6 +630,7 @@ impl Render for WorkspaceView {
                     this.blur_search(cx);
                     this.filter_menu = None;
                     this.list_columns_open = false;
+                    this.close_workspace_menu(cx);
                 }),
             )
             .flex()
