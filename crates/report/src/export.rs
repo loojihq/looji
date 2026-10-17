@@ -23,6 +23,12 @@ pub enum ExportError {
 
 /// Renders the report and writes it to `path`, returning the path it was written to.
 pub fn write_report(input: &ReportInput, path: &Path) -> Result<PathBuf, ExportError> {
+    // Linux would let the rename below replace a read-only file, so refuse one here on every platform.
+    if fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly()) {
+        return Err(ExportError::NotWritable {
+            path: path.to_path_buf(),
+        });
+    }
     let bytes = render(input)?;
     let temp = temp_path(path);
     if let Err(err) = fs::write(&temp, &bytes) {

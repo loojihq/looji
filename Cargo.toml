@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["third_party/*"]
 
 [workspace.package]
 version = "0.0.1"
@@ -12,3 +13,7 @@ looji-domain = { path = "crates/domain" }
 looji-persistence = { path = "crates/persistence" }
 looji-ai = { path = "crates/ai" }
 gpui = "0.2.2"
+
+# Patched for Linux. See third_party/README.md.
+[patch.crates-io]
+xattr = { path = "third_party/xattr" }

@@ -1,0 +1,31 @@
+# Maintainer: looji <https://github.com/loojihq/looji>
+pkgname=looji
+pkgver=0.0.1
+pkgrel=1
+pkgdesc="A desktop board for planning and tracking work, with AI planning, task chat, repository awareness, and PDF reports"
+arch=('x86_64')
+url="https://github.com/loojihq/looji"
+license=('custom')
+depends=('fontconfig' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'openssl' 'vulkan-icd-loader' 'wayland')
+makedepends=('cargo')
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo build --frozen --release --bin looji
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/looji "$pkgdir/usr/bin/looji"
+    install -Dm644 packaging/linux/looji.desktop "$pkgdir/usr/share/applications/looji.desktop"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

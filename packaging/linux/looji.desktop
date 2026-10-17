@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=looji
+Comment=A desktop board for planning and tracking work
+Exec=looji
+Terminal=false
+Categories=Office;ProjectManagement;
+StartupNotify=true

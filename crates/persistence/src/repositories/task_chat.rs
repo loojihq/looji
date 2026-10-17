@@ -30,7 +30,7 @@ impl TaskChatRepository for SqliteStore {
     fn threads(&self, task: TaskId) -> RepoResult<Vec<ChatThreadId>> {
         query_all(
             &self.connection,
-            "SELECT id FROM task_threads WHERE task_id = ?1 ORDER BY created_at, id",
+            "SELECT id FROM task_threads WHERE task_id = ?1 ORDER BY created_at, rowid",
             params![id_text(task.as_uuid())],
             |row| read_id(row, 0, ChatThreadId::from_uuid),
         )

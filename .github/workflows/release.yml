@@ -1,15 +1,16 @@
 name: Release
 
-# Builds the Windows program and installer, signs both, writes the checksum list, and publishes a GitHub release.
+# Builds the Windows program and installer, and the Linux program with its .deb, .rpm, and Arch PKGBUILD. Then writes one
+# checksum list for all of them and publishes a GitHub release.
 #
-# Push a tag such as v0.2.0 to release. The tag must match the version in Cargo.toml.
-# Run it by hand to rehearse: with "dry run" on, everything is built, signed, and verified, and the files are kept as a
-# workflow artifact, but no release is made.
+# Push a tag such as v0.0.1 to release. The tag must match the version in Cargo.toml.
+# Run it by hand to rehearse: with "dry run" on, everything is built and verified, and the files are kept as a workflow
+# artifact, but no release is made.
 #
 # Secrets (Settings > Secrets and variables > Actions), optional:
 #   WINDOWS_SIGNING_CERT_BASE64   the code-signing certificate as a base64-encoded .pfx
 #   WINDOWS_SIGNING_CERT_PASSWORD its password
-# Without them the release is built and published unsigned, and the release summary says so. Windows SmartScreen warns
+# Without them the Windows files are published unsigned, and the release summary says so. Windows SmartScreen warns
 # about unsigned programs.
 on:
   push:
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Build, sign, and verify without publishing a release
+        description: Build and verify without publishing a release
         type: boolean
         default: true
 
@@ -30,10 +31,12 @@ env:
   WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
 
 jobs:
-  release:
-    name: Build, sign, and publish
+  windows:
+    name: Build and sign for Windows
     runs-on: windows-latest
     timeout-minutes: 90
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
     defaults:
       run:
         shell: pwsh
@@ -45,7 +48,7 @@ jobs:
         run: |
           $signed = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_BASE64) -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PASSWORD)
           "signed=$($signed.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          if (-not $signed) { Write-Host '::warning::No signing certificate is set. This release will be published unsigned.' }
+          if (-not $signed) { Write-Host '::warning::No signing certificate is set. The Windows files will be published unsigned.' }
 
       - name: Check that the tag matches the version
         if: github.ref_type == 'tag'
@@ -59,7 +62,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Build the program
-        run: cargo build --release --bin looji
+        run: cargo build --release --locked --bin looji
 
       - name: Collect the files
         run: |
@@ -85,22 +88,99 @@ jobs:
           if (-not $setup) { throw 'The installer was not built.' }
           ./scripts/release/sign.ps1 -Path $setup.FullName
 
+      - name: Check the Windows files
+        run: |
+          $signed = '${{ steps.signing.outputs.signed }}' -eq 'true'
+          if ($signed) {
+            Get-ChildItem dist -Filter *.exe | ForEach-Object {
+              if ((Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid') { throw "$($_.Name) is not validly signed." }
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: looji-release-windows
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Build the Linux packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the display libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+            libvulkan-dev libfontconfig-dev libdbus-1-dev libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+
+      - name: Build the program
+        run: cargo build --release --locked --bin looji
+
+      - name: Work out the source checksum for the Arch package
+        id: source
+        if: github.ref_type == 'tag'
+        run: |
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" -o source.tar.gz
+          echo "sha=$(sha256sum source.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Package for Debian, Fedora, and Arch
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          if [ -n "$SOURCE_SHA" ]; then
+            scripts/release/linux-packages.sh --sha256 "$SOURCE_SHA"
+          else
+            scripts/release/linux-packages.sh
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: looji-release-linux
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: looji-release-*
+          merge-multiple: true
+          path: dist
+
       - name: Write the checksums
         run: ./scripts/release/write-checksums.ps1 -Dir dist
 
       - name: Verify the release files
-        run: ./scripts/release/verify-release.ps1 -Dir dist ${{ steps.signing.outputs.signed == 'true' && '-RequireSigned' || '' }}
+        # The signatures are checked in the windows job, where Authenticode is available.
+        run: ./scripts/release/verify-release.ps1 -Dir dist
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: looji-release
-          path: dist/*
-          if-no-files-found: error
-
-      - name: Say whether the release is signed
-        if: steps.signing.outputs.signed != 'true'
+      - name: Say whether the Windows files are signed
+        if: needs.windows.outputs.signed != 'true'
         run: |
-          "**This release is not code-signed.** Windows SmartScreen will warn people before they run it. The SHA256SUMS.txt file still lets anyone check the download." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "**The Windows files are not code-signed.** Windows SmartScreen will warn people before they run them. SHA256SUMS.txt still lets anyone check a download." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Publish the release
         if: github.ref_type == 'tag' && inputs.dry_run != true
