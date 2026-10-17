@@ -412,26 +412,6 @@ pub fn prop_row(label: &str, value: impl IntoElement, theme: &Theme) -> Div {
         .child(div().flex_1().min_w_0().child(value))
 }
 
-/// A view tab: its label, with an underline when selected. The caller adds the click.
-pub fn tab(id: impl Into<ElementId>, label: &str, selected: bool, theme: &Theme) -> Stateful<Div> {
-    let base = div()
-        .id(id)
-        .py(theme.spacing.xs)
-        .mr(theme.spacing.lg)
-        .border_b_2()
-        .cursor_pointer()
-        .child(label.to_string());
-    if selected {
-        base.border_color(theme.palette.text_primary)
-            .text_color(theme.palette.text_primary)
-            .font_weight(FontWeight::MEDIUM)
-    } else {
-        base.border_color(theme.palette.surface)
-            .text_color(theme.palette.text_secondary)
-            .hover(|style| style.text_color(theme.palette.text_primary))
-    }
-}
-
 /// A square tile with one Tabler icon, used to introduce an empty screen.
 pub fn icon_tile(icon_name: &str, theme: &Theme) -> Div {
     div()

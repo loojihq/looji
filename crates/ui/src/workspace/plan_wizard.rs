@@ -644,8 +644,8 @@ fn save_message(err: &RepoError) -> String {
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     crate::components::button(
         "plan-open",
-        "Plan",
-        crate::components::Variant::Secondary,
+        "Generate with AI",
+        crate::components::Variant::Primary,
         theme,
     )
     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_plan_wizard(window, cx)))

@@ -299,34 +299,40 @@ pub(super) fn switch(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    // Underlined tabs, as in the design: the selected one has a dark rule under it.
-    let mut row = div().flex().flex_row();
+    // One segmented control: the chosen view is filled, and the others sit in the same box.
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .bg(theme.palette.surface);
     for (index, mode) in ViewMode::ALL.into_iter().enumerate() {
         let selected = view.view_mode == mode;
         row = row.child(
-            crate::components::tab(
-                ("view-switch", index as u64),
-                view_label(mode),
-                selected,
-                theme,
-            )
-            .track_focus(&view.view_focus[index])
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.set_view_mode(mode, cx);
-                this.view_focus[index].focus(window);
-            }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                let step: isize = match event.keystroke.key.as_str() {
-                    "left" => -1,
-                    "right" => 1,
-                    _ => return,
-                };
-                cx.stop_propagation();
-                let next =
-                    (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
-                this.set_view_mode(ViewMode::ALL[next], cx);
-                this.view_focus[next].focus(window);
-            })),
+            crate::components::segment(selected, theme)
+                .id(("view-switch", index as u64))
+                .child(view_label(mode))
+                .track_focus(&view.view_focus[index])
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.set_view_mode(mode, cx);
+                    this.view_focus[index].focus(window);
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    let step: isize = match event.keystroke.key.as_str() {
+                        "left" => -1,
+                        "right" => 1,
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    let next =
+                        (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
+                    this.set_view_mode(ViewMode::ALL[next], cx);
+                    this.view_focus[next].focus(window);
+                })),
         );
     }
     row.into_any_element()

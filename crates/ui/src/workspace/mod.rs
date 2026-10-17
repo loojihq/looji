@@ -688,96 +688,166 @@ fn project_header(
     let workspace = view.list.active().name().to_string();
     let project = view.projects.active();
 
-    let title = match project {
-        Some(project) => project.name().to_string(),
-        None => workspace.clone(),
-    };
-    let mut left = div()
-        .flex()
-        .flex_col()
-        .min_w_0()
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .truncate()
-                .child(format!("{workspace} / Projects")),
-        )
-        .child(
-            div()
-                .mt(theme.spacing.xs)
-                .text_size(theme.typography.heading)
-                .font_weight(FontWeight::MEDIUM)
-                .truncate()
-                .child(title),
-        );
-    if project.is_some() {
-        let total = view.board.len();
-        let done = view
-            .board
-            .iter()
-            .filter(|task| task.status() == looji_domain::Status::Done)
-            .count();
-        left = left.child(
-            div()
-                .mt(px(2.))
-                .text_size(theme.typography.body)
-                .text_color(theme.palette.text_secondary)
-                .child(format!("{total} tasks · {done} done")),
-        );
-    }
+    let crumb = div()
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .truncate()
+        .child(format!("{workspace} / Projects"));
 
-    let top = div()
-        .flex()
-        .flex_row()
-        .items_start()
-        .justify_between()
-        .gap(theme.spacing.md)
-        .child(left)
-        .when(project.is_some(), |top| {
-            top.child(board::new_task_button(view, theme, cx))
-        });
-
-    let tabs = project.is_some().then(|| {
-        div()
+    let Some(project) = project else {
+        // No project yet: the workspace's name, and nothing to act on.
+        return div()
             .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(theme.spacing.sm)
-            .mt(theme.spacing.md)
-            .border_b_1()
-            .border_color(theme.palette.border)
-            .child(list_view::switch(view, theme, cx))
+            .flex_col()
+            .flex_shrink_0()
+            .px(theme.spacing.lg)
+            .pt(theme.spacing.md)
+            .child(crumb)
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(theme.spacing.sm)
-                    .pb(theme.spacing.xs)
-                    .child(export::open_button(theme, cx))
-                    .child(plan_drafts::open_button(theme, cx))
-                    .child(plan_wizard::open_button(theme, cx))
-                    .child(schedule_dialog::open_button(theme, cx))
-                    .child(repo_dialog::open_button(theme, cx)),
+                    .mt(theme.spacing.xs)
+                    .text_size(theme.typography.heading)
+                    .font_weight(FontWeight::MEDIUM)
+                    .truncate()
+                    .child(workspace),
             )
-    });
+            .into_any_element();
+    };
+
+    let total = view.board.len();
+    let done = view
+        .board
+        .iter()
+        .filter(|task| task.status() == looji_domain::Status::Done)
+        .count();
+    let open = total - done;
+
+    // The card: the project's name and counts, the actions, and how far through its tasks it is.
+    let card = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.md)
+        .p(theme.spacing.lg)
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .bg(theme.palette.surface_raised)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .justify_between()
+                .gap(theme.spacing.md)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(theme.typography.heading)
+                                .font_weight(FontWeight::MEDIUM)
+                                .truncate()
+                                .child(project.name().to_string()),
+                        )
+                        .child(
+                            div()
+                                .mt(px(2.))
+                                .text_size(theme.typography.body)
+                                .text_color(theme.palette.text_secondary)
+                                .child(format!(
+                                    "{total} {} · {open} open",
+                                    if total == 1 { "task" } else { "tasks" }
+                                )),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_end()
+                        .gap(theme.spacing.sm)
+                        .child(plan_wizard::open_button(theme, cx))
+                        .child(export::open_button(theme, cx))
+                        .child(board::columns_button(project, theme, cx))
+                        .child(board::new_task_button(view, theme, cx)),
+                ),
+        )
+        .child(progress(done, total, theme));
+
+    // The views share one row: the segmented switch on the left, and the project's other windows on the right.
+    let views = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.sm)
+        .child(list_view::switch(view, theme, cx))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .child(plan_drafts::open_button(theme, cx))
+                .child(schedule_dialog::open_button(theme, cx))
+                .child(repo_dialog::open_button(theme, cx)),
+        );
 
     div()
         .flex()
         .flex_col()
+        .gap(theme.spacing.md)
         .flex_shrink_0()
         .px(theme.spacing.lg)
         .pt(theme.spacing.md)
-        .child(top)
-        // The new-task form opens right under the New task button, above the board's tabs.
-        .children(
-            task_dialog::new_task_form(view, theme, cx)
-                .map(|form| div().pt(theme.spacing.sm).child(form)),
-        )
-        .children(tabs)
+        .child(crumb)
+        .child(card)
+        // The new-task form opens right under the card, where the New task button is.
+        .children(task_dialog::new_task_form(view, theme, cx).map(|form| div().child(form)))
+        .child(views)
         .into_any_element()
+}
+
+/// How far through the project's tasks it is: a bar filled to the share of done tasks, with the count.
+fn progress(done: usize, total: usize, theme: &Theme) -> impl IntoElement {
+    let fraction = if total == 0 {
+        0.0
+    } else {
+        done as f32 / total as f32
+    };
+    let percent = (fraction * 100.0).round() as u32;
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(
+            div()
+                .w_full()
+                .h(px(6.))
+                .rounded(px(3.))
+                .bg(theme.palette.border)
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded(px(3.))
+                        .bg(theme.palette.accent),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(format!("{done} of {total} done"))
+                .child(format!("{percent}%")),
+        )
 }
 
 fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> impl IntoElement {

@@ -52,14 +52,6 @@ pub(super) fn render(
         .min_h_0()
         .p(theme.spacing.lg)
         .gap(theme.spacing.md)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_end()
-                .child(column_toggle(project, theme, cx)),
-        )
         .when_some(drag.keyboard_notice(), |header, text| {
             header.child(
                 div()
@@ -648,26 +640,23 @@ impl WorkspaceView {
 }
 
 /// The toggle for the optional In review column. Hiding a column that has tasks asks first.
-fn column_toggle(
+pub(super) fn columns_button(
     project: &Project,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
     let shown = project.is_status_visible(Status::InReview);
-    let label = if shown {
-        "In review column: shown"
+    // Shown is the filled look, and hidden is the quieter one. Both toggle the In review column.
+    let variant = if shown {
+        crate::components::Variant::Secondary
     } else {
-        "In review column: hidden"
+        crate::components::Variant::Ghost
     };
-    crate::components::button(
-        "column-toggle-in-review",
-        label,
-        crate::components::Variant::Secondary,
-        theme,
+    crate::components::button("column-toggle-in-review", "Columns", variant, theme).on_click(
+        cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.request_column_visibility(Status::InReview, !shown, cx);
+        }),
     )
-    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-        this.request_column_visibility(Status::InReview, !shown, cx);
-    }))
 }
 
 /// The button that starts a new task in the first shown column.
@@ -684,7 +673,7 @@ pub(super) fn new_task_button(
     let (label, variant) = if creating {
         ("Cancel", crate::components::Variant::Secondary)
     } else {
-        ("+ New task", crate::components::Variant::Primary)
+        ("+ New task", crate::components::Variant::Secondary)
     };
     crate::components::button("new-task", label, variant, theme).on_click(cx.listener(
         |this, _: &ClickEvent, window, cx| this.open_task_dialog(Mode::Create, window, cx),
