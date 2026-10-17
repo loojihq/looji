@@ -13,7 +13,6 @@ use gpui::{prelude::*, *};
 use looji_domain::Task;
 
 use super::drag::DropResult;
-use super::fields::text_box;
 use super::keyboard::Hold;
 use super::search;
 use super::{WorkspaceView, typed_text};
@@ -208,7 +207,7 @@ pub(super) fn bar(
                 this.focus_search(window, cx)
             }),
         )
-        .child(text_box(
+        .child(crate::components::search_field(
             &view.search_draft,
             "Search cards (Ctrl+F)",
             view.search_focused,

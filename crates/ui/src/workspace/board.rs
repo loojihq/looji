@@ -675,7 +675,7 @@ pub(super) fn new_task_button(theme: &Theme, cx: &mut Context<WorkspaceView>) ->
     crate::components::button(
         "new-task",
         "+ New task",
-        crate::components::Variant::Secondary,
+        crate::components::Variant::Primary,
         theme,
     )
     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {

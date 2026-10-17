@@ -28,7 +28,12 @@ fn project(store: &SqliteStore, workspace: &Workspace) -> Project {
 }
 
 fn member(store: &SqliteStore, project: &Project) -> TeamMember {
-    let member = TeamMember::new(project.id(), "Dana", MemberColour::for_new_member(0)).unwrap();
+    let member = TeamMember::new(
+        project.workspace_id(),
+        "Dana",
+        MemberColour::for_new_member(0),
+    )
+    .unwrap();
     TeamMemberRepository::save(store, &member).unwrap();
     member
 }
@@ -91,7 +96,12 @@ fn team_member_round_trips() {
     let store = store();
     let workspace = workspace(&store);
     let project = project(&store, &workspace);
-    let original = TeamMember::new(project.id(), "Dana", MemberColour::for_new_member(2)).unwrap();
+    let original = TeamMember::new(
+        project.workspace_id(),
+        "Dana",
+        MemberColour::for_new_member(2),
+    )
+    .unwrap();
 
     TeamMemberRepository::save(&store, &original).unwrap();
 
@@ -100,7 +110,7 @@ fn team_member_round_trips() {
         Some(original.clone())
     );
     assert_eq!(
-        TeamMemberRepository::list_for_project(&store, project.id()).unwrap(),
+        TeamMemberRepository::list_for_workspace(&store, project.workspace_id()).unwrap(),
         vec![original]
     );
 }

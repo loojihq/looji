@@ -130,7 +130,10 @@ impl WorkspaceView {
             return;
         };
         let mut notice = None;
-        let members = match TeamMemberRepository::list_for_project(store(cx), project) {
+        let members = match TeamMemberRepository::list_for_workspace(
+            store(cx),
+            self.list.active_workspace_id(),
+        ) {
             Ok(members) => members,
             Err(err) => {
                 notice = Some(format!("Could not load the team: {err}"));
@@ -202,7 +205,7 @@ impl WorkspaceView {
         if dialog.run.is_some() {
             return;
         }
-        match TeamMemberRepository::list_for_project(store(cx), dialog.project) {
+        match TeamMemberRepository::list_for_workspace(store(cx), self.list.active_workspace_id()) {
             Ok(members) => dialog.members = members,
             Err(err) => {
                 dialog.notice = Some(format!("Could not check the team: {err}"));

@@ -205,8 +205,8 @@ pub(super) fn write_task(transaction: &Transaction<'_>, task: &Task) -> RepoResu
     Ok(())
 }
 
-/// An assignee must still exist and must belong to the task's project. This runs inside the write's
-/// transaction, so a member removed a moment ago is refused rather than saved.
+/// An assignee must still exist and must belong to the workspace the task's project is in. This runs
+/// inside the write's transaction, so a member removed a moment ago is refused rather than saved.
 fn check_assignee(
     transaction: &Transaction<'_>,
     member: TeamMemberId,
@@ -214,15 +214,25 @@ fn check_assignee(
 ) -> RepoResult<()> {
     let owner: Option<String> = transaction
         .query_row(
-            "SELECT project_id FROM team_members WHERE id = ?1",
+            "SELECT workspace_id FROM team_members WHERE id = ?1",
             params![id_text(member.as_uuid())],
             |row| row.get(0),
         )
         .optional()
         .map_err(storage)?;
-    match owner {
-        None => Err(RepoError::Rejected(DomainError::UnknownMember)),
-        Some(owner) if owner == id_text(project.as_uuid()) => Ok(()),
-        Some(_) => Err(RepoError::Rejected(DomainError::MemberFromOtherProject)),
+    let Some(owner) = owner else {
+        return Err(RepoError::Rejected(DomainError::UnknownMember));
+    };
+    let workspace: String = transaction
+        .query_row(
+            "SELECT workspace_id FROM projects WHERE id = ?1",
+            params![id_text(project.as_uuid())],
+            |row| row.get(0),
+        )
+        .map_err(storage)?;
+    if owner == workspace {
+        Ok(())
+    } else {
+        Err(RepoError::Rejected(DomainError::MemberFromOtherWorkspace))
     }
 }

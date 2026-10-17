@@ -3,7 +3,7 @@
 //! happens in place on the active workspace; icon and delete live on the Preferences screen.
 
 use gpui::{prelude::*, *};
-use looji_domain::Workspace;
+use looji_domain::{Workspace, WorkspaceId};
 
 use super::{Rename, WorkspaceView, avatar};
 use crate::{
@@ -17,10 +17,8 @@ pub(super) fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> A
     let icons_dir = cx.global::<AppDatabase>().icons_dir.clone();
     let active = view.list.active();
 
-    let trigger = match &view.rename {
-        Some(rename) if rename.id == active.id() => rename_field(rename, &theme).into_any_element(),
-        _ => trigger(active, &icons_dir, &theme, cx).into_any_element(),
-    };
+    // Renaming happens on the workspace screen, so the trigger always shows the name.
+    let trigger = trigger(active, &icons_dir, &theme, cx).into_any_element();
 
     let mut switcher = div().relative().flex().flex_col().child(trigger);
     if view.workspace_menu {
@@ -65,7 +63,7 @@ fn trigger(
         // The menu closes on any press outside it. A press on the trigger must not reach that, or
         // the same press would close the menu it just opened.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(avatar::render(active, icons_dir, theme))
+        .child(avatar::render(active, icons_dir, px(32.), theme))
         .child(
             div()
                 .flex_1()
@@ -108,7 +106,7 @@ fn menu(
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
-    for workspace in view.list.items() {
+    for (index, workspace) in view.list.items().iter().enumerate() {
         let id = workspace.id();
         let is_active = id == active;
         list = list.child(
@@ -122,8 +120,19 @@ fn menu(
                 .py(theme.spacing.xs)
                 .rounded(theme.radius.md)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child(avatar::render(workspace, icons_dir, theme))
+                .group(WORKSPACE_ROW)
+                // The active workspace is ringed in the accent colour. The others take a hover fill.
+                .when(is_active, |row| {
+                    row.bg(theme.palette.surface_selected)
+                        .border_1()
+                        .border_color(theme.palette.accent)
+                })
+                .when(!is_active, |row| {
+                    row.border_1()
+                        .border_color(theme.palette.surface)
+                        .hover(|style| style.bg(theme.palette.surface_hover))
+                })
+                .child(avatar::render(workspace, icons_dir, px(28.), theme))
                 .child(
                     div()
                         .flex_1()
@@ -131,7 +140,7 @@ fn menu(
                         .truncate()
                         .child(workspace.name().to_string()),
                 )
-                .child(components::check_mark(is_active, theme))
+                .child(row_actions(index, id, theme, cx))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.workspace_menu = false;
                     this.switch_to(id, cx);
@@ -168,8 +177,32 @@ fn menu(
     )
 }
 
+/// The group every menu row belongs to, so a row's edit button can appear while that row is hovered.
+const WORKSPACE_ROW: &str = "workspace-row";
+
+/// The edit button at the end of a menu row. It only shows while the row is hovered. A press stops
+/// there, so it doesn't also switch to the workspace. Renaming opens the workspace screen, where the
+/// name is edited.
+fn row_actions(
+    index: usize,
+    id: WorkspaceId,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    components::icon_button(("workspace-rename", index as u64), "edit", theme)
+        .invisible()
+        .group_hover(WORKSPACE_ROW, |style| style.visible())
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            this.workspace_menu = false;
+            this.switch_to(id, cx);
+            this.begin_rename(id, window, cx);
+            this.open_screen(super::screen::Screen::Workspace, cx);
+        }))
+}
+
 /// The active workspace's name while it is being renamed. Keys are handled by the view.
-fn rename_field(rename: &Rename, theme: &Theme) -> impl IntoElement {
+pub(super) fn rename_field(rename: &Rename, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()

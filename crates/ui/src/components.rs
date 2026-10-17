@@ -28,29 +28,37 @@ pub fn button(
     variant: Variant,
     theme: &Theme,
 ) -> Stateful<Div> {
+    // Every variant has the same height, corner radius, weight, and 1px edge, so buttons sit in one row
+    // without jumping. The edge matches the fill for the filled variants, so it doesn't show.
     let base = div()
         .id(id)
         .flex()
         .flex_none()
         .items_center()
         .justify_center()
-        .h(px(30.))
+        .h(px(32.))
         .px(theme.spacing.md)
-        .rounded(theme.radius.md)
+        .rounded(theme.radius.lg)
+        .border_1()
         .text_size(theme.typography.body)
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
         .cursor_pointer()
         .child(label.to_string());
     match variant {
         Variant::Primary => base
             .bg(theme.palette.accent)
+            .border_color(theme.palette.accent)
             .text_color(theme.palette.on_accent)
             .hover(|style| style.opacity(0.9)),
+        // Filled rather than outlined, so only the primary action stands out. The edge matches the fill.
         Variant::Secondary => base
-            .border_1()
-            .border_color(theme.palette.border_control)
+            .bg(theme.palette.surface_raised)
+            .border_color(theme.palette.surface_raised)
             .text_color(theme.palette.text_primary)
             .hover(|style| style.bg(theme.palette.surface_hover)),
         Variant::Ghost => base
+            .border_color(theme.palette.surface)
             .text_color(theme.palette.text_secondary)
             .hover(|style| {
                 style
@@ -59,6 +67,7 @@ pub fn button(
             }),
         Variant::Danger => base
             .bg(theme.palette.danger)
+            .border_color(theme.palette.danger)
             .text_color(theme.palette.on_danger)
             .hover(|style| style.opacity(0.9)),
     }
@@ -168,22 +177,55 @@ pub fn check_mark(checked: bool, theme: &Theme) -> Div {
 /// A rounded pill, used for filters and toggles on a bar. `active` gives it the accent outline,
 /// which marks the one whose menu is open. The caller adds the click and any key handling.
 pub fn pill(id: impl Into<ElementId>, label: &str, active: bool, theme: &Theme) -> Stateful<Div> {
+    // Filled, not outlined. The active one takes the stronger selected fill and a medium weight.
     div()
         .id(id)
-        .px(theme.spacing.sm)
+        .px(theme.spacing.md)
         .py(theme.spacing.xs)
         .rounded_full()
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_primary)
+        .cursor_pointer()
+        .when(active, |pill| {
+            pill.bg(theme.palette.surface_selected)
+                .font_weight(FontWeight::MEDIUM)
+        })
+        .when(!active, |pill| {
+            pill.bg(theme.palette.surface_raised)
+                .hover(|style| style.bg(theme.palette.surface_hover))
+        })
+        .child(label.to_string())
+}
+
+/// A search field: a filled box with a search icon. It shows an accent edge only while it has the
+/// keyboard, so the focus is visible without an outline on every field.
+pub fn search_field(value: &str, placeholder: &str, active: bool, theme: &Theme) -> Div {
+    let text = if value.is_empty() && !active {
+        div()
+            .text_color(theme.palette.text_secondary)
+            .child(placeholder.to_string())
+    } else {
+        let caret = if active { "|" } else { "" };
+        div().child(format!("{value}{caret}"))
+    };
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .h(px(32.))
+        .px(theme.spacing.md)
+        .rounded(theme.radius.lg)
+        .bg(theme.palette.surface_raised)
         .border_1()
         .border_color(if active {
             theme.palette.accent
         } else {
-            theme.palette.border_control
+            theme.palette.surface_raised
         })
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_primary)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child(label.to_string())
+        .text_size(theme.typography.body)
+        .child(icon("search", 16., theme.palette.text_secondary))
+        .child(div().flex_1().min_w_0().truncate().child(text))
 }
 
 /// A dropdown look: the current value and a chevron. The caller adds the click.
@@ -479,4 +521,42 @@ pub fn nav_item(
         );
     }
     row
+}
+
+/// One setting or field row: its name and a line of explanation on the left, its control on the right, and a
+/// rule under it. The caller makes the whole row clickable when the control is a toggle or select.
+pub fn settings_row(
+    name: &str,
+    description: Option<&str>,
+    control: impl IntoElement,
+    theme: &Theme,
+) -> Div {
+    let mut text = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .child(name.to_string());
+    if let Some(description) = description {
+        text = text.child(
+            div()
+                .mt(px(1.))
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(description.to_string()),
+        );
+    }
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.md)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_b_1()
+        .border_color(theme.palette.border)
+        .child(text)
+        .child(control)
 }

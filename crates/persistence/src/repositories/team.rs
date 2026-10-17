@@ -1,18 +1,18 @@
 use looji_domain::{
-    ProjectId, RepoResult, TeamMember, TeamMemberId, TeamMemberRecord, TeamMemberRepository,
-    Timestamp,
+    RepoResult, TeamMember, TeamMemberId, TeamMemberRecord, TeamMemberRepository, Timestamp,
+    WorkspaceId,
 };
 use rusqlite::{Row, params};
 
 use super::{execute, get, id_text, query_all, query_one, read_id, read_timestamp, storage};
 use crate::SqliteStore;
 
-const MEMBER_COLUMNS: &str = "id, project_id, name, colour, created_at, updated_at";
+const MEMBER_COLUMNS: &str = "id, workspace_id, name, colour, created_at, updated_at";
 
 fn read_member(row: &Row<'_>) -> RepoResult<TeamMemberRecord> {
     Ok(TeamMemberRecord {
         id: read_id(row, 0, TeamMemberId::from_uuid)?,
-        project_id: read_id(row, 1, ProjectId::from_uuid)?,
+        workspace_id: read_id(row, 1, WorkspaceId::from_uuid)?,
         name: get(row, 2)?,
         colour: get(row, 3)?,
         created_at: read_timestamp(row, 4)?,
@@ -21,19 +21,19 @@ fn read_member(row: &Row<'_>) -> RepoResult<TeamMemberRecord> {
 }
 
 impl TeamMemberRepository for SqliteStore {
-    /// Adds a member, or saves a rename. The project and colour are only set on insert, so a save
+    /// Adds a member, or saves a rename. The workspace and colour are only set on insert, so a save
     /// can't move a member or change its colour.
     fn save(&self, member: &TeamMember) -> RepoResult<()> {
         execute(
             &self.connection,
-            "INSERT INTO team_members (id, project_id, name, colour, created_at, updated_at)
+            "INSERT INTO team_members (id, workspace_id, name, colour, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (id) DO UPDATE SET
                  name = excluded.name,
                  updated_at = excluded.updated_at",
             params![
                 id_text(member.id().as_uuid()),
-                id_text(member.project_id().as_uuid()),
+                id_text(member.workspace_id().as_uuid()),
                 member.name(),
                 member.colour().index() as i64,
                 member.created_at().unix_millis(),
@@ -55,9 +55,9 @@ impl TeamMemberRepository for SqliteStore {
 
     /// Ordered by `rowid`, which is the order they were inserted in. `created_at` can't do this: two
     /// members added in the same millisecond would tie, and the suffixes would change between loads.
-    fn list_for_project(&self, project: ProjectId) -> RepoResult<Vec<TeamMember>> {
+    fn list_for_workspace(&self, project: WorkspaceId) -> RepoResult<Vec<TeamMember>> {
         let sql = format!(
-            "SELECT {MEMBER_COLUMNS} FROM team_members WHERE project_id = ?1 ORDER BY rowid"
+            "SELECT {MEMBER_COLUMNS} FROM team_members WHERE workspace_id = ?1 ORDER BY rowid"
         );
         query_all(
             &self.connection,

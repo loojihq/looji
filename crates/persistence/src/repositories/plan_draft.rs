@@ -122,7 +122,8 @@ impl SqliteStore {
     fn team_of(&self, project: ProjectId) -> RepoResult<Vec<TeamMemberId>> {
         query_all(
             &self.connection,
-            "SELECT id FROM team_members WHERE project_id = ?1",
+            "SELECT id FROM team_members
+              WHERE workspace_id = (SELECT workspace_id FROM projects WHERE id = ?1)",
             params![id_text(project.as_uuid())],
             |row| read_id(row, 0, TeamMemberId::from_uuid),
         )

@@ -32,7 +32,7 @@ pub(super) fn render(
         .map(|project| project.is_status_visible(Status::InReview));
 
     let board_row: AnyElement = match in_review {
-        Some(shown) => row(
+        Some(shown) => components::settings_row(
             "In review column",
             Some("Show the In review column on this project's board."),
             components::toggle(shown, theme),
@@ -43,7 +43,7 @@ pub(super) fn render(
             this.request_column_visibility(Status::InReview, !shown, cx);
         }))
         .into_any_element(),
-        None => row(
+        None => components::settings_row(
             "In review column",
             Some("Open a project to change its board."),
             div()
@@ -70,7 +70,7 @@ pub(super) fn render(
                 .flex_col()
                 .child(components::section_label("Appearance", theme))
                 .child(
-                    row(
+                    components::settings_row(
                         "Dark mode",
                         Some("Use dark surfaces across the app."),
                         components::toggle(dark, theme),
@@ -81,7 +81,7 @@ pub(super) fn render(
                 )
                 .child(components::section_label("Updates", theme))
                 .child(
-                    row(
+                    components::settings_row(
                         "Beta updates",
                         Some("Get preview releases before they are stable."),
                         components::toggle(beta, theme),
@@ -101,7 +101,7 @@ pub(super) fn render(
                 )
                 .child(components::section_label("Notifications", theme))
                 .child(
-                    row(
+                    components::settings_row(
                         "Due today",
                         Some("Count tasks due today next to Today in the sidebar."),
                         components::toggle(due_today_on, theme),
@@ -115,7 +115,7 @@ pub(super) fn render(
                     )),
                 )
                 .child(
-                    row(
+                    components::settings_row(
                         "Overdue tasks",
                         Some("Count overdue tasks next to Today in the sidebar."),
                         components::toggle(overdue_on, theme),
@@ -130,7 +130,7 @@ pub(super) fn render(
                 )
                 .child(components::section_label("Board", theme))
                 .child(
-                    row(
+                    components::settings_row(
                         "Default view",
                         Some("The view a project opens in when it has no saved view."),
                         components::select(default_view_label(default_view), theme),
@@ -147,7 +147,7 @@ pub(super) fn render(
                 .child(board_row)
                 .child(components::section_label("Assistant", theme))
                 .child(
-                    row(
+                    components::settings_row(
                         "Model",
                         Some("The model that plans projects and answers task chat."),
                         components::select(model.as_deref().unwrap_or("Default"), theme),
@@ -162,7 +162,7 @@ pub(super) fn render(
                     )),
                 )
                 .child(components::section_label("This workspace", theme))
-                .child(row(
+                .child(components::settings_row(
                     workspace_name.as_str(),
                     Some("Its icon, its name, and whether it can be deleted."),
                     div()
@@ -192,6 +192,7 @@ pub(super) fn render(
                             .on_click(cx.listener(
                                 move |this, _: &ClickEvent, window, cx| {
                                     this.begin_rename(workspace_id, window, cx);
+                                    this.open_screen(super::screen::Screen::Workspace, cx);
                                 },
                             )),
                         )
@@ -211,7 +212,7 @@ pub(super) fn render(
                     theme,
                 ))
                 .child(components::section_label("Help", theme))
-                .child(row(
+                .child(components::settings_row(
                     "Welcome tour",
                     Some("Walk through the main parts of the app again."),
                     components::button(
@@ -226,39 +227,6 @@ pub(super) fn render(
         );
 
     body.into_any_element()
-}
-
-/// One setting: its name and a line of explanation on the left, its control on the right, and a
-/// rule under it. The caller makes the whole row clickable when the control is a toggle or select.
-fn row(name: &str, description: Option<&str>, control: impl IntoElement, theme: &Theme) -> Div {
-    let mut text = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .child(name.to_string());
-    if let Some(description) = description {
-        text = text.child(
-            div()
-                .mt(px(1.))
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(description.to_string()),
-        );
-    }
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .gap(theme.spacing.md)
-        .px(theme.spacing.sm)
-        .py(theme.spacing.sm)
-        .rounded(theme.radius.md)
-        .border_b_1()
-        .border_color(theme.palette.border)
-        .child(text)
-        .child(control)
 }
 
 fn default_view_label(view: DefaultView) -> &'static str {

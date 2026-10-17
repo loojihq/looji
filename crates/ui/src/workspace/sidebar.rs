@@ -89,6 +89,7 @@ fn screen_item(
         Screen::Today => "sidebar-today",
         Screen::Week => "sidebar-week",
         Screen::Preferences => "sidebar-preferences",
+        Screen::Workspace => "sidebar-workspace",
     };
     // Today shows how many tasks need attention, as the notification settings choose.
     let count = (screen == Screen::Today)

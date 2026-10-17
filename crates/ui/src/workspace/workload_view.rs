@@ -215,24 +215,17 @@ fn controls(
             ),
         )
         .child(
-            div()
-                .id("workload-done")
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(theme.palette.border_control)
-                .text_size(theme.typography.caption)
-                .cursor_pointer()
-                .when(view.workload.include_done, |button| {
-                    button.bg(theme.palette.surface_selected)
-                })
-                .child(if view.workload.include_done {
+            crate::components::pill(
+                "workload-done",
+                if view.workload.include_done {
                     "Including done"
                 } else {
                     "Done left out"
-                })
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_workload_done(cx))),
+                },
+                view.workload.include_done,
+                theme,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_workload_done(cx))),
         )
         .into_any_element()
 }

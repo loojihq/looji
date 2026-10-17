@@ -30,6 +30,8 @@ pub enum Screen {
     Today,
     Week,
     Preferences,
+    /// The active workspace's own screen: its name, icon, projects, and delete.
+    Workspace,
 }
 
 /// A task with the project it belongs to, as the screens list it.
@@ -72,7 +74,7 @@ impl WorkspaceView {
     /// whole workspace rather than one board.
     pub(super) fn open_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         // Preferences reads its settings directly, so it gathers no tasks.
-        if screen == Screen::Preferences {
+        if matches!(screen, Screen::Preferences | Screen::Workspace) {
             self.screen = Some(screen);
             return cx.notify();
         }
@@ -124,13 +126,24 @@ impl WorkspaceView {
 }
 
 /// The title block that replaces the project header while a screen is open.
-pub(super) fn header(screen: Screen, theme: &Theme) -> AnyElement {
-    let (title, subtitle) = match screen {
-        Screen::Today => ("Today", long_date(DueDate::today_utc().day_number())),
-        Screen::Week => ("Plan the week", "The next seven days".to_string()),
+pub(super) fn header(view: &WorkspaceView, screen: Screen, theme: &Theme) -> AnyElement {
+    let workspace_name = view.list.active().name().to_string();
+    let (title, subtitle): (String, String) = match screen {
+        Screen::Today => (
+            "Today".to_string(),
+            long_date(DueDate::today_utc().day_number()),
+        ),
+        Screen::Week => (
+            "Plan the week".to_string(),
+            "The next seven days".to_string(),
+        ),
         Screen::Preferences => (
-            "Preferences",
+            "Preferences".to_string(),
             "Appearance, updates, the board, and this workspace".to_string(),
+        ),
+        Screen::Workspace => (
+            workspace_name,
+            "Set up the workspace, then add a project".to_string(),
         ),
     };
     div()
@@ -167,6 +180,7 @@ pub(super) fn render(
         Screen::Today => today(view, theme, cx),
         Screen::Week => week(view, theme, cx),
         Screen::Preferences => super::preferences_panel::render(view, theme, cx),
+        Screen::Workspace => super::workspace_setup::render(view, theme, cx),
     }
 }
 

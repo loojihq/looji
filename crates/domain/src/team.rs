@@ -7,7 +7,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     error::DomainError,
-    ids::{ProjectId, TeamMemberId},
+    ids::{TeamMemberId, WorkspaceId},
     time::Timestamp,
 };
 
@@ -77,7 +77,7 @@ pub fn initials(name: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TeamMember {
     id: TeamMemberId,
-    project_id: ProjectId,
+    workspace_id: WorkspaceId,
     name: String,
     colour: MemberColour,
     created_at: Timestamp,
@@ -87,14 +87,14 @@ pub struct TeamMember {
 impl TeamMember {
     /// Adds a member. `colour` is fixed for the member's life.
     pub fn new(
-        project_id: ProjectId,
+        workspace_id: WorkspaceId,
         name: &str,
         colour: MemberColour,
     ) -> Result<Self, DomainError> {
         let now = Timestamp::now();
         Ok(Self {
             id: TeamMemberId::new(),
-            project_id,
+            workspace_id,
             name: validate_member_name(name)?,
             colour,
             created_at: now,
@@ -106,8 +106,8 @@ impl TeamMember {
         self.id
     }
 
-    pub fn project_id(&self) -> ProjectId {
-        self.project_id
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
     }
 
     pub fn name(&self) -> &str {
@@ -167,7 +167,7 @@ pub fn display_labels(members: &[TeamMember]) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TeamMemberRecord {
     pub id: TeamMemberId,
-    pub project_id: ProjectId,
+    pub workspace_id: WorkspaceId,
     pub name: String,
     pub colour: i64,
     pub created_at: Timestamp,
@@ -180,7 +180,7 @@ impl TryFrom<TeamMemberRecord> for TeamMember {
     fn try_from(record: TeamMemberRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             id: record.id,
-            project_id: record.project_id,
+            workspace_id: record.workspace_id,
             name: validate_member_name(&record.name)?,
             colour: MemberColour::from_stored(record.colour)?,
             created_at: record.created_at,
@@ -193,10 +193,10 @@ impl TryFrom<TeamMemberRecord> for TeamMember {
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use super::{MAX_MEMBER_NAME_CHARS, MemberColour, TeamMember, display_labels, initials};
-    use crate::{error::DomainError, ids::ProjectId};
+    use crate::{error::DomainError, ids::WorkspaceId};
 
     fn member(name: &str) -> TeamMember {
-        TeamMember::new(ProjectId::new(), name, MemberColour::for_new_member(0)).unwrap()
+        TeamMember::new(WorkspaceId::new(), name, MemberColour::for_new_member(0)).unwrap()
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn a_blank_name_is_refused() {
         assert_eq!(
-            TeamMember::new(ProjectId::new(), "  ", MemberColour::for_new_member(0)).unwrap_err(),
+            TeamMember::new(WorkspaceId::new(), "  ", MemberColour::for_new_member(0)).unwrap_err(),
             DomainError::EmptyName
         );
     }
@@ -244,7 +244,8 @@ mod tests {
     fn a_name_over_the_limit_is_refused() {
         let long = "x".repeat(MAX_MEMBER_NAME_CHARS + 1);
         assert_eq!(
-            TeamMember::new(ProjectId::new(), &long, MemberColour::for_new_member(0)).unwrap_err(),
+            TeamMember::new(WorkspaceId::new(), &long, MemberColour::for_new_member(0))
+                .unwrap_err(),
             DomainError::TooLong {
                 max: MAX_MEMBER_NAME_CHARS
             }

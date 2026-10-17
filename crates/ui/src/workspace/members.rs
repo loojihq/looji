@@ -51,13 +51,13 @@ pub fn tooltip(entry: &Entry) -> String {
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
-    use looji_domain::{MemberColour, ProjectId, TeamMember};
+    use looji_domain::{MemberColour, TeamMember, WorkspaceId};
 
     use super::{entries, tooltip, unassigned_message};
 
     fn member(name: &str, existing: usize) -> TeamMember {
         TeamMember::new(
-            ProjectId::new(),
+            WorkspaceId::new(),
             name,
             MemberColour::for_new_member(existing),
         )

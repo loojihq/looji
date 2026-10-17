@@ -49,6 +49,7 @@ mod team_dialog;
 mod tour;
 mod updates;
 mod workload_view;
+mod workspace_setup;
 
 use delete::PendingDelete;
 use project_state::ProjectList;
@@ -302,7 +303,11 @@ impl WorkspaceView {
                 let id = workspace.id();
                 self.list.push(workspace);
                 self.status = None;
+                // Make the new workspace the active one first, so its name is the one being edited.
+                self.switch_to(id, cx);
                 self.begin_rename(id, window, cx);
+                // The new workspace's own screen holds the name field and the next steps.
+                self.open_screen(screen::Screen::Workspace, cx);
             }
             Err(err) => {
                 self.status = Some(format!("Could not create a workspace: {err}"));
@@ -676,7 +681,7 @@ fn project_header(
 ) -> AnyElement {
     // A workspace screen has its own title, and no project tabs or actions.
     if let Some(screen) = view.screen {
-        return screen::header(screen, theme);
+        return screen::header(view, screen, theme);
     }
     let workspace = view.list.active().name().to_string();
     let project = view.projects.active();
@@ -753,8 +758,7 @@ fn project_header(
                     .child(plan_drafts::open_button(theme, cx))
                     .child(plan_wizard::open_button(theme, cx))
                     .child(schedule_dialog::open_button(theme, cx))
-                    .child(repo_dialog::open_button(theme, cx))
-                    .child(team_dialog::open_button(theme, cx)),
+                    .child(repo_dialog::open_button(theme, cx)),
             )
     });
 

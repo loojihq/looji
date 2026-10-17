@@ -1,13 +1,13 @@
-//! The team dialog: a project's members, with add, rename, and remove. It opens from the Team button
-//! in the header and owns the keyboard while it's open.
+//! The team dialog: a workspace's members, with add, rename, and remove. It opens from the Team section
+//! of the workspace screen and owns the keyboard while it's open.
 //!
 //! Removing a member unassigns its tasks and never deletes them. The confirmation says how many tasks
 //! that is, and Cancel is the default.
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, MemberColour, ProjectId, RepoError, TeamMember, TeamMemberId,
-    TeamMemberRepository, validate_member_name,
+    DomainError, MemberColour, RepoError, TeamMember, TeamMemberId, TeamMemberRepository,
+    WorkspaceId, validate_member_name,
 };
 
 use super::card::tooltip;
@@ -36,7 +36,7 @@ pub(super) struct Removal {
 /// An open team dialog. The members themselves are on the view, so they stay current.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TeamDialog {
-    pub project: ProjectId,
+    pub workspace: WorkspaceId,
     /// The name typed for a new member.
     pub adding: String,
     pub add_error: Option<String>,
@@ -47,9 +47,9 @@ pub(super) struct TeamDialog {
 }
 
 impl TeamDialog {
-    fn new(project: ProjectId) -> Self {
+    fn new(workspace: WorkspaceId) -> Self {
         Self {
-            project,
+            workspace,
             adding: String::new(),
             add_error: None,
             renaming: None,
@@ -69,12 +69,9 @@ fn name_message(err: &DomainError) -> String {
 }
 
 impl WorkspaceView {
-    /// Opens the team dialog for the selected project. Nothing opens when no project is selected.
+    /// Opens the team dialog for the active workspace.
     pub(super) fn open_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active_id() else {
-            return;
-        };
-        self.team_dialog = Some(TeamDialog::new(project));
+        self.team_dialog = Some(TeamDialog::new(self.list.active_workspace_id()));
         self.focus_handle.focus(window);
         cx.notify();
     }
@@ -84,17 +81,15 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Reloads the selected project's members. Cards, the detail panel, and the task dialog read the
+    /// Reloads the active workspace's members. Cards, the detail panel, and the task dialog read the
     /// list when they draw, so this is all a change to the team needs.
     pub(super) fn reload_members(&mut self, cx: &mut Context<Self>) {
-        self.members = match self.projects.active_id() {
-            Some(project) => TeamMemberRepository::list_for_project(store(cx), project)
-                .unwrap_or_else(|err| {
-                    self.status = Some(format!("Could not load the team: {err}"));
-                    Vec::new()
-                }),
-            None => Vec::new(),
-        };
+        let workspace = self.list.active_workspace_id();
+        self.members = TeamMemberRepository::list_for_workspace(store(cx), workspace)
+            .unwrap_or_else(|err| {
+                self.status = Some(format!("Could not load the team: {err}"));
+                Vec::new()
+            });
     }
 
     /// Keys while the dialog is open. A confirmation or a rename takes the keys first, then the add
@@ -166,9 +161,9 @@ impl WorkspaceView {
         let Some(dialog) = self.team_dialog.as_ref() else {
             return;
         };
-        let (project, name) = (dialog.project, dialog.adding.clone());
+        let (workspace, name) = (dialog.workspace, dialog.adding.clone());
         let colour = MemberColour::for_new_member(self.members.len());
-        let member = match TeamMember::new(project, &name, colour) {
+        let member = match TeamMember::new(workspace, &name, colour) {
             Ok(member) => member,
             Err(err) => {
                 return self.set_add_error(name_message(&err), cx);
@@ -353,17 +348,6 @@ impl WorkspaceView {
     }
 }
 
-/// The team button in the header. It's drawn only while a project is selected.
-pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button(
-        "team-open",
-        "Team",
-        crate::components::Variant::Secondary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_team_dialog(window, cx)))
-}
-
 /// The team dialog, drawn over the window. Nothing is drawn when it isn't open.
 pub(super) fn overlay(
     view: &WorkspaceView,
@@ -371,20 +355,15 @@ pub(super) fn overlay(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.team_dialog.as_ref()?;
-    let project = view
-        .projects
-        .active()
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
+    let workspace = view.list.active().name().to_string();
     let entries = members::entries(&view.members);
 
     let mut list = div().flex().flex_col().gap(theme.spacing.xs);
     if entries.is_empty() {
-        list = list.child(
-            div()
-                .text_color(theme.palette.text_secondary)
-                .child("No one is on this team yet. Add the people who work on this project."),
-        );
+        list =
+            list.child(div().text_color(theme.palette.text_secondary).child(
+                "No one is on this team yet. Add the people who work across this workspace.",
+            ));
     }
     for (index, entry) in entries.iter().enumerate() {
         list = list.child(member_row(index, entry, dialog, theme, cx));
@@ -442,7 +421,7 @@ pub(super) fn overlay(
                 div()
                     .text_size(theme.typography.caption)
                     .text_color(theme.palette.text_secondary)
-                    .child(format!("Members of {project}")),
+                    .child(format!("Members of {workspace}")),
             )
             .child(list)
             .child(add_row)
