@@ -14,7 +14,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 /// The repository whose releases are checked.
-pub const REPOSITORY: &str = "danielkosgei/looji";
+pub const REPOSITORY: &str = "loojihq/looji";
 
 /// How long a successful check is good for before the next one.
 pub const CHECK_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
@@ -203,7 +203,7 @@ mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use crate::{CHECK_INTERVAL_MS, RETRY_INTERVAL_MS, Schedule, UpdateStatus, interpret, is_due};
 
-    const BODY: &str = r#"{"tag_name": "v%VERSION%", "html_url": "https://github.com/danielkosgei/looji/releases/tag/v%VERSION%", "draft": false, "prerelease": false}"#;
+    const BODY: &str = r#"{"tag_name": "v%VERSION%", "html_url": "https://github.com/loojihq/looji/releases/tag/v%VERSION%", "draft": false, "prerelease": false}"#;
 
     fn body(version: &str) -> String {
         BODY.replace("%VERSION%", version)
@@ -216,7 +216,7 @@ mod tests {
             status,
             UpdateStatus::Available {
                 version: "0.2.0".to_string(),
-                url: "https://github.com/danielkosgei/looji/releases/tag/v0.2.0".to_string(),
+                url: "https://github.com/loojihq/looji/releases/tag/v0.2.0".to_string(),
                 artifact: None,
             }
         );

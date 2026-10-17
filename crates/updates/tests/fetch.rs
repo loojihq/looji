@@ -11,7 +11,7 @@ use tokio::{
 
 fn release(version: &str) -> String {
     format!(
-        r#"{{"tag_name": "v{version}", "html_url": "https://github.com/danielkosgei/looji/releases/tag/v{version}", "draft": false, "prerelease": false}}"#
+        r#"{{"tag_name": "v{version}", "html_url": "https://github.com/loojihq/looji/releases/tag/v{version}", "draft": false, "prerelease": false}}"#
     )
 }
 

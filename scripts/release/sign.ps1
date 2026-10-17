@@ -6,9 +6,10 @@ param(
     [switch]$AllowUntrusted
 )
 $ErrorActionPreference = 'Stop'
-& (Join-Path $PSScriptRoot 'check-signing.ps1')
-# $LASTEXITCODE is $null when that script ended without an exit code, so test for a non-zero value, not for "not 0".
-if ($LASTEXITCODE) { exit 1 }
+if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PASSWORD)) {
+    Write-Host "::error::The signing certificate secrets are not set, so nothing was signed."
+    exit 1
+}
 
 $signtool = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
 if (-not $signtool) {

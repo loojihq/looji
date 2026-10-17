@@ -6,10 +6,11 @@ name: Release
 # Run it by hand to rehearse: with "dry run" on, everything is built, signed, and verified, and the files are kept as a
 # workflow artifact, but no release is made.
 #
-# Secrets (Settings > Secrets and variables > Actions):
+# Secrets (Settings > Secrets and variables > Actions), optional:
 #   WINDOWS_SIGNING_CERT_BASE64   the code-signing certificate as a base64-encoded .pfx
 #   WINDOWS_SIGNING_CERT_PASSWORD its password
-# Without them the run stops at its first step. A release is never published unsigned.
+# Without them the release is built and published unsigned, and the release summary says so. Windows SmartScreen warns
+# about unsigned programs.
 on:
   push:
     tags: ["v*"]
@@ -39,9 +40,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # First, before anything is built, so a missing credential costs minutes and not a finished unsigned build.
-      - name: Require the signing credentials
-        run: ./scripts/release/check-signing.ps1
+      - name: Check for the signing certificate
+        id: signing
+        run: |
+          $signed = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_BASE64) -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PASSWORD)
+          "signed=$($signed.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if (-not $signed) { Write-Host '::warning::No signing certificate is set. This release will be published unsigned.' }
 
       - name: Check that the tag matches the version
         if: github.ref_type == 'tag'
@@ -63,6 +67,7 @@ jobs:
           Copy-Item target/release/looji.exe dist/looji-windows-x64.exe
 
       - name: Sign the program
+        if: steps.signing.outputs.signed == 'true'
         run: ./scripts/release/sign.ps1 -Path dist/looji-windows-x64.exe
 
       - name: Build the installer
@@ -74,6 +79,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed." }
 
       - name: Sign the installer
+        if: steps.signing.outputs.signed == 'true'
         run: |
           $setup = Get-ChildItem dist -Filter '*-setup.exe' | Select-Object -First 1
           if (-not $setup) { throw 'The installer was not built.' }
@@ -83,13 +89,18 @@ jobs:
         run: ./scripts/release/write-checksums.ps1 -Dir dist
 
       - name: Verify the release files
-        run: ./scripts/release/verify-release.ps1 -Dir dist -RequireSigned
+        run: ./scripts/release/verify-release.ps1 -Dir dist ${{ steps.signing.outputs.signed == 'true' && '-RequireSigned' || '' }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: looji-release
           path: dist/*
           if-no-files-found: error
+
+      - name: Say whether the release is signed
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          "**This release is not code-signed.** Windows SmartScreen will warn people before they run it. The SHA256SUMS.txt file still lets anyone check the download." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Publish the release
         if: github.ref_type == 'tag' && inputs.dry_run != true

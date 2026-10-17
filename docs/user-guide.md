@@ -21,8 +21,9 @@ and stop there. Everything else can wait.
 ## Install and update
 
 Download `looji-<version>-windows-x64-setup.exe` from the project's
-[releases page](https://github.com/danielkosgei/looji/releases) and run it. It installs for your own account, so it
-doesn't ask for administrator rights. The first time you start looji, a short tour walks through the main screens. You can
+[releases page](https://github.com/loojihq/looji/releases) and run it. It installs for your own account, so it
+doesn't ask for administrator rights. Releases aren't code-signed yet, so Windows may show a warning that the publisher is
+unknown. Choose **More info**, then **Run anyway**. The first time you start looji, a short tour walks through the main screens. You can
 skip it, and bring it back later with **Welcome tour: show again** in the sidebar.
 
 ## Your first task
