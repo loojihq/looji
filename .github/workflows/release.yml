@@ -142,9 +142,9 @@ jobs:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           if [ -n "$SOURCE_SHA" ]; then
-            scripts/release/linux-packages.sh --sha256 "$SOURCE_SHA"
+            bash scripts/release/linux-packages.sh --sha256 "$SOURCE_SHA"
           else
-            scripts/release/linux-packages.sh
+            bash scripts/release/linux-packages.sh
           fi
 
       - uses: actions/upload-artifact@v4
