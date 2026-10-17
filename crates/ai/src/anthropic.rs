@@ -332,7 +332,8 @@ mod tests {
 
     #[test]
     fn crlf_line_endings_give_the_same_events() {
-        let crlf = STREAM.replace('\n', "\r\n");
+        // The fixture may already have CRLF line endings, depending on how git checked it out, so start from LF.
+        let crlf = STREAM.replace("\r\n", "\n").replace('\n', "\r\n");
         assert_eq!(read(&crlf, 7).unwrap(), read(STREAM, 4096).unwrap());
     }
 
