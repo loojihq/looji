@@ -130,22 +130,8 @@ jobs:
       - name: Build the program
         run: cargo build --release --locked --bin looji
 
-      - name: Work out the source checksum for the Arch package
-        id: source
-        if: github.ref_type == 'tag'
-        run: |
-          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" -o source.tar.gz
-          echo "sha=$(sha256sum source.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
       - name: Package for Debian, Fedora, and Arch
-        env:
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: |
-          if [ -n "$SOURCE_SHA" ]; then
-            bash scripts/release/linux-packages.sh --sha256 "$SOURCE_SHA"
-          else
-            bash scripts/release/linux-packages.sh
-          fi
+        run: bash scripts/release/linux-packages.sh
 
       - uses: actions/upload-artifact@v4
         with:

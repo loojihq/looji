@@ -9,7 +9,7 @@ license=('custom')
 depends=('fontconfig' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'openssl' 'vulkan-icd-loader' 'wayland')
 makedepends=('cargo')
 options=('!lto')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {
