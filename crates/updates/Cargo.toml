@@ -1,0 +1,16 @@
+[package]
+name = "looji-updates"
+description = "Checks GitHub for a newer release of looji, and decides when to check again."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "http2"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time"] }

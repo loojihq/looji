@@ -5,6 +5,7 @@
 
 mod activity;
 mod board;
+mod chat;
 mod code_source;
 mod due_calculation;
 mod error;
@@ -18,6 +19,7 @@ mod position;
 pub mod preferences;
 mod project;
 mod project_view;
+mod report;
 pub mod repository;
 mod retrieval;
 mod review_note;
@@ -45,6 +47,9 @@ mod zone;
 
 pub use activity::{ActivityKind, TaskActivity};
 pub use board::{Column, ColumnRecord};
+pub use chat::{
+    ModelChoice, Reply, ReplyState, approximate_tokens, recent_within_budget, resolve_model,
+};
 pub use code_source::{CodeSourceError, CodeSourceStatus, PathCheck, clean_path_input, status_for};
 pub use due_calculation::{
     LocalMoment, add_working_hours, add_working_minutes, needs_estimate_hint, schedules_on_move,
@@ -73,6 +78,7 @@ pub use project::{
     MAX_DESCRIPTION_CHARS, Project, ProjectRecord, clean_description, validate_project_name,
 };
 pub use project_view::{ProjectView, ProjectViewState, ScrollOffset, scroll_key};
+pub use report::{ReportItem, StatusSection, group_by_status, status_label};
 pub use repository::{
     CodeSourceRepository, ColumnRepository, ListViewRepository, PlanDraftRepository,
     ProjectFilterRepository, ProjectRepository, ProjectViewRepository, ReviewNoteRepository,

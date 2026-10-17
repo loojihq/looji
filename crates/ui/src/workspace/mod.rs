@@ -5,16 +5,20 @@ mod avatar;
 mod board;
 mod board_search;
 mod card;
+mod chat;
+mod chat_render;
 mod columns;
 mod delete;
 mod drag;
 mod dragging;
+mod export;
 mod fields;
 mod filter_bar;
 mod keyboard;
 mod landing;
 mod layout;
 mod list_view;
+mod markdown;
 mod members;
 mod moves;
 mod panel;
@@ -38,6 +42,7 @@ mod task_edit;
 mod task_editors;
 mod task_form;
 mod team_dialog;
+mod updates;
 mod workload_view;
 
 use delete::PendingDelete;
@@ -98,6 +103,13 @@ pub struct WorkspaceView {
     task_dialog: Option<task_dialog::TaskDialog>,
     /// The team dialog, while it's open.
     team_dialog: Option<team_dialog::TeamDialog>,
+    /// The task chat, while it is open.
+    chat_dialog: Option<chat::ChatDialog>,
+    /// Follows the newest message in the chat, so a streaming reply stays in view.
+    chat_scroll: ScrollHandle,
+    /// The check for a newer release, running in the background, and the notice it produced, if any.
+    update_task: Option<gpui::Task<()>>,
+    update_notice: Option<looji_updates::UpdateStatus>,
     /// The repository dialog, while it's open, and the status of the selected project's folder. A check
     /// numbered `code_check_seq` is the only one allowed to replace the status it set.
     repo_dialog: Option<repo_dialog::RepoDialog>,
@@ -171,6 +183,10 @@ impl WorkspaceView {
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
                     team_dialog: None,
+                    chat_dialog: None,
+                    chat_scroll: ScrollHandle::new(),
+                    update_task: None,
+                    update_notice: None,
                     repo_dialog: None,
                     code_source: None,
                     code_check_seq: 0,
@@ -213,6 +229,7 @@ impl WorkspaceView {
                         .collect(),
                 };
                 view.reload_projects(cx);
+                view.start_update_checks(cx);
                 view
             });
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
@@ -413,6 +430,9 @@ impl WorkspaceView {
         if self.task_dialog.is_some() {
             return self.task_dialog_key(event, cx);
         }
+        if self.chat_dialog.is_some() {
+            return self.chat_key(event, cx);
+        }
         if self.plan_drafts.is_some() && event.keystroke.key == "escape" {
             return self.close_plan_drafts(cx);
         }
@@ -550,6 +570,7 @@ impl Render for WorkspaceView {
                 .items_center()
                 .gap(theme.spacing.sm)
                 .child(list_view::switch(self, &theme, cx))
+                .child(export::open_button(&theme, cx))
                 .child(plan_drafts::open_button(&theme, cx))
                 .child(plan_wizard::open_button(&theme, cx))
                 .child(schedule_dialog::open_button(&theme, cx))
@@ -607,6 +628,8 @@ impl Render for WorkspaceView {
             )
             .children(task_dialog::overlay(self, &theme, cx))
             .children(team_dialog::overlay(self, &theme, cx))
+            .children(chat::overlay(self, &theme, window, cx))
+            .children(updates::notice(self, &theme, cx))
             .children(repo_dialog::overlay(self, &theme, cx))
             .children(schedule_dialog::overlay(self, &theme, window, cx))
             .children(plan_wizard::overlay(self, &theme, window, cx))

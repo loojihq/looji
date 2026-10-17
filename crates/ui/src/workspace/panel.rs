@@ -477,12 +477,8 @@ pub(super) fn render(
                     segment(false, theme)
                         .id("panel-chat")
                         .child("Chat")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            if let Some(panel) = this.panel.as_mut() {
-                                panel.notice =
-                                    Some("Chat about this task arrives with the chat task.".into());
-                            }
-                            cx.notify();
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_chat(window, cx)
                         })),
                 )
                 .child(

@@ -3,8 +3,8 @@
 //! the same millisecond still come back in the order they were written.
 
 use looji_domain::{
-    ChatMessage, ChatThreadId, MessageRole, NoteKind, RepoError, RepoResult, ReviewNote,
-    ReviewNoteRepository, TaskChatRepository, TaskId, Timestamp,
+    ChatMessage, ChatThreadId, MessageRole, NoteKind, ReplyState, RepoError, RepoResult,
+    ReviewNote, ReviewNoteRepository, TaskChatRepository, TaskId, Timestamp,
 };
 use rusqlite::params;
 use uuid::Uuid;
@@ -43,7 +43,7 @@ impl TaskChatRepository for SqliteStore {
         role: MessageRole,
         content: &str,
         model: Option<&str>,
-    ) -> RepoResult<()> {
+    ) -> RepoResult<u32> {
         let transaction = self.connection.unchecked_transaction().map_err(storage)?;
         let key = id_text(thread.as_uuid());
         let position: i64 = transaction
@@ -68,24 +68,70 @@ impl TaskChatRepository for SqliteStore {
                 ],
             )
             .map_err(storage)?;
-        transaction.commit().map_err(storage)
+        transaction.commit().map_err(storage)?;
+        u32::try_from(position).map_err(|_| RepoError::Storage("too many messages".to_string()))
+    }
+
+    /// Writes the reply's final text and how it ended. A stopped or failed reply keeps the text it had.
+    fn finish_message(
+        &self,
+        thread: ChatThreadId,
+        position: u32,
+        content: &str,
+        state: &ReplyState,
+    ) -> RepoResult<()> {
+        let error = match state {
+            ReplyState::Failed { reason } => Some(reason.clone()),
+            _ => None,
+        };
+        execute(
+            &self.connection,
+            "UPDATE task_messages SET content = ?3, state = ?4, error = ?5
+             WHERE thread_id = ?1 AND position = ?2",
+            params![
+                id_text(thread.as_uuid()),
+                position,
+                content,
+                state.label(),
+                error,
+            ],
+        )
+    }
+
+    /// Removes the message at `position` and every message after it. Used to retry a reply: the failed one goes.
+    fn truncate_from(&self, thread: ChatThreadId, position: u32) -> RepoResult<()> {
+        execute(
+            &self.connection,
+            "DELETE FROM task_messages WHERE thread_id = ?1 AND position >= ?2",
+            params![id_text(thread.as_uuid()), position],
+        )
     }
 
     fn messages(&self, thread: ChatThreadId) -> RepoResult<Vec<ChatMessage>> {
         query_all(
             &self.connection,
-            "SELECT role, content, model, created_at FROM task_messages
+            "SELECT position, role, content, model, state, error, created_at FROM task_messages
              WHERE thread_id = ?1 ORDER BY position",
             params![id_text(thread.as_uuid())],
             |row| {
-                let role: String = get(row, 0)?;
+                let role: String = get(row, 1)?;
+                let state: String = get(row, 4)?;
+                let error: Option<String> = get(row, 5)?;
                 Ok(ChatMessage {
+                    position: get(row, 0)?,
                     role: MessageRole::parse(&role).ok_or_else(|| {
                         RepoError::Storage(format!("unknown message role {role:?}"))
                     })?,
-                    content: get(row, 1)?,
-                    model: get(row, 2)?,
-                    created_at: read_timestamp(row, 3)?,
+                    content: get(row, 2)?,
+                    model: get(row, 3)?,
+                    state: match state.as_str() {
+                        "stopped" => ReplyState::Stopped,
+                        "failed" => ReplyState::Failed {
+                            reason: error.unwrap_or_else(|| "the reply failed".to_string()),
+                        },
+                        _ => ReplyState::Complete,
+                    },
+                    created_at: read_timestamp(row, 6)?,
                 })
             },
         )

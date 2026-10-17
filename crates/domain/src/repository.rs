@@ -180,14 +180,24 @@ pub trait TaskChatRepository {
     fn start_thread(&self, task: TaskId) -> RepoResult<crate::ids::ChatThreadId>;
     /// The task's threads, oldest first.
     fn threads(&self, task: TaskId) -> RepoResult<Vec<crate::ids::ChatThreadId>>;
-    /// Adds a message to the end of the thread. `model` is set for assistant messages.
+    /// Adds a message to the end of the thread, and returns its position. `model` is set for assistant messages.
     fn append_message(
         &self,
         thread: crate::ids::ChatThreadId,
         role: crate::task_chat::MessageRole,
         content: &str,
         model: Option<&str>,
+    ) -> RepoResult<u32>;
+    /// Sets the final text of the message at `position`, and how the reply ended.
+    fn finish_message(
+        &self,
+        thread: crate::ids::ChatThreadId,
+        position: u32,
+        content: &str,
+        state: &crate::chat::ReplyState,
     ) -> RepoResult<()>;
+    /// Removes the message at `position` and every message after it.
+    fn truncate_from(&self, thread: crate::ids::ChatThreadId, position: u32) -> RepoResult<()>;
     /// The thread's messages, in the order they were written.
     fn messages(
         &self,

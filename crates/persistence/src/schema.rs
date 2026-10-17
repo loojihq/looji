@@ -130,6 +130,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_chat_and_notes",
         sql: include_str!("sql/0025_task_chat_and_notes.sql"),
     },
+    Migration {
+        version: 26,
+        name: "chat_reply_state",
+        sql: include_str!("sql/0026_chat_reply_state.sql"),
+    },
 ];
 
 #[cfg(test)]

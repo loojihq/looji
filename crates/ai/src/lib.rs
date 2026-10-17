@@ -6,6 +6,7 @@
 //! Nothing here depends on GPUI or SQLite. Only the UI should depend on this crate.
 
 pub mod anthropic;
+pub mod chat;
 mod error;
 pub mod fake;
 pub mod generation;
