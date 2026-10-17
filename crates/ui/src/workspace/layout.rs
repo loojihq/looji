@@ -1,6 +1,8 @@
 //! Board geometry in logical pixels, as the last paint measured it. Drop targets and placeholder
 //! positions are both computed from these, so what the user sees is what gets dropped.
 
+use std::collections::{HashMap, HashSet};
+
 use looji_domain::{Status, TaskId};
 
 /// A point in logical pixels, relative to the window.
@@ -64,6 +66,11 @@ pub struct BoardLayout {
     /// The items of each column in display order, as the last render built them. `None` is the
     /// placeholder, which isn't a card.
     pub items: Vec<(Status, Vec<Option<TaskId>>)>,
+    /// The height each card was last measured at, in logical pixels. A card that scrolls out of view is stood in
+    /// for by a spacer this tall, so the column keeps its length.
+    pub measured: HashMap<TaskId, f32>,
+    /// The cards each column drew in full on the last render. The rest were spacers.
+    pub real: HashMap<Status, HashSet<TaskId>>,
 }
 
 impl BoardLayout {

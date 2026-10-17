@@ -150,7 +150,7 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
     /// the last saved draft as it was. The prompt and creation time are only set on insert.
     fn save(&self, draft: &PlanDraft) -> RepoResult<()> {
         let key = id_text(draft.id().as_uuid());
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         transaction
             .execute(
                 "INSERT INTO plan_drafts (id, project_id, prompt, state, response, recovered, failure,
@@ -309,7 +309,7 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
             .publication_plan(&existing)
             .map_err(|err| RepoError::Rejected(err.into()))?;
 
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         let mut last = last_backlog_position(&transaction, project)?;
         let mut published = Vec::new();
         for planned in &plan.create {

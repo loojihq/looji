@@ -12,6 +12,7 @@ mod error;
 mod file_tree;
 mod ids;
 mod list_view;
+mod onboarding;
 mod ordering;
 mod plan_draft;
 mod plan_wizard;
@@ -60,6 +61,9 @@ pub use ids::ChatThreadId;
 pub use ids::PlanDraftId;
 pub use ids::{ActivityId, ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use list_view::{ListColumn, ListSort, ListView, SortColumn, SortDirection, ToggleOutcome};
+pub use onboarding::{
+    Advance, DISMISSED, FINISHED, STEPS, TOUR_SETTING, Tour, TourStep, should_show,
+};
 pub use ordering::{
     FIRST_KEY, REBALANCE_LENGTH, after, before, key_between, needs_rebalance, rebalance,
 };
@@ -87,7 +91,7 @@ pub use repository::{
 };
 pub use retrieval::{
     DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, estimate_tokens, is_test_path, pack_hunks, score_symbol,
-    task_terms,
+    score_terms, task_terms,
 };
 pub use review_note::{NoteKind, ReviewNote};
 pub use schedule_draft::{

@@ -33,7 +33,7 @@ impl SqliteStore {
         let storage = |err: rusqlite::Error| ScheduleSaveError::Storage(err.to_string());
         let key = project.as_uuid().to_string();
 
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         let updated = transaction
             .execute(
                 "UPDATE projects

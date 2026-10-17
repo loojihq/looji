@@ -26,6 +26,7 @@ fn data_dir() -> Option<std::path::PathBuf> {
 }
 
 fn main() {
+    wait_for_previous_version();
     let Some(data_dir) = data_dir() else {
         fail("looji could not find your user data folder.");
     };
@@ -69,8 +70,29 @@ fn main() {
         quit_when_last_window_closes(cx);
 
         WorkspaceView::open_window(cx, workspaces).expect("failed to open main window");
+        // The window is up, so this upgrade worked. Until now its backup was kept in case it hadn't.
+        if let Err(err) = persistence::confirm_startup(&database_path) {
+            eprintln!("looji: could not clear the upgrade backup marker: {err}");
+        }
+        // After an update the old program was kept beside this one in case this one didn't start. It did.
+        if let Ok(current) = std::env::current_exe() {
+            let _ = looji_updates::apply::remove_previous(&current);
+        }
         cx.activate(true);
     });
+}
+
+/// A program started by an update is given the old program's process id, and waits for it to exit. Otherwise both would
+/// have the database open at once while the old one was still closing it.
+fn wait_for_previous_version() {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--after-update"
+            && let Some(pid) = args.next().and_then(|pid| pid.parse::<u32>().ok())
+        {
+            looji_updates::apply::wait_for_exit(pid, std::time::Duration::from_secs(30));
+        }
+    }
 }
 
 /// Windows already exits when the last window closes; macOS and Linux don't.

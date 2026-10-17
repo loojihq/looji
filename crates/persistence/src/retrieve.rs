@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, fs, path::Path};
 
-use looji_domain::{Hunk, ProjectId, pack_hunks, score_symbol, task_terms};
+use looji_domain::{Hunk, ProjectId, pack_hunks, score_symbol, score_terms, task_terms};
 
 use crate::{SqliteStore, repo_index::IndexError};
 
@@ -32,8 +32,20 @@ impl SqliteStore {
         let mut lines = FileLines::new(root);
         let mut candidates = Vec::new();
 
+        // Each file's path is split into words once, not once for every symbol in it.
+        let mut path_terms: HashMap<&str, Vec<String>> = HashMap::new();
         for symbol in &index.symbols {
-            let score = score_symbol(&terms, &symbol.name, &symbol.path);
+            let path_words = path_terms
+                .entry(symbol.path.as_str())
+                .or_insert_with(|| task_terms(&symbol.path));
+            // A name can only score if one of the words appears in it, so most names are never split.
+            let lower = symbol.name.to_lowercase();
+            let name_words = if terms.iter().any(|term| lower.contains(term.as_str())) {
+                task_terms(&symbol.name)
+            } else {
+                Vec::new()
+            };
+            let score = score_terms(&terms, &name_words, path_words);
             if score == 0 {
                 continue;
             }

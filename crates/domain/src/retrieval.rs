@@ -61,8 +61,12 @@ pub fn task_terms(text: &str) -> Vec<String> {
 /// How well a symbol matches the task. Each distinct term found in the symbol's name is worth three points, and
 /// each found in its file's path is worth one. A term in the name is what the task is most likely about.
 pub fn score_symbol(terms: &[String], name: &str, path: &str) -> u32 {
-    let name_terms = task_terms(name);
-    let path_terms = task_terms(path);
+    score_terms(terms, &task_terms(name), &task_terms(path))
+}
+
+/// The same score as [`score_symbol`], for words that have already been split. A caller scoring many symbols splits each
+/// file path once and passes the result in, instead of splitting it again for every symbol.
+pub fn score_terms(terms: &[String], name_terms: &[String], path_terms: &[String]) -> u32 {
     terms
         .iter()
         .map(|term| {

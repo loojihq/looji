@@ -4,6 +4,9 @@
 //!
 //! Nothing here touches the UI. The app runs `fetch_latest` on its runtime and shows the result, if any.
 
+pub mod apply;
+pub mod download;
+
 use std::time::Duration;
 
 use semver::Version;
@@ -32,8 +35,35 @@ pub enum UpdateStatus {
     Available {
         version: String,
         url: String,
+        /// The file to download for this platform, with where to check it. `None` when the release has no file for
+        /// this platform, in which case the user is only told about the release.
+        artifact: Option<Artifact>,
     },
 }
+
+/// A release file for this platform, and the checksum list that says what it should contain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artifact {
+    pub name: String,
+    pub url: String,
+    /// The size GitHub reports, when it reports one.
+    pub size: Option<u64>,
+    /// The `SHA256SUMS.txt` published with the release. Without it the file can't be verified, so it isn't used.
+    pub checksums_url: Option<String>,
+}
+
+/// The name of the release file that replaces the running program on this platform, or `None` when updates can't be
+/// applied here.
+pub fn platform_asset_name() -> Option<&'static str> {
+    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        Some("looji-windows-x64.exe")
+    } else {
+        None
+    }
+}
+
+/// The name of the checksum list published with every release.
+pub const CHECKSUMS_ASSET: &str = "SHA256SUMS.txt";
 
 /// Why a check didn't produce an answer. None of these are shown to the user; the check is retried later.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -54,6 +84,30 @@ struct Release {
     draft: bool,
     #[serde(default)]
     prerelease: bool,
+    #[serde(default)]
+    assets: Vec<Asset>,
+}
+
+#[derive(Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+fn pick_artifact(assets: &[Asset]) -> Option<Artifact> {
+    let wanted = platform_asset_name()?;
+    let file = assets.iter().find(|asset| asset.name == wanted)?;
+    Some(Artifact {
+        name: file.name.clone(),
+        url: file.browser_download_url.clone(),
+        size: file.size,
+        checksums_url: assets
+            .iter()
+            .find(|asset| asset.name == CHECKSUMS_ASSET)
+            .map(|asset| asset.browser_download_url.clone()),
+    })
 }
 
 /// Reads the body of a latest-release response and compares it with the running version. Drafts and prereleases
@@ -71,6 +125,7 @@ pub fn interpret(body: &str, current: &str) -> Result<UpdateStatus, CheckError> 
         Ok(UpdateStatus::Available {
             version: latest.to_string(),
             url: release.html_url,
+            artifact: pick_artifact(&release.assets),
         })
     } else {
         Ok(UpdateStatus::UpToDate)
@@ -162,6 +217,7 @@ mod tests {
             UpdateStatus::Available {
                 version: "0.2.0".to_string(),
                 url: "https://github.com/danielkosgei/looji/releases/tag/v0.2.0".to_string(),
+                artifact: None,
             }
         );
     }

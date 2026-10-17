@@ -27,11 +27,42 @@ pub fn migrate(connection: &mut Connection, migrations: &[Migration]) -> Result<
 
 /// Like [`migrate`], but calls `before_apply` with the pending versions first.
 /// The hook only runs when there is something to apply.
+/// The versions that would be applied, after checking that the database and the list agree. Creates the bookkeeping
+/// table when it's missing. Nothing else is written.
+pub(crate) fn pending_versions(
+    connection: &Connection,
+    migrations: &[Migration],
+) -> Result<Vec<u32>> {
+    Ok(plan(connection, migrations)?
+        .iter()
+        .map(|migration| migration.version)
+        .collect())
+}
+
+/// Whether the database already has migrations applied, so a pending one is an upgrade and not a first run.
+pub(crate) fn has_applied(connection: &Connection) -> Result<bool> {
+    connection.execute_batch(CREATE_SCHEMA_MIGRATIONS)?;
+    Ok(!applied_versions(connection)?.is_empty())
+}
+
 pub(crate) fn migrate_with_hook(
     connection: &mut Connection,
     migrations: &[Migration],
     before_apply: impl FnOnce(&[u32]) -> Result<()>,
 ) -> Result<Vec<u32>> {
+    let pending = plan(connection, migrations)?;
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pending_versions: Vec<u32> = pending.iter().map(|migration| migration.version).collect();
+    before_apply(&pending_versions)?;
+    for migration in pending {
+        apply(connection, migration)?;
+    }
+    Ok(pending_versions)
+}
+
+fn plan<'a>(connection: &Connection, migrations: &'a [Migration]) -> Result<Vec<&'a Migration>> {
     validate(migrations)?;
     connection.execute_batch(CREATE_SCHEMA_MIGRATIONS)?;
 
@@ -60,17 +91,7 @@ pub(crate) fn migrate_with_hook(
         .iter()
         .filter(|migration| !applied.contains(&migration.version))
         .collect();
-    if pending.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let pending_versions: Vec<u32> = pending.iter().map(|migration| migration.version).collect();
-    before_apply(&pending_versions)?;
-
-    for migration in pending {
-        apply(connection, migration)?;
-    }
-    Ok(pending_versions)
+    Ok(pending)
 }
 
 /// Checks that versions are strictly increasing, so the order is unambiguous.

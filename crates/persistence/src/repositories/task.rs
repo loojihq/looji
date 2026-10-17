@@ -57,7 +57,7 @@ pub(super) fn load_tags(
 impl TaskRepository for SqliteStore {
     /// Writes the task and replaces its tags in one transaction, so a task never has half its tags.
     fn save(&self, task: &Task) -> RepoResult<()> {
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         write_task(&transaction, task)?;
         transaction.commit().map_err(storage)
     }

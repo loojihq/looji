@@ -66,7 +66,7 @@ impl SqliteStore {
         let id = workspace.as_uuid().to_string();
         let database = |err: rusqlite::Error| IconError::Database(err.to_string());
 
-        let transaction = self.connection.unchecked_transaction().map_err(database)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(database)?;
         let previous: Option<Option<String>> = transaction
             .query_row(
                 "SELECT icon_file FROM workspaces WHERE id = ?1",

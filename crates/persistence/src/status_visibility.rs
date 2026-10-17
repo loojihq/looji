@@ -46,7 +46,7 @@ impl SqliteStore {
         // Hiding and showing use the same fallback, so restoring finds the rows hiding moved.
         let fallback = resolve_visible_status(status, &visible_statuses(&[status])).as_str();
 
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
 
         let exists: bool = transaction
             .query_row(

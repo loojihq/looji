@@ -27,6 +27,7 @@ mod plan_refine;
 mod plan_review;
 mod plan_wizard;
 mod preferences_panel;
+mod profile;
 mod project_state;
 mod project_views;
 mod projects;
@@ -42,6 +43,7 @@ mod task_edit;
 mod task_editors;
 mod task_form;
 mod team_dialog;
+mod tour;
 mod updates;
 mod workload_view;
 
@@ -110,6 +112,10 @@ pub struct WorkspaceView {
     /// The check for a newer release, running in the background, and the notice it produced, if any.
     update_task: Option<gpui::Task<()>>,
     update_notice: Option<looji_updates::UpdateStatus>,
+    update_install: Option<updates::Install>,
+    update_worker: Option<gpui::Task<()>>,
+    /// The first-run tour, while it is showing.
+    tour: Option<looji_domain::Tour>,
     /// The repository dialog, while it's open, and the status of the selected project's folder. A check
     /// numbered `code_check_seq` is the only one allowed to replace the status it set.
     repo_dialog: Option<repo_dialog::RepoDialog>,
@@ -187,6 +193,9 @@ impl WorkspaceView {
                     chat_scroll: ScrollHandle::new(),
                     update_task: None,
                     update_notice: None,
+                    update_install: None,
+                    update_worker: None,
+                    tour: None,
                     repo_dialog: None,
                     code_source: None,
                     code_check_seq: 0,
@@ -230,6 +239,7 @@ impl WorkspaceView {
                 };
                 view.reload_projects(cx);
                 view.start_update_checks(cx);
+                view.start_tour_if_new(cx);
                 view
             });
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
@@ -413,6 +423,10 @@ impl WorkspaceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The tour is on top of everything, so it takes the keys first.
+        if self.tour.is_some() {
+            return self.tour_key(event, cx);
+        }
         // The search field takes its keys first, so shortcuts and card moves don't fire while typing.
         if self.search_focused && self.search_key(event, window, cx) {
             return;
@@ -554,6 +568,7 @@ fn window_options(cx: &App) -> WindowOptions {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _frame = profile::frame(window);
         if std::mem::take(&mut self.pending_scroll) {
             self.schedule_scroll_restore(window);
         }
@@ -630,6 +645,7 @@ impl Render for WorkspaceView {
             .children(team_dialog::overlay(self, &theme, cx))
             .children(chat::overlay(self, &theme, window, cx))
             .children(updates::notice(self, &theme, cx))
+            .children(tour::overlay(self, &theme, cx))
             .children(repo_dialog::overlay(self, &theme, cx))
             .children(schedule_dialog::overlay(self, &theme, window, cx))
             .children(plan_wizard::overlay(self, &theme, window, cx))
@@ -676,7 +692,17 @@ fn main_pane(
                 .flex_row()
                 .flex_1()
                 .min_h_0()
-                .child(div().flex_1().min_w_0().min_h_0().child(body))
+                .child(
+                    // A flex column, so the board inside it fills the height and its columns scroll. Without it the board
+                    // takes the height of all its cards and runs off the bottom of the window.
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(body),
+                )
                 .children(side),
         )
 }

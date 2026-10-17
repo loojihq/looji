@@ -1,5 +1,6 @@
 //! SQLite storage: where the database lives, how it is opened, and how its schema evolves.
 
+pub mod backup;
 pub mod file_tree;
 pub mod icons;
 mod migrations;
@@ -23,6 +24,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use backup::{UpgradeBackup, backups_dir, confirm_startup, unconfirmed_backup};
 pub use migrations::{Migration, migrate};
 pub use project_schedule::ScheduleSaveError;
 pub use repositories::task_move::MoveError;
@@ -64,6 +66,16 @@ pub enum Error {
         name: String,
         reason: String,
     },
+    #[error("the database could not be backed up at {}: {reason}", path.display())]
+    Backup { path: PathBuf, reason: String },
+    #[error("the upgrade failed ({cause}), so your data was restored from the backup at {}", backup.display())]
+    UpgradeRolledBack { cause: String, backup: PathBuf },
+    #[error("the upgrade failed ({cause}), and the backup at {} could not be put back: {reason}", backup.display())]
+    RestoreFailed {
+        cause: String,
+        backup: PathBuf,
+        reason: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -94,10 +106,46 @@ pub fn open_database_with_migrations(path: &Path, migrations: &[Migration]) -> R
 
     let mut connection = Connection::open(path).map_err(|source| Error::Open { source })?;
     configure(&connection)?;
-    migrate_with_hook(&mut connection, migrations, |pending| {
-        back_up_before_upgrade(path, pending)
-    })?;
-    Ok(connection)
+
+    // An upgrade changes a database that already holds data, so it is backed up first. A first run has nothing to lose.
+    let pending = migrations::pending_versions(&connection, migrations)?;
+    let backup = if !pending.is_empty() && migrations::has_applied(&connection)? {
+        Some(backup::create(&connection, path, &pending)?)
+    } else {
+        None
+    };
+
+    match migrate(&mut connection, migrations) {
+        Ok(_) => {
+            if let Some(backup) = &backup {
+                backup::mark_pending(path, backup)?;
+            }
+            Ok(connection)
+        }
+        Err(err) => {
+            let Some(backup) = backup else {
+                return Err(err);
+            };
+            // The database is closed before the backup goes back over it.
+            drop(connection);
+            match backup::restore(path, &backup) {
+                Ok(()) => Err(Error::UpgradeRolledBack {
+                    cause: err.to_string(),
+                    backup: backup.path,
+                }),
+                Err(restore) => Err(Error::RestoreFailed {
+                    cause: err.to_string(),
+                    backup: backup.path,
+                    reason: restore.to_string(),
+                }),
+            }
+        }
+    }
+}
+
+/// The app's own migrations, in order. Tests use it to build a database as an earlier version left it.
+pub fn app_migrations() -> &'static [Migration] {
+    schema::MIGRATIONS
 }
 
 /// An in-memory database with the app's schema. For tests; nothing is saved to disk.
@@ -119,8 +167,11 @@ fn configure(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Runs before pending migrations are applied, on first run and on upgrades alike.
-/// Placeholder for the "back up database and run migrations on upgrade" task.
-fn back_up_before_upgrade(_path: &Path, _pending: &[u32]) -> Result<()> {
-    Ok(())
+/// Starts a transaction that takes the write lock at once. A transaction that reads first and writes later can be
+/// refused when another connection writes in between, and SQLite doesn't wait out the busy timeout for that. Taking
+/// the lock first makes a concurrent writer wait its turn instead.
+pub(crate) fn write_transaction(
+    connection: &Connection,
+) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
 }

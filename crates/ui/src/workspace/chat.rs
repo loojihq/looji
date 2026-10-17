@@ -566,6 +566,7 @@ fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex
     drop(looji_ai::runtime().spawn(future));
 }
 
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 fn provider_for(request: &ChatRequest) -> Result<Arc<dyn ChatProvider>, AiError> {
     #[cfg(debug_assertions)]
     if let Some(provider) = fake_provider(request) {

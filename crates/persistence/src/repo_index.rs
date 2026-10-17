@@ -89,7 +89,7 @@ impl SqliteStore {
         let key = project.as_uuid().to_string();
         let stored = self.stored_index_files(&key)?;
 
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         let mut report = IndexReport::default();
         let mut extractor: Option<Extractor> = None;
         let mut current = HashSet::new();

@@ -57,7 +57,7 @@ impl SqliteStore {
         let to = mv.to().as_str();
         // Dropping the transaction without committing rolls back, so every early return below
         // leaves the database as it was.
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
 
         let current: Option<(String, String)> = transaction
             .query_row(

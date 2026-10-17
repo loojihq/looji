@@ -147,7 +147,7 @@ impl SqliteStore {
         let storage = |err: rusqlite::Error| DeleteError::Storage(err.to_string());
         let key = id.as_uuid().to_string();
 
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
 
         let icon_file: Option<Option<String>> = transaction
             .query_row(

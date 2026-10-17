@@ -44,7 +44,7 @@ impl TaskChatRepository for SqliteStore {
         content: &str,
         model: Option<&str>,
     ) -> RepoResult<u32> {
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         let key = id_text(thread.as_uuid());
         let position: i64 = transaction
             .query_row(
@@ -145,7 +145,7 @@ impl ReviewNoteRepository for SqliteStore {
         notes: &[ReviewNote],
         model: Option<&str>,
     ) -> RepoResult<()> {
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         let key = id_text(task.as_uuid());
         transaction
             .execute(

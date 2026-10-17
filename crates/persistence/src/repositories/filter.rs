@@ -56,7 +56,7 @@ impl ProjectFilterRepository for SqliteStore {
     /// Replaces the project's rows in one transaction, so a save is all or nothing.
     fn save_filter(&self, project: ProjectId, filter: &TaskFilter) -> RepoResult<()> {
         let key = id_text(project.as_uuid());
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
         execute(
             &transaction,
             "DELETE FROM project_filters WHERE project_id = ?1",

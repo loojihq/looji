@@ -87,7 +87,7 @@ impl TeamMemberRepository for SqliteStore {
     fn remove(&self, id: TeamMemberId) -> RepoResult<u64> {
         let key = id_text(id.as_uuid());
         let now = Timestamp::now();
-        let transaction = self.connection.unchecked_transaction().map_err(storage)?;
+        let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
 
         let task_ids: Vec<String> = query_all(
             &transaction,

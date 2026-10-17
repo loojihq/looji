@@ -334,7 +334,11 @@ pub(super) fn content(
                 .child(filters)
                 .child(search)
                 .children(notice)
-                .child(div().flex_1().min_h_0().child(column))
+                .child(
+                    // A flex column, so the view inside fills the height left under the bars. A plain wrapper would let the
+                    // board grow to the height of all its cards instead of scrolling inside its columns.
+                    div().flex().flex_col().flex_1().min_h_0().child(column),
+                )
                 .into_any_element()
         }
     }

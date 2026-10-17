@@ -1,0 +1,102 @@
+name: Release
+
+# Builds the Windows program and installer, signs both, writes the checksum list, and publishes a GitHub release.
+#
+# Push a tag such as v0.2.0 to release. The tag must match the version in Cargo.toml.
+# Run it by hand to rehearse: with "dry run" on, everything is built, signed, and verified, and the files are kept as a
+# workflow artifact, but no release is made.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   WINDOWS_SIGNING_CERT_BASE64   the code-signing certificate as a base64-encoded .pfx
+#   WINDOWS_SIGNING_CERT_PASSWORD its password
+# Without them the run stops at its first step. A release is never published unsigned.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, sign, and verify without publishing a release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+  WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+
+jobs:
+  release:
+    name: Build, sign, and publish
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      # First, before anything is built, so a missing credential costs minutes and not a finished unsigned build.
+      - name: Require the signing credentials
+        run: ./scripts/release/check-signing.ps1
+
+      - name: Check that the tag matches the version
+        if: github.ref_type == 'tag'
+        run: ./scripts/release/check-version.ps1 -Tag "${{ github.ref_name }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build the program
+        run: cargo build --release --bin looji
+
+      - name: Collect the files
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/looji.exe dist/looji-windows-x64.exe
+
+      - name: Sign the program
+        run: ./scripts/release/sign.ps1 -Path dist/looji-windows-x64.exe
+
+      - name: Build the installer
+        run: |
+          $version = ./scripts/release/version.ps1
+          choco install innosetup -y --no-progress
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$version" "/DExePath=$((Resolve-Path dist/looji-windows-x64.exe).Path)" installer/looji.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed." }
+
+      - name: Sign the installer
+        run: |
+          $setup = Get-ChildItem dist -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'The installer was not built.' }
+          ./scripts/release/sign.ps1 -Path $setup.FullName
+
+      - name: Write the checksums
+        run: ./scripts/release/write-checksums.ps1 -Dir dist
+
+      - name: Verify the release files
+        run: ./scripts/release/verify-release.ps1 -Dir dist -RequireSigned
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: looji-release
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: github.ref_type == 'tag' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $flags = @()
+          if ("${{ github.ref_name }}".Contains('-')) { $flags += '--prerelease' }
+          gh release create "${{ github.ref_name }}" (Get-ChildItem dist -File).FullName --title "${{ github.ref_name }}" --generate-notes @flags
+          if ($LASTEXITCODE -ne 0) { throw 'Publishing the release failed.' }
