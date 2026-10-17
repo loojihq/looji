@@ -173,7 +173,7 @@ fn card_layout(
         .gap(gap)
         .px(theme.spacing.sm)
         .py(padding)
-        .rounded(theme.radius.sm)
+        .rounded(theme.radius.lg)
         .bg(theme.palette.surface)
         .border_1()
         .border_color(theme.palette.border)
@@ -265,6 +265,8 @@ fn title_row(view: &CardView<'_>, density: CardDensity, theme: &Theme) -> impl I
         .flex_row()
         .items_start()
         .gap(theme.spacing.xs)
+        // The design sets card titles in a medium weight. The title paints with this inherited style.
+        .font_weight(FontWeight::MEDIUM)
         .child(priority_marker(view.priority, theme))
         .child(title)
 }

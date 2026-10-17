@@ -79,12 +79,15 @@ impl WorkspaceView {
         self.close_tag_editors_if_gone();
         self.prune_project_filter(cx);
         self.refresh_list(cx);
+        self.gather_screen_tasks(cx);
     }
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.save_project_view(cx);
         self.reset_search();
         self.reset_list_position();
+        // Choosing a project leaves any workspace screen for its board.
+        self.screen = None;
         self.projects.select(id);
         self.load_project_filter(cx);
         self.load_list_settings(cx);
@@ -215,7 +218,11 @@ pub(super) fn sidebar_section(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let active = view.projects.active_id();
+    // While a workspace screen is open, no project row is highlighted.
+    let active = match view.screen {
+        Some(_) => None,
+        None => view.projects.active_id(),
+    };
     let rows: Vec<AnyElement> = view
         .projects
         .items()
@@ -236,7 +243,7 @@ pub(super) fn sidebar_section(
                 .px(theme.spacing.sm)
                 .text_size(theme.typography.caption)
                 .text_color(theme.palette.text_secondary)
-                .child("PROJECTS"),
+                .child("Projects"),
         )
         .children(rows)
         .when(is_empty, |section| {
@@ -249,14 +256,7 @@ pub(super) fn sidebar_section(
             )
         })
         .child(
-            div()
-                .id("new-project")
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child("+ New project")
+            crate::components::nav_item("new-project", "plus", "New project", false, None, theme)
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.open_project_dialog(window, cx);
                 })),
@@ -272,16 +272,31 @@ fn project_row(
     let id = project.id();
     div()
         .id(id.as_uuid())
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.sm)
         .px(theme.spacing.sm)
         .py(theme.spacing.xs)
         .rounded(theme.radius.md)
         .cursor_pointer()
-        .truncate()
-        .when(is_active, |row| row.bg(theme.palette.surface_selected))
+        .when(is_active, |row| {
+            row.bg(theme.palette.surface_selected)
+                .font_weight(FontWeight::MEDIUM)
+        })
         .when(!is_active, |row| {
             row.hover(|style| style.bg(theme.palette.surface_hover))
         })
-        .child(project.name().to_string())
+        // A dot marks the open project, as in the design's sidebar.
+        .child(crate::components::dot(
+            if is_active {
+                theme.palette.accent
+            } else {
+                theme.palette.border_control
+            },
+            7.,
+        ))
+        .child(div().min_w_0().truncate().child(project.name().to_string()))
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_project(id, cx)))
 }
 
@@ -354,23 +369,64 @@ fn empty_workspace(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoE
         .gap(theme.spacing.md)
         .child(
             div()
-                .text_color(theme.palette.text_secondary)
-                .child("This workspace has no projects yet."),
-        )
-        .child(
-            div()
-                .id("create-project-cta")
-                .px(theme.spacing.md)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .cursor_pointer()
-                .border_1()
-                .border_color(theme.palette.border)
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child("Create project")
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.open_project_dialog(window, cx);
-                })),
+                .flex()
+                .flex_col()
+                .w(px(340.))
+                .child(crate::components::icon_tile("layout-kanban", theme))
+                .child(
+                    div()
+                        .mt(theme.spacing.md)
+                        .text_size(theme.typography.heading)
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Start your first project"),
+                )
+                .child(
+                    div()
+                        .mt(theme.spacing.xs)
+                        .text_color(theme.palette.text_secondary)
+                        .line_height(relative(1.6))
+                        .child(
+                            "Projects hold your tasks and a board to track them, plus planning drafts for a whole plan.",
+                        ),
+                )
+                .child(
+                    div().mt(theme.spacing.lg).child(
+                        crate::components::button(
+                            "create-project-cta",
+                            "Create project",
+                            crate::components::Variant::Primary,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_project_dialog(window, cx);
+                        })),
+                    ),
+                )
+                .child(
+                    div()
+                        .mt(theme.spacing.lg)
+                        .pt(theme.spacing.xs)
+                        .border_t_1()
+                        .border_color(theme.palette.border)
+                        .child(crate::components::numbered_step(
+                            1,
+                            "Name a project",
+                            "Something you're working toward.",
+                            theme,
+                        ))
+                        .child(crate::components::numbered_step(
+                            2,
+                            "Add tasks",
+                            "Each one goes on the board, in To do.",
+                            theme,
+                        ))
+                        .child(crate::components::numbered_step(
+                            3,
+                            "Sketch a plan in a draft",
+                            "Think it through, then turn it into tasks.",
+                            theme,
+                        )),
+                ),
         )
 }
 
@@ -440,19 +496,15 @@ pub(super) fn dialog(
                         .justify_end()
                         .gap(theme.spacing.sm)
                         .child(
-                            div()
-                                .id("project-cancel")
-                                .px(theme.spacing.md)
-                                .py(theme.spacing.xs)
-                                .rounded(theme.radius.md)
-                                .cursor_pointer()
-                                .border_1()
-                                .border_color(theme.palette.border_control)
-                                .hover(|style| style.bg(theme.palette.surface_hover))
-                                .child("Cancel")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.cancel_project_dialog(cx)
-                                })),
+                            crate::components::button(
+                                "project-cancel",
+                                "Cancel",
+                                crate::components::Variant::Ghost,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| this.cancel_project_dialog(cx),
+                            )),
                         )
                         .child(
                             div()

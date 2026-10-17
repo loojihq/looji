@@ -355,12 +355,18 @@ pub(super) fn overlay(
         );
     }
 
+    let project = view
+        .projects
+        .active()
+        .map(|project| project.name().to_string())
+        .unwrap_or_default();
+
     let panel = div()
         .id("task-panel")
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(480.))
+        .w(px(520.))
         .p(theme.spacing.lg)
         .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
@@ -368,7 +374,39 @@ pub(super) fn overlay(
         .border_1()
         .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(div().text_size(theme.typography.title).child(heading))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(theme.typography.caption)
+                                .text_color(theme.palette.text_secondary)
+                                .truncate()
+                                .child(project),
+                        )
+                        .child(
+                            div()
+                                .mt(theme.spacing.xs)
+                                .text_size(theme.typography.heading)
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(heading),
+                        ),
+                )
+                .child(
+                    crate::components::icon_button("task-close", "x", theme).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| this.request_task_dialog_close(cx),
+                    )),
+                ),
+        )
+        .child(crate::components::section_label("Details", theme))
         .child(field(
             "Title (required)",
             errors.title.as_deref(),
@@ -387,24 +425,33 @@ pub(super) fn overlay(
             focusable("field-priority", Field::Priority, priority_row, cx),
             theme,
         ))
+        .child(crate::components::section_label("Schedule", theme))
         .child(field(
             "Estimate, in hours",
             errors.estimate.as_deref(),
             focusable("field-estimate", Field::Estimate, estimate_box, cx),
             theme,
         ))
-        .child(field(
-            "Start date",
-            errors.start.as_deref(),
-            focusable("field-start", Field::Start, start_box, cx),
-            theme,
-        ))
-        .child(field(
-            "Due date",
-            errors.due.as_deref(),
-            focusable("field-due", Field::Due, due_box, cx),
-            theme,
-        ))
+        // The two dates sit side by side, as in the design.
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(theme.spacing.md)
+                .child(div().flex_1().min_w_0().child(field(
+                    "Start date",
+                    errors.start.as_deref(),
+                    focusable("field-start", Field::Start, start_box, cx),
+                    theme,
+                )))
+                .child(div().flex_1().min_w_0().child(field(
+                    "Due date",
+                    errors.due.as_deref(),
+                    focusable("field-due", Field::Due, due_box, cx),
+                    theme,
+                ))),
+        )
+        .child(crate::components::section_label("People and labels", theme))
         .child(field(
             "Assignee",
             None,
@@ -451,12 +498,31 @@ pub(super) fn overlay(
                 .flex_row()
                 .justify_end()
                 .gap(theme.spacing.sm)
-                .child(button("task-cancel", "Cancel", false, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.request_task_dialog_close(cx)),
-                ))
-                .child(button("task-save", "Save", true, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.save_task_dialog(cx)),
-                )),
+                .pt(theme.spacing.md)
+                .border_t_1()
+                .border_color(theme.palette.border)
+                .child(
+                    crate::components::button(
+                        "task-cancel",
+                        "Cancel",
+                        crate::components::Variant::Ghost,
+                        theme,
+                    )
+                    .on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.request_task_dialog_close(cx)
+                        }),
+                    ),
+                )
+                .child(
+                    crate::components::button(
+                        "task-save",
+                        "Save",
+                        crate::components::Variant::Primary,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_task_dialog(cx))),
+                ),
         );
 
     let backdrop = div()
@@ -630,21 +696,12 @@ pub(super) fn button(
     primary: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
-    let base = div()
-        .id(id)
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .cursor_pointer()
-        .child(label.to_string());
-    if primary {
-        base.bg(theme.palette.accent)
-            .text_color(theme.palette.on_accent)
+    let variant = if primary {
+        crate::components::Variant::Primary
     } else {
-        base.border_1()
-            .border_color(theme.palette.border_control)
-            .hover(|style| style.bg(theme.palette.surface_hover))
-    }
+        crate::components::Variant::Secondary
+    };
+    crate::components::button(id, label, variant, theme)
 }
 
 /// The prompt that stands between the user and losing their edits. "Keep editing" is the default.

@@ -637,18 +637,13 @@ fn save_message(err: &RepoError) -> String {
 
 /// The Plan button in the header.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("plan-open")
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("Plan")
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_plan_wizard(window, cx)))
+    crate::components::button(
+        "plan-open",
+        "Plan",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_plan_wizard(window, cx)))
 }
 
 /// The wizard, drawn over the window. Nothing is drawn when it isn't open.

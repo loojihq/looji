@@ -308,22 +308,8 @@ pub(super) fn bar(
         };
         let open = view.filter_menu.is_some_and(|menu| menu.facet == facet);
         facets = facets.child(
-            div()
-                .id(("filter-facet", facet.index() as u64))
+            crate::components::pill(("filter-facet", facet.index() as u64), &label, open, theme)
                 .track_focus(&view.filter_focus[facet.index()])
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(if open {
-                    theme.palette.accent
-                } else {
-                    theme.palette.border_control
-                })
-                .text_size(theme.typography.caption)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child(label)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.toggle_filter_menu(facet, cx)
                 }))
@@ -337,21 +323,8 @@ pub(super) fn bar(
     }
 
     let clearable = active > 0;
-    let clear = div()
-        .id(("filter-clear", 0_u64))
+    let clear = crate::components::pill(("filter-clear", 0_u64), "Clear filters", false, theme)
         .track_focus(&view.filter_focus[CLEAR_CONTROL])
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.caption)
-        .child("Clear filters")
-        .when(clearable, |button| {
-            button
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.palette.surface_hover))
-        })
         .when(!clearable, |button| {
             button.text_color(theme.palette.text_disabled)
         })
@@ -419,7 +392,6 @@ fn menu_panel(
     for (index, (choice, label)) in view.options(menu.facet).into_iter().enumerate() {
         let selected = view.is_selected(&choice);
         let highlighted = menu.highlight == index;
-        let tick = if selected { "✓" } else { " " };
         list = list.child(
             div()
                 .id(("filter-option", index as u64))
@@ -433,7 +405,7 @@ fn menu_panel(
                 .cursor_pointer()
                 .when(highlighted, |row| row.bg(theme.palette.surface_selected))
                 .hover(|style| style.bg(theme.palette.surface_hover))
-                .child(div().w(px(14.)).child(tick))
+                .child(crate::components::check_mark(selected, theme))
                 .child(label)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.choose_option(index, choice.clone(), cx)

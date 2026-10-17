@@ -385,18 +385,13 @@ impl WorkspaceView {
 
 /// The repository button in the header. It's drawn only while a project is selected.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("repo-open")
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("Repository")
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_repo_dialog(window, cx)))
+    crate::components::button(
+        "repo-open",
+        "Repository",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_repo_dialog(window, cx)))
 }
 
 /// The repository dialog, drawn over the window. Nothing is drawn when it isn't open.

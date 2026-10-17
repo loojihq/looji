@@ -1,6 +1,8 @@
 // Release builds are GUI-only; debug builds keep a console for logs (same as Zed).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod assets;
+mod components;
 mod database;
 mod settings;
 mod theme;
@@ -59,27 +61,29 @@ fn main() {
         )),
     };
 
-    Application::new().run(move |cx: &mut App| {
-        theme::init(cx, preferences.theme.into());
-        cx.set_global(settings::AppPreferences(preferences));
-        cx.set_global(AppDatabase {
-            store,
-            database_path: database_path.clone(),
-            icons_dir: icons_dir.clone(),
-        });
-        quit_when_last_window_closes(cx);
+    Application::new()
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            theme::init(cx, preferences.theme.into());
+            cx.set_global(settings::AppPreferences(preferences));
+            cx.set_global(AppDatabase {
+                store,
+                database_path: database_path.clone(),
+                icons_dir: icons_dir.clone(),
+            });
+            quit_when_last_window_closes(cx);
 
-        WorkspaceView::open_window(cx, workspaces).expect("failed to open main window");
-        // The window is up, so this upgrade worked. Until now its backup was kept in case it hadn't.
-        if let Err(err) = persistence::confirm_startup(&database_path) {
-            eprintln!("looji: could not clear the upgrade backup marker: {err}");
-        }
-        // After an update the old program was kept beside this one in case this one didn't start. It did.
-        if let Ok(current) = std::env::current_exe() {
-            let _ = looji_updates::apply::remove_previous(&current);
-        }
-        cx.activate(true);
-    });
+            WorkspaceView::open_window(cx, workspaces).expect("failed to open main window");
+            // The window is up, so this upgrade worked. Until now its backup was kept in case it hadn't.
+            if let Err(err) = persistence::confirm_startup(&database_path) {
+                eprintln!("looji: could not clear the upgrade backup marker: {err}");
+            }
+            // After an update the old program was kept beside this one in case this one didn't start. It did.
+            if let Ok(current) = std::env::current_exe() {
+                let _ = looji_updates::apply::remove_previous(&current);
+            }
+            cx.activate(true);
+        });
 }
 
 /// A program started by an update is given the old program's process id, and waits for it to exit. Otherwise both would

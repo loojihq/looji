@@ -15,6 +15,7 @@ use super::fields::{field, member_mark, segment, text_box};
 use super::members;
 use super::task_editors;
 use super::{WorkspaceView, store, typed_text};
+use crate::components::prop_row;
 use crate::theme::Theme;
 
 /// The text fields the panel can edit inline.
@@ -293,6 +294,7 @@ pub(super) fn render(
         Some(draft) => text_box(&draft.text, "Title", true, theme).into_any_element(),
         None => div()
             .text_size(theme.typography.title)
+            .font_weight(FontWeight::MEDIUM)
             .child(task.title().to_string())
             .into_any_element(),
     };
@@ -373,11 +375,12 @@ pub(super) fn render(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(340.))
+        .w(px(300.))
         .flex_shrink_0()
         .h_full()
         .min_h_0()
-        .p(theme.spacing.lg)
+        .px(theme.spacing.lg)
+        .py(theme.spacing.md)
         .border_l_1()
         .border_color(theme.palette.border)
         .bg(theme.palette.surface_raised)
@@ -388,21 +391,14 @@ pub(super) fn render(
                 .flex_row()
                 .justify_between()
                 .items_center()
+                .text_color(theme.palette.text_secondary)
+                .child(div().text_size(theme.typography.caption).child("Task"))
                 .child(
-                    div()
-                        .text_size(theme.typography.caption)
-                        .text_color(theme.palette.text_secondary)
-                        .child("Task"),
-                )
-                .child(
-                    div()
-                        .id("panel-close")
-                        .px(theme.spacing.sm)
-                        .cursor_pointer()
-                        .child("Close")
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    crate::components::icon_button("panel-close", "x", theme).on_click(
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
                             this.close_panel(window, cx)
-                        })),
+                        }),
+                    ),
                 ),
         )
         .child(field(
@@ -419,8 +415,8 @@ pub(super) fn render(
                 .child(title_body),
             theme,
         ))
-        .child(field("Status", None, statuses, theme))
-        .child(field("Priority", None, priorities, theme))
+        .child(prop_row("Status", statuses, theme))
+        .child(prop_row("Priority", priorities, theme))
         .child(field(
             "Description",
             None,
@@ -435,28 +431,20 @@ pub(super) fn render(
                 .child(description_body),
             theme,
         ))
-        .child(field(
-            "Details",
-            None,
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.xs)
-                .child(format!("Estimate: {estimate}"))
-                .child(format!("Start: {start}"))
-                .child(format!("Due: {due}"))
-                .children(needs_hint.then(|| {
-                    div()
-                        .text_color(theme.palette.text_secondary)
-                        .child("Add an estimate to schedule this task.")
-                }))
-                .child(assignee_row(
-                    task.assignee_id(),
-                    &members::entries(&view.members),
-                    theme,
-                )),
+        .child(prop_row(
+            "Assignee",
+            assignee_row(task.assignee_id(), &members::entries(&view.members), theme),
             theme,
         ))
+        .child(prop_row("Estimate", div().child(estimate), theme))
+        .child(prop_row("Start", div().child(start), theme))
+        .child(prop_row("Due", div().child(due), theme))
+        .children(needs_hint.then(|| {
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child("Add an estimate to schedule this task.")
+        }))
         .child(field("Tags", None, tag_editor, theme))
         .child(
             div()
@@ -503,12 +491,10 @@ pub(super) fn render(
                     .child(notice),
             )
         })
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child("History, newest first"),
-        )
+        .child(crate::components::section_label(
+            "History, newest first",
+            theme,
+        ))
         .child(history);
 
     Some(panel_column.into_any_element())

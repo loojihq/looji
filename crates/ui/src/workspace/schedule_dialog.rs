@@ -189,20 +189,13 @@ impl ScheduleDialog {
 
 /// The text the Hours button shows.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("schedule-open")
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("Hours")
-        .on_click(
-            cx.listener(|this, _: &ClickEvent, window, cx| this.open_schedule_dialog(window, cx)),
-        )
+    crate::components::button(
+        "schedule-open",
+        "Hours",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_schedule_dialog(window, cx)))
 }
 
 impl WorkspaceView {

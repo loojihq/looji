@@ -1,110 +1,273 @@
-//! Preference rows in the sidebar. Each click moves one setting to its next value and saves it.
+//! The Preferences screen: appearance, updates, the board, the assistant, this workspace, and help.
+//! Each toggle and select saves through `settings::update`, so the choice is kept after a restart.
 
 use gpui::{prelude::*, *};
-use looji_domain::{DefaultView, Preference, Preferences, UpdateChannel};
+use looji_domain::{DefaultView, Preference, Status, UpdateChannel};
 
 use super::WorkspaceView;
-use crate::{settings, theme::Theme};
+use crate::{
+    components, settings,
+    theme::{Mode, Theme},
+};
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum Setting {
-    View,
-    Channel,
-    Model,
-}
-
-pub(super) fn section(
-    prefs: &Preferences,
+/// The body of the Preferences screen, under its header.
+pub(super) fn render(
+    view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement {
-    div()
+) -> AnyElement {
+    let prefs = settings::current(cx);
+    // Copied out first, so each control's click handler owns its own value.
+    let default_view = prefs.default_view;
+    let model = prefs.selected_model.clone();
+    let dark = theme.mode == Mode::Dark;
+    let due_today_on = prefs.notify_due_today;
+    let overdue_on = prefs.notify_overdue;
+    let beta = prefs.update_channel == UpdateChannel::Beta;
+    let workspace_id = view.list.active_workspace_id();
+    let workspace_name = view.list.active().name().to_string();
+    let in_review = view
+        .projects
+        .active()
+        .map(|project| project.is_status_visible(Status::InReview));
+
+    let board_row: AnyElement = match in_review {
+        Some(shown) => row(
+            "In review column",
+            Some("Show the In review column on this project's board."),
+            components::toggle(shown, theme),
+            theme,
+        )
+        .id("pref-in-review")
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.request_column_visibility(Status::InReview, !shown, cx);
+        }))
+        .into_any_element(),
+        None => row(
+            "In review column",
+            Some("Open a project to change its board."),
+            div()
+                .text_color(theme.palette.text_disabled)
+                .child("No project"),
+            theme,
+        )
+        .into_any_element(),
+    };
+
+    let body = div()
+        .id("preferences-body")
         .flex()
         .flex_col()
-        .gap(theme.spacing.xs)
-        .mt(theme.spacing.md)
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(theme.spacing.lg)
+        .pb(theme.spacing.lg)
         .child(
             div()
-                .px(theme.spacing.sm)
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child("PREFERENCES"),
-        )
-        .child(row(
-            "Default view",
-            prefs.default_view.as_str().to_string(),
-            Setting::View,
-            theme,
-            cx,
-        ))
-        .child(row(
-            "Update channel",
-            prefs.update_channel.as_str().to_string(),
-            Setting::Channel,
-            theme,
-            cx,
-        ))
-        .child(row(
-            "Model",
-            prefs
-                .selected_model
-                .clone()
-                .unwrap_or_else(|| "default".to_string()),
-            Setting::Model,
-            theme,
-            cx,
-        ))
-        .child(
-            div()
-                .id("replay-tour")
+                .w(px(640.))
                 .flex()
-                .flex_row()
-                .justify_between()
-                .gap(theme.spacing.sm)
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .cursor_pointer()
-                .text_size(theme.typography.body)
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child("Welcome tour")
+                .flex_col()
+                .child(components::section_label("Appearance", theme))
                 .child(
-                    div()
-                        .text_color(theme.palette.text_secondary)
-                        .child("show again"),
+                    row(
+                        "Dark mode",
+                        Some("Use dark surfaces across the app."),
+                        components::toggle(dark, theme),
+                        theme,
+                    )
+                    .id("pref-dark-mode")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_theme(cx))),
                 )
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.replay_tour(cx))),
-        )
+                .child(components::section_label("Updates", theme))
+                .child(
+                    row(
+                        "Beta updates",
+                        Some("Get preview releases before they are stable."),
+                        components::toggle(beta, theme),
+                        theme,
+                    )
+                    .id("pref-beta")
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            let next = if beta {
+                                UpdateChannel::Stable
+                            } else {
+                                UpdateChannel::Beta
+                            };
+                            this.save_preference(Preference::UpdateChannel(next), cx);
+                        },
+                    )),
+                )
+                .child(components::section_label("Notifications", theme))
+                .child(
+                    row(
+                        "Due today",
+                        Some("Count tasks due today next to Today in the sidebar."),
+                        components::toggle(due_today_on, theme),
+                        theme,
+                    )
+                    .id("pref-notify-due-today")
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.save_preference(Preference::NotifyDueToday(!due_today_on), cx);
+                        },
+                    )),
+                )
+                .child(
+                    row(
+                        "Overdue tasks",
+                        Some("Count overdue tasks next to Today in the sidebar."),
+                        components::toggle(overdue_on, theme),
+                        theme,
+                    )
+                    .id("pref-notify-overdue")
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.save_preference(Preference::NotifyOverdue(!overdue_on), cx);
+                        },
+                    )),
+                )
+                .child(components::section_label("Board", theme))
+                .child(
+                    row(
+                        "Default view",
+                        Some("The view a project opens in when it has no saved view."),
+                        components::select(default_view_label(default_view), theme),
+                        theme,
+                    )
+                    .id("pref-default-view")
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            let next = next_view(default_view);
+                            this.save_preference(Preference::DefaultView(next), cx);
+                        },
+                    )),
+                )
+                .child(board_row)
+                .child(components::section_label("Assistant", theme))
+                .child(
+                    row(
+                        "Model",
+                        Some("The model that plans projects and answers task chat."),
+                        components::select(model.as_deref().unwrap_or("Default"), theme),
+                        theme,
+                    )
+                    .id("pref-model")
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            let next = settings::next_model(model.as_deref());
+                            this.save_preference(Preference::SelectedModel(next), cx);
+                        },
+                    )),
+                )
+                .child(components::section_label("This workspace", theme))
+                .child(row(
+                    workspace_name.as_str(),
+                    Some("Its icon, its name, and whether it can be deleted."),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(theme.spacing.sm)
+                        .child(
+                            components::button(
+                                "pref-workspace-icon",
+                                "Icon",
+                                components::Variant::Secondary,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| {
+                                    this.choose_icon(workspace_id, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            components::button(
+                                "pref-workspace-rename",
+                                "Rename",
+                                components::Variant::Secondary,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _: &ClickEvent, window, cx| {
+                                    this.begin_rename(workspace_id, window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            components::button(
+                                "pref-workspace-delete",
+                                "Delete",
+                                components::Variant::Danger,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _: &ClickEvent, window, cx| {
+                                    this.begin_delete(workspace_id, window, cx);
+                                },
+                            )),
+                        ),
+                    theme,
+                ))
+                .child(components::section_label("Help", theme))
+                .child(row(
+                    "Welcome tour",
+                    Some("Walk through the main parts of the app again."),
+                    components::button(
+                        "pref-tour",
+                        "Show again",
+                        components::Variant::Secondary,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.replay_tour(cx))),
+                    theme,
+                )),
+        );
+
+    body.into_any_element()
 }
 
-fn row(
-    label: &'static str,
-    value: String,
-    which: Setting,
-    theme: &Theme,
-    cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement {
+/// One setting: its name and a line of explanation on the left, its control on the right, and a
+/// rule under it. The caller makes the whole row clickable when the control is a toggle or select.
+fn row(name: &str, description: Option<&str>, control: impl IntoElement, theme: &Theme) -> Div {
+    let mut text = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .child(name.to_string());
+    if let Some(description) = description {
+        text = text.child(
+            div()
+                .mt(px(1.))
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(description.to_string()),
+        );
+    }
     div()
-        .id(label)
         .flex()
         .flex_row()
+        .items_center()
         .justify_between()
-        .gap(theme.spacing.sm)
+        .gap(theme.spacing.md)
         .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
+        .py(theme.spacing.sm)
         .rounded(theme.radius.md)
-        .cursor_pointer()
-        .text_size(theme.typography.body)
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child(label)
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_color(theme.palette.text_secondary)
-                .child(value),
-        )
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.cycle_preference(which, cx)))
+        .border_b_1()
+        .border_color(theme.palette.border)
+        .child(text)
+        .child(control)
+}
+
+fn default_view_label(view: DefaultView) -> &'static str {
+    match view {
+        DefaultView::Board => "Board",
+        DefaultView::List => "List",
+        DefaultView::Roadmap => "Roadmap",
+        DefaultView::Workload => "Workload",
+    }
 }
 
 fn next_view(view: DefaultView) -> DefaultView {
@@ -116,23 +279,9 @@ fn next_view(view: DefaultView) -> DefaultView {
     }
 }
 
-fn next_channel(channel: UpdateChannel) -> UpdateChannel {
-    match channel {
-        UpdateChannel::Stable => UpdateChannel::Beta,
-        UpdateChannel::Beta => UpdateChannel::Stable,
-    }
-}
-
 impl WorkspaceView {
-    pub(super) fn cycle_preference(&mut self, which: Setting, cx: &mut Context<Self>) {
-        let prefs = settings::current(cx);
-        let change = match which {
-            Setting::View => Preference::DefaultView(next_view(prefs.default_view)),
-            Setting::Channel => Preference::UpdateChannel(next_channel(prefs.update_channel)),
-            Setting::Model => {
-                Preference::SelectedModel(settings::next_model(prefs.selected_model.as_deref()))
-            }
-        };
+    /// Saves one preference and says so if the save fails. The screen re-renders with the new value.
+    pub(super) fn save_preference(&mut self, change: Preference, cx: &mut Context<Self>) {
         if let Err(err) = settings::update(cx, change) {
             self.status = Some(format!("Could not save the setting: {err}"));
         }

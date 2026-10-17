@@ -513,11 +513,34 @@ fn editable(
         .into_any_element()
 }
 
-fn section_heading(text: String, theme: &Theme) -> Div {
+/// One task the publish will create, as a row in the side panel. The check shows it's included.
+fn candidate_row(title: &str, estimate: &str, theme: &Theme) -> AnyElement {
     div()
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_secondary)
-        .child(text)
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .border_b_1()
+        .border_color(theme.palette.border)
+        .child(crate::components::check_mark(true, theme).mt(px(2.)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(div().child(title.to_string()))
+                .child(
+                    div()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(estimate.to_string()),
+                ),
+        )
+        .into_any_element()
+}
+
+fn section_heading(text: String, theme: &Theme) -> Div {
+    crate::components::section_label(&text, theme)
 }
 
 /// What a publication says in the notice: how many tasks went in, and which titles were already there.
@@ -668,9 +691,9 @@ pub(super) fn overlay(
                 .flex_col()
                 .gap(theme.spacing.xs)
                 .p(theme.spacing.sm)
-                .rounded(theme.radius.md)
+                .rounded(theme.radius.lg)
                 .border_1()
-                .border_color(theme.palette.border_control)
+                .border_color(theme.palette.border)
                 .children(story.edited.then(|| edited_mark(theme)))
                 .child(editable(
                     dialog,
@@ -757,9 +780,9 @@ pub(super) fn overlay(
                 .flex_col()
                 .gap(theme.spacing.xs)
                 .p(theme.spacing.sm)
-                .rounded(theme.radius.md)
+                .rounded(theme.radius.lg)
                 .border_1()
-                .border_color(theme.palette.border_control)
+                .border_color(theme.palette.border)
                 .children(task.edited.then(|| edited_mark(theme)))
                 .child(editable(
                     dialog,
@@ -895,12 +918,31 @@ pub(super) fn overlay(
         })
     });
 
+    let project = view
+        .projects
+        .active()
+        .map(|project| project.name().to_string())
+        .unwrap_or_default();
+
+    // Every backlog task becomes a task on publish, so each one is listed with a check.
+    let candidates: Vec<AnyElement> = draft
+        .tasks()
+        .iter()
+        .map(|task| {
+            let estimate = task
+                .estimate
+                .map(|estimate| format!("{} h", hours_text(estimate.minutes())))
+                .unwrap_or_else(|| "No estimate".to_string());
+            candidate_row(&task.title, &estimate, theme)
+        })
+        .collect();
+
     let panel = div()
         .id("plan-review-panel")
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(640.))
+        .w(px(960.))
         .p(theme.spacing.lg)
         .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
@@ -910,14 +952,28 @@ pub(super) fn overlay(
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .text_size(theme.typography.title)
-                .child("Review the plan"),
-        )
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child("Each change is saved as you make it."),
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(format!("{project} / Drafts")),
+                )
+                .child(
+                    div()
+                        .mt(theme.spacing.xs)
+                        .text_size(theme.typography.heading)
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Review the plan"),
+                )
+                .child(
+                    div()
+                        .mt(px(2.))
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child("Each change is saved as you make it."),
+                ),
         )
         .when_some(warnings, |panel, warning| {
             panel.child(
@@ -931,22 +987,65 @@ pub(super) fn overlay(
         })
         .child(
             div()
-                .id("plan-review-scroll")
                 .flex()
-                .flex_col()
+                .flex_row()
                 .gap(theme.spacing.lg)
-                .max_h(px(520.))
-                .overflow_y_scroll()
-                .child(spec)
-                .child(stories)
-                .child(backlog),
-        )
-        .child(publish_row(dialog, theme, cx))
-        .child(div().flex().flex_row().justify_end().child(
-            button("plan-close", "Close", false, theme).on_click(
-                cx.listener(|this, _: &ClickEvent, window, cx| this.request_plan_close(window, cx)),
-            ),
-        ));
+                .min_h_0()
+                .child(
+                    div()
+                        .id("plan-review-scroll")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(theme.spacing.lg)
+                        .max_h(px(560.))
+                        .overflow_y_scroll()
+                        .child(spec)
+                        .child(stories)
+                        .child(backlog),
+                )
+                // The side panel turns the backlog into tasks, as in the design.
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_none()
+                        .w(px(260.))
+                        .gap(theme.spacing.sm)
+                        .pl(theme.spacing.lg)
+                        .border_l_1()
+                        .border_color(theme.palette.border)
+                        .child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Turn into tasks"),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme.typography.caption)
+                                .text_color(theme.palette.text_secondary)
+                                .child("Each backlog task becomes a task on the board."),
+                        )
+                        .children(candidates)
+                        .child(publish_row(dialog, theme, cx))
+                        .child(
+                            div().flex().flex_row().justify_end().child(
+                                crate::components::button(
+                                    "plan-close",
+                                    "Close",
+                                    crate::components::Variant::Ghost,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        this.request_plan_close(window, cx)
+                                    },
+                                )),
+                            ),
+                        ),
+                ),
+        );
 
     Some(
         div()

@@ -226,11 +226,13 @@ fn confirm_button(
             .bg(theme.palette.surface_selected)
             .text_color(theme.palette.text_disabled)
     } else {
-        button
-            .bg(theme.palette.danger)
-            .text_color(theme.palette.on_danger)
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.confirm_delete(cx)))
+        crate::components::button(
+            "delete-confirm",
+            label,
+            crate::components::Variant::Danger,
+            theme,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.confirm_delete(cx)))
     }
 }
 

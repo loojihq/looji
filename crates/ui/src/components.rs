@@ -1,0 +1,482 @@
+//! Shared controls. Every screen builds its buttons, inputs, chips, and rows from these, so they
+//! look the same everywhere and a change here changes the whole app.
+//!
+//! Each one takes the `Theme` and reads only palette roles, spacing, radius, and type sizes. None
+//! of them spells out a colour, which `theme::guard` checks.
+
+use gpui::{prelude::*, *};
+use looji_domain::MemberColour;
+
+use crate::theme::Theme;
+
+// ───────────────────────────── buttons ─────────────────────────────
+
+/// How a button reads: the main action, an outlined secondary action, a quiet text action, or a
+/// destructive one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variant {
+    Primary,
+    Secondary,
+    Ghost,
+    Danger,
+}
+
+/// A text button. Give it an id so it can take a click; the caller adds `.on_click`.
+pub fn button(
+    id: impl Into<ElementId>,
+    label: &str,
+    variant: Variant,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let base = div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .h(px(30.))
+        .px(theme.spacing.md)
+        .rounded(theme.radius.md)
+        .text_size(theme.typography.body)
+        .cursor_pointer()
+        .child(label.to_string());
+    match variant {
+        Variant::Primary => base
+            .bg(theme.palette.accent)
+            .text_color(theme.palette.on_accent)
+            .hover(|style| style.opacity(0.9)),
+        Variant::Secondary => base
+            .border_1()
+            .border_color(theme.palette.border_control)
+            .text_color(theme.palette.text_primary)
+            .hover(|style| style.bg(theme.palette.surface_hover)),
+        Variant::Ghost => base
+            .text_color(theme.palette.text_secondary)
+            .hover(|style| {
+                style
+                    .bg(theme.palette.surface_hover)
+                    .text_color(theme.palette.text_primary)
+            }),
+        Variant::Danger => base
+            .bg(theme.palette.danger)
+            .text_color(theme.palette.on_danger)
+            .hover(|style| style.opacity(0.9)),
+    }
+}
+
+/// A square button with one Tabler icon, such as "x" to close or "dots" for more.
+pub fn icon_button(id: impl Into<ElementId>, icon_name: &str, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(26.))
+        .rounded(theme.radius.md)
+        .text_size(theme.typography.title)
+        .text_color(theme.palette.text_secondary)
+        .cursor_pointer()
+        .hover(|style| {
+            style
+                .bg(theme.palette.surface_hover)
+                .text_color(theme.palette.text_primary)
+        })
+        .child(icon(icon_name, 14., theme.palette.text_secondary))
+}
+
+// ───────────────────────────── inputs ─────────────────────────────
+
+/// A labelled field: the label above the input, and the error below it when there is one.
+pub fn field(label: &str, error: Option<&str>, body: impl IntoElement, theme: &Theme) -> Div {
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(label.to_string()),
+        )
+        .child(body);
+    if let Some(error) = error {
+        column = column.child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.danger)
+                .child(error.to_string()),
+        );
+    }
+    column
+}
+
+/// A single-line text box. The active one has an accent outline and a caret. An empty one shows
+/// the placeholder.
+pub fn text_box(value: &str, placeholder: &str, active: bool, theme: &Theme) -> Div {
+    let text = if value.is_empty() && !active {
+        div()
+            .text_color(theme.palette.text_secondary)
+            .child(placeholder.to_string())
+    } else {
+        let caret = if active { "|" } else { "" };
+        div().child(format!("{value}{caret}"))
+    };
+    div()
+        .flex()
+        .items_center()
+        .min_h(px(32.))
+        .px(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(if active {
+            theme.palette.accent
+        } else {
+            theme.palette.border_control
+        })
+        .bg(theme.palette.surface)
+        .text_size(theme.typography.body)
+        .child(text)
+}
+
+/// A Tabler icon from the set compiled into the app, by name such as "search". It is drawn in the
+/// colour it's given, so it follows the text it sits beside.
+pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
+    svg()
+        .path(format!("icons/{name}.svg"))
+        .size(px(size))
+        .flex_none()
+        .text_color(color)
+}
+
+/// The tick beside a chosen option in a menu. The slot keeps its width when the option isn't chosen,
+/// so the labels stay in a column.
+pub fn check_mark(checked: bool, theme: &Theme) -> Div {
+    let slot = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(14.));
+    if checked {
+        slot.child(icon("check", 14., theme.palette.text_primary))
+    } else {
+        slot
+    }
+}
+
+/// A rounded pill, used for filters and toggles on a bar. `active` gives it the accent outline,
+/// which marks the one whose menu is open. The caller adds the click and any key handling.
+pub fn pill(id: impl Into<ElementId>, label: &str, active: bool, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded_full()
+        .border_1()
+        .border_color(if active {
+            theme.palette.accent
+        } else {
+            theme.palette.border_control
+        })
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_primary)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        .child(label.to_string())
+}
+
+/// A dropdown look: the current value and a chevron. The caller adds the click.
+pub fn select(label: &str, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .h(px(30.))
+        .px(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .text_size(theme.typography.body)
+        .child(label.to_string())
+        .child(icon("chevron-down", 14., theme.palette.text_secondary))
+}
+
+/// An on/off switch. The track is accent when on.
+pub fn toggle(on: bool, theme: &Theme) -> Div {
+    div()
+        .relative()
+        .flex_none()
+        .w(px(34.))
+        .h(px(20.))
+        .rounded_full()
+        .bg(if on {
+            theme.palette.accent
+        } else {
+            theme.palette.border_control
+        })
+        .child(
+            div()
+                .absolute()
+                .top(px(2.))
+                .left(px(if on { 16. } else { 2. }))
+                .size(px(16.))
+                .rounded_full()
+                .bg(theme.palette.surface),
+        )
+}
+
+/// A tick box for a task. Filled when done, outlined otherwise.
+pub fn checkbox(done: bool, theme: &Theme) -> Div {
+    let base = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(15.))
+        .rounded_full()
+        .text_size(theme.typography.caption);
+    if done {
+        base.bg(theme.palette.text_secondary)
+            .text_color(theme.palette.surface)
+            .child(icon("check", 10., theme.palette.surface))
+    } else {
+        base.border_1().border_color(theme.palette.border_control)
+    }
+}
+
+// ───────────────────────────── labels and marks ─────────────────────────────
+
+/// A chip: one tag, shown as a small rounded label.
+pub fn chip(text: &str, theme: &Theme) -> Div {
+    div()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.sm)
+        .bg(theme.palette.surface_selected)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_primary)
+        .child(text.to_string())
+}
+
+/// The base of one choice in a segmented control. The caller adds the label and the click.
+pub fn segment(selected: bool, theme: &Theme) -> Div {
+    let base = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .text_size(theme.typography.caption)
+        .cursor_pointer();
+    if selected {
+        base.bg(theme.palette.surface_selected)
+            .text_color(theme.palette.text_primary)
+    } else {
+        base.text_color(theme.palette.text_secondary)
+            .hover(|style| style.bg(theme.palette.surface_hover))
+    }
+}
+
+/// A keyboard shortcut, such as Esc or Ctrl F.
+pub fn kbd(text: &str, theme: &Theme) -> Div {
+    div()
+        .px(px(5.))
+        .py(px(1.))
+        .rounded(theme.radius.sm)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .child(text.to_string())
+}
+
+/// A small heading over a group of rows, such as "Projects" or "Overdue".
+pub fn section_label(text: &str, theme: &Theme) -> Div {
+    div()
+        .mt(theme.spacing.md)
+        .mb(theme.spacing.xs)
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .child(text.to_string())
+}
+
+/// A round dot, used to mark a project or an open state.
+pub fn dot(color: Hsla, size: f32) -> Div {
+    div().flex_none().size(px(size)).rounded_full().bg(color)
+}
+
+/// A team member's mark: their initials on their palette colour. The colour tells members apart
+/// when two share a name, and the initials are the text the eye reads first.
+pub fn member_mark(initials: &str, colour: MemberColour, size: Pixels, theme: &Theme) -> Div {
+    let pair = theme.palette.avatars[colour.index()];
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(size)
+        .rounded_full()
+        .bg(pair.background)
+        .text_color(pair.text)
+        .text_size(theme.typography.caption)
+        .child(initials.to_string())
+}
+
+/// A thin bar showing a fraction from 0 to 1, such as how full a day is.
+pub fn progress(fraction: f32, theme: &Theme) -> Div {
+    div()
+        .h(px(4.))
+        .rounded_full()
+        .bg(theme.palette.border)
+        .overflow_hidden()
+        .child(
+            div()
+                .h_full()
+                .w(relative(fraction.clamp(0., 1.)))
+                .bg(theme.palette.accent),
+        )
+}
+
+// ───────────────────────────── rows and navigation ─────────────────────────────
+
+/// One row of a task's properties: a fixed-width label, then the value.
+pub fn prop_row(label: &str, value: impl IntoElement, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .py(theme.spacing.xs)
+        .child(
+            div()
+                .w(px(84.))
+                .flex_none()
+                .text_color(theme.palette.text_secondary)
+                .child(label.to_string()),
+        )
+        .child(div().flex_1().min_w_0().child(value))
+}
+
+/// A view tab: its label, with an underline when selected. The caller adds the click.
+pub fn tab(id: impl Into<ElementId>, label: &str, selected: bool, theme: &Theme) -> Stateful<Div> {
+    let base = div()
+        .id(id)
+        .py(theme.spacing.xs)
+        .mr(theme.spacing.lg)
+        .border_b_2()
+        .cursor_pointer()
+        .child(label.to_string());
+    if selected {
+        base.border_color(theme.palette.text_primary)
+            .text_color(theme.palette.text_primary)
+            .font_weight(FontWeight::MEDIUM)
+    } else {
+        base.border_color(theme.palette.surface)
+            .text_color(theme.palette.text_secondary)
+            .hover(|style| style.text_color(theme.palette.text_primary))
+    }
+}
+
+/// A square tile with one Tabler icon, used to introduce an empty screen.
+pub fn icon_tile(icon_name: &str, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(40.))
+        .rounded(theme.radius.lg)
+        .bg(theme.palette.surface_raised)
+        .child(icon(icon_name, 20., theme.palette.text_secondary))
+}
+
+/// One numbered step under an empty screen: a number, a heading, and a line of explanation.
+pub fn numbered_step(number: usize, heading: &str, body: &str, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(theme.spacing.md)
+        .py(theme.spacing.sm)
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(22.))
+                .rounded_full()
+                .bg(theme.palette.surface_selected)
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(number.to_string()),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(heading.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(body.to_string()),
+                ),
+        )
+}
+
+/// A sidebar row with an optional glyph and trailing text. Selected rows are highlighted.
+pub fn nav_item(
+    id: impl Into<ElementId>,
+    glyph: &str,
+    label: &str,
+    selected: bool,
+    trailing: Option<&str>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let mut row = div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .cursor_pointer()
+        .text_color(theme.palette.text_secondary)
+        .when(selected, |row| {
+            row.bg(theme.palette.surface_selected)
+                .text_color(theme.palette.text_primary)
+                .font_weight(FontWeight::MEDIUM)
+        })
+        .when(!selected, |row| {
+            row.hover(|style| style.bg(theme.palette.surface_hover))
+        })
+        .child(icon(
+            glyph,
+            16.,
+            if selected {
+                theme.palette.text_primary
+            } else {
+                theme.palette.text_secondary
+            },
+        ))
+        .child(div().flex_1().min_w_0().truncate().child(label.to_string()));
+    if let Some(text) = trailing {
+        row = row.child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_disabled)
+                .child(text.to_string()),
+        );
+    }
+    row
+}

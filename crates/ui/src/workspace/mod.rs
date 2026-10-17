@@ -21,6 +21,7 @@ mod list_view;
 mod markdown;
 mod members;
 mod moves;
+mod palette;
 mod panel;
 mod plan_drafts;
 mod plan_refine;
@@ -35,6 +36,7 @@ mod repo_dialog;
 mod roadmap;
 mod roadmap_layout;
 mod schedule_dialog;
+mod screen;
 mod search;
 mod sidebar;
 mod state;
@@ -169,6 +171,11 @@ pub struct WorkspaceView {
     filter_menu: Option<filter_bar::FilterMenu>,
     /// One focus handle for each control in the filter bar, in tab order.
     filter_focus: Vec<FocusHandle>,
+    /// The command palette, while it's open.
+    palette: Option<palette::PaletteState>,
+    /// The workspace screen in place of a board, if one is open, and the tasks it gathered.
+    screen: Option<screen::Screen>,
+    screen_entries: Vec<screen::Entry>,
 }
 
 impl WorkspaceView {
@@ -233,11 +240,15 @@ impl WorkspaceView {
                     quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
+                    palette: None,
+                    screen: None,
+                    screen_entries: Vec::new(),
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
                 };
                 view.reload_projects(cx);
+                view.gather_screen_tasks(cx);
                 view.start_update_checks(cx);
                 view.start_tour_if_new(cx);
                 view
@@ -268,6 +279,8 @@ impl WorkspaceView {
                 // The project being left keeps its view and scroll, saved before the switch.
                 self.save_project_view(cx);
                 self.list.set_active(id);
+                // A screen belongs to the workspace it was opened in.
+                self.screen = None;
                 // The previous workspace's project must not stay selected.
                 self.reload_projects(cx);
             }
@@ -427,6 +440,10 @@ impl WorkspaceView {
         if self.tour.is_some() {
             return self.tour_key(event, cx);
         }
+        // The palette takes every key while it's open, so typing doesn't reach the board.
+        if self.palette.is_some() {
+            return self.palette_key(event, window, cx);
+        }
         // The search field takes its keys first, so shortcuts and card moves don't fire while typing.
         if self.search_focused && self.search_key(event, window, cx) {
             return;
@@ -437,6 +454,9 @@ impl WorkspaceView {
         let modifiers = event.keystroke.modifiers;
         if event.keystroke.key == "f" && (modifiers.control || modifiers.platform) {
             return self.focus_search(window, cx);
+        }
+        if event.keystroke.key == "k" && (modifiers.control || modifiers.platform) {
+            return self.open_palette(cx);
         }
         if self.key_pressed(event, cx) {
             return;
@@ -573,26 +593,11 @@ impl Render for WorkspaceView {
             self.schedule_scroll_restore(window);
         }
         let theme = cx.theme().clone();
-        let header = match self.projects.active() {
-            Some(project) => format!("{} / {}", self.list.active().name(), project.name()),
-            None => self.list.active().name().to_string(),
+        let header = project_header(self, &theme, cx);
+        let body = match self.screen {
+            Some(screen) => screen::render(self, screen, &theme, cx),
+            None => projects::content(self, &theme, cx),
         };
-        let body = projects::content(self, &theme, cx);
-        let team = self.projects.active_id().is_some().then(|| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .child(list_view::switch(self, &theme, cx))
-                .child(export::open_button(&theme, cx))
-                .child(plan_drafts::open_button(&theme, cx))
-                .child(plan_wizard::open_button(&theme, cx))
-                .child(schedule_dialog::open_button(&theme, cx))
-                .child(repo_dialog::open_button(&theme, cx))
-                .child(team_dialog::open_button(&theme, cx))
-                .into_any_element()
-        });
         let delete_dialog = self
             .pending_delete
             .clone()
@@ -633,15 +638,10 @@ impl Render for WorkspaceView {
                     .flex_1()
                     .min_h_0()
                     .child(sidebar::render(self, cx))
-                    .child(main_pane(
-                        header,
-                        team,
-                        body,
-                        panel::render(self, &theme, cx),
-                        &theme,
-                    )),
+                    .child(main_pane(header, body, panel::render(self, &theme, cx))),
             )
             .children(task_dialog::overlay(self, &theme, cx))
+            .children(palette::overlay(self, &theme, cx))
             .children(team_dialog::overlay(self, &theme, cx))
             .children(chat::overlay(self, &theme, window, cx))
             .children(updates::notice(self, &theme, cx))
@@ -659,33 +659,116 @@ impl Render for WorkspaceView {
     }
 }
 
-fn main_pane(
-    header: String,
-    trailing: Option<AnyElement>,
-    body: AnyElement,
-    side: Option<AnyElement>,
+/// The top of the main pane: a breadcrumb and title, the project's counts, New task, and the view
+/// tabs with the project's other actions on the right of the same line.
+fn project_header(
+    view: &WorkspaceView,
     theme: &Theme,
-) -> impl IntoElement {
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    // A workspace screen has its own title, and no project tabs or actions.
+    if let Some(screen) = view.screen {
+        return screen::header(screen, theme);
+    }
+    let workspace = view.list.active().name().to_string();
+    let project = view.projects.active();
+
+    let title = match project {
+        Some(project) => project.name().to_string(),
+        None => workspace.clone(),
+    };
+    let mut left = div()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .truncate()
+                .child(format!("{workspace} / Projects")),
+        )
+        .child(
+            div()
+                .mt(theme.spacing.xs)
+                .text_size(theme.typography.heading)
+                .font_weight(FontWeight::MEDIUM)
+                .truncate()
+                .child(title),
+        );
+    if project.is_some() {
+        let total = view.board.len();
+        let done = view
+            .board
+            .iter()
+            .filter(|task| task.status() == looji_domain::Status::Done)
+            .count();
+        left = left.child(
+            div()
+                .mt(px(2.))
+                .text_size(theme.typography.body)
+                .text_color(theme.palette.text_secondary)
+                .child(format!("{total} tasks · {done} done")),
+        );
+    }
+
+    let top = div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .justify_between()
+        .gap(theme.spacing.md)
+        .child(left)
+        .when(project.is_some(), |top| {
+            top.child(board::new_task_button(theme, cx))
+        });
+
+    let tabs = project.is_some().then(|| {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(theme.spacing.sm)
+            .mt(theme.spacing.md)
+            .border_b_1()
+            .border_color(theme.palette.border)
+            .child(list_view::switch(view, theme, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.spacing.sm)
+                    .pb(theme.spacing.xs)
+                    .child(export::open_button(theme, cx))
+                    .child(plan_drafts::open_button(theme, cx))
+                    .child(plan_wizard::open_button(theme, cx))
+                    .child(schedule_dialog::open_button(theme, cx))
+                    .child(repo_dialog::open_button(theme, cx))
+                    .child(team_dialog::open_button(theme, cx)),
+            )
+    });
+
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .px(theme.spacing.lg)
+        .pt(theme.spacing.md)
+        .child(top)
+        .children(tabs)
+        .into_any_element()
+}
+
+fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .flex_1()
         .min_w_0()
         .h_full()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .h(px(40.))
-                .px(theme.spacing.lg)
-                .border_b_1()
-                .border_color(theme.palette.border)
-                .text_size(theme.typography.title)
-                .child(div().flex_1().min_w_0().truncate().child(header))
-                .children(trailing),
-        )
+        .child(header)
         .child(
             div()
                 .flex()

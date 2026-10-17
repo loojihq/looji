@@ -57,21 +57,8 @@ pub(super) fn render(
                 .flex()
                 .flex_row()
                 .items_center()
-                .justify_between()
-                .gap(theme.spacing.sm)
-                .child(
-                    div()
-                        .text_size(theme.typography.heading)
-                        .child(project.name().to_string()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(theme.spacing.sm)
-                        .child(new_task_button(theme, cx))
-                        .child(column_toggle(project, theme, cx)),
-                ),
+                .justify_end()
+                .child(column_toggle(project, theme, cx)),
         )
         .when_some(drag.keyboard_notice(), |header, text| {
             header.child(
@@ -124,7 +111,7 @@ fn column_view(
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .rounded(theme.radius.md)
+        .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
         .border_1()
         .border_color(theme.palette.border)
@@ -141,12 +128,15 @@ fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
         .h(HEADER_HEIGHT)
         .px(theme.spacing.sm)
         .text_size(theme.typography.body)
-        .child(status_label(column.status))
         .child(
             div()
-                .px(theme.spacing.sm)
-                .rounded(theme.radius.sm)
-                .bg(theme.palette.surface_selected)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.palette.text_primary)
+                .child(status_label(column.status)),
+        )
+        // The count sits on the right as plain text, as in the design, not in a pill.
+        .child(
+            div()
                 .text_size(theme.typography.caption)
                 .text_color(theme.palette.text_secondary)
                 .child(column.count().to_string()),
@@ -669,40 +659,26 @@ fn column_toggle(
     } else {
         "In review column: hidden"
     };
-    div()
-        .id("column-toggle-in-review")
-        .flex_shrink_0()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_secondary)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child(label)
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            this.request_column_visibility(Status::InReview, !shown, cx);
-        }))
+    crate::components::button(
+        "column-toggle-in-review",
+        label,
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        this.request_column_visibility(Status::InReview, !shown, cx);
+    }))
 }
 
 /// The button that starts a new task in the first shown column.
-fn new_task_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("new-task")
-        .flex_shrink_0()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_secondary)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("+ New task")
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-            this.open_task_dialog(Mode::Create, window, cx)
-        }))
+pub(super) fn new_task_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+    crate::components::button(
+        "new-task",
+        "+ New task",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+        this.open_task_dialog(Mode::Create, window, cx)
+    }))
 }

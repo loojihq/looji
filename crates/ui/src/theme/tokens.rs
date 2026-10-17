@@ -6,22 +6,22 @@
 
 /// Dark mode. Soft off-black surfaces avoid the glare of pure black.
 pub mod dark {
-    pub const SURFACE: u32 = 0x282c33;
-    pub const SURFACE_RAISED: u32 = 0x2f343e;
-    pub const SURFACE_HOVER: u32 = 0x363c46;
-    pub const SURFACE_SELECTED: u32 = 0x454a56;
-    pub const SURFACE_ACTIVE: u32 = 0x4b505c;
-    pub const TITLE_BAR: u32 = 0x3b414d;
-    pub const TITLE_BAR_INACTIVE: u32 = 0x2e343e;
+    pub const SURFACE: u32 = 0x262624;
+    pub const SURFACE_RAISED: u32 = 0x1f1e1d;
+    pub const SURFACE_HOVER: u32 = 0x2f2e2c;
+    pub const SURFACE_SELECTED: u32 = 0x3d3c3a;
+    pub const SURFACE_ACTIVE: u32 = 0x4a4946;
+    pub const TITLE_BAR: u32 = 0x1f1e1d;
+    pub const TITLE_BAR_INACTIVE: u32 = 0x1a1918;
     /// Dividers and card edges. Decorative, so it's not held to the 3:1 control rule.
-    pub const BORDER: u32 = 0x464b57;
+    pub const BORDER: u32 = 0x403f3d;
     /// Input, button, and field outlines. Held to 3:1 against their surface.
     pub const BORDER_CONTROL: u32 = 0x9298a5;
-    pub const TEXT_PRIMARY: u32 = 0xdce0e5;
-    pub const TEXT_SECONDARY: u32 = 0xb4bac4;
+    pub const TEXT_PRIMARY: u32 = 0xf0eee6;
+    pub const TEXT_SECONDARY: u32 = 0xb4b2a9;
     /// Exempt from WCAG, but kept readable enough to use.
     pub const TEXT_DISABLED: u32 = 0x9ca0ad;
-    pub const ACCENT: u32 = 0x74ade8;
+    pub const ACCENT: u32 = 0x4a9be6;
     pub const DANGER: u32 = 0xe0878c;
     pub const ON_DANGER: u32 = 0x1b1d22;
     pub const ON_ACCENT: u32 = 0x1b1d22;
@@ -42,18 +42,19 @@ pub mod dark {
 
 /// Light mode. Off-white surfaces avoid the glare of pure white on bright displays.
 pub mod light {
-    pub const SURFACE: u32 = 0xf7f7f8;
-    pub const SURFACE_RAISED: u32 = 0xeeeff1;
-    pub const SURFACE_HOVER: u32 = 0xe4e5e9;
-    pub const SURFACE_SELECTED: u32 = 0xdcdde3;
-    pub const SURFACE_ACTIVE: u32 = 0xd2d4db;
-    pub const TITLE_BAR: u32 = 0xe8e9ec;
-    pub const TITLE_BAR_INACTIVE: u32 = 0xf1f2f4;
-    pub const BORDER: u32 = 0xd6d8de;
-    pub const BORDER_CONTROL: u32 = 0x6b717b;
-    pub const TEXT_PRIMARY: u32 = 0x1f2328;
-    pub const TEXT_SECONDARY: u32 = 0x555a63;
+    pub const SURFACE: u32 = 0xffffff;
+    pub const SURFACE_RAISED: u32 = 0xf6f5f0;
+    pub const SURFACE_HOVER: u32 = 0xecebe6;
+    pub const SURFACE_SELECTED: u32 = 0xe4e3de;
+    pub const SURFACE_ACTIVE: u32 = 0xd9d8d2;
+    pub const TITLE_BAR: u32 = 0xefeee9;
+    pub const TITLE_BAR_INACTIVE: u32 = 0xf6f5f0;
+    pub const BORDER: u32 = 0xe4e3de;
+    pub const BORDER_CONTROL: u32 = 0x6b6a65;
+    pub const TEXT_PRIMARY: u32 = 0x1f1e1d;
+    pub const TEXT_SECONDARY: u32 = 0x5e5d59;
     pub const TEXT_DISABLED: u32 = 0x767b85;
+    /// Slightly deeper than the design's #378ADD, so accent text such as priority markers clears 4.5:1.
     pub const ACCENT: u32 = 0x2f6fd6;
     pub const DANGER: u32 = 0xb42318;
     pub const ON_DANGER: u32 = 0xffffff;
@@ -70,11 +71,11 @@ pub mod light {
     ];
 }
 
-/// Font sizes in pixels. Body text is 14px, the size the sidebar and dialogs use today.
+/// Font sizes in pixels. Body text is 13px, with 11px for metadata, as in the design.
 pub mod typography {
-    pub const CAPTION: f32 = 12.0;
-    pub const BODY: f32 = 14.0;
-    pub const TITLE: f32 = 18.0;
+    pub const CAPTION: f32 = 11.0;
+    pub const BODY: f32 = 13.0;
+    pub const TITLE: f32 = 16.0;
     pub const HEADING: f32 = 20.0;
 }
 
