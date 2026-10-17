@@ -14,6 +14,7 @@ pub mod key_store;
 pub mod models;
 pub mod planning;
 mod provider;
+pub mod review;
 mod sse;
 mod types;
 

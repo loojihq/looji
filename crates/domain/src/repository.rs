@@ -172,3 +172,36 @@ pub trait PlanDraftRepository {
         at: crate::time::Timestamp,
     ) -> RepoResult<Option<crate::plan_draft::PlanDraft>>;
 }
+
+/// The conversations held about a task. A thread belongs to one task, and its messages are kept in the order they
+/// were written.
+pub trait TaskChatRepository {
+    /// Starts an empty thread on the task.
+    fn start_thread(&self, task: TaskId) -> RepoResult<crate::ids::ChatThreadId>;
+    /// The task's threads, oldest first.
+    fn threads(&self, task: TaskId) -> RepoResult<Vec<crate::ids::ChatThreadId>>;
+    /// Adds a message to the end of the thread. `model` is set for assistant messages.
+    fn append_message(
+        &self,
+        thread: crate::ids::ChatThreadId,
+        role: crate::task_chat::MessageRole,
+        content: &str,
+        model: Option<&str>,
+    ) -> RepoResult<()>;
+    /// The thread's messages, in the order they were written.
+    fn messages(
+        &self,
+        thread: crate::ids::ChatThreadId,
+    ) -> RepoResult<Vec<crate::task_chat::ChatMessage>>;
+}
+
+/// The review notes made for a task. Making notes again replaces the earlier ones.
+pub trait ReviewNoteRepository {
+    fn replace_notes(
+        &self,
+        task: TaskId,
+        notes: &[crate::review_note::ReviewNote],
+        model: Option<&str>,
+    ) -> RepoResult<()>;
+    fn notes(&self, task: TaskId) -> RepoResult<Vec<crate::review_note::ReviewNote>>;
+}

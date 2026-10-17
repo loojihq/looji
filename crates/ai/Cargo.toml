@@ -17,4 +17,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 tokio-util = "0.7"
 
 [dev-dependencies]
+looji-persistence.workspace = true
+looji-symbols = { path = "../symbols" }
+tempfile = "3.27.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

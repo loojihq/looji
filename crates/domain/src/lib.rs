@@ -19,12 +19,15 @@ pub mod preferences;
 mod project;
 mod project_view;
 pub mod repository;
+mod retrieval;
+mod review_note;
 mod schedule_draft;
 mod status;
 mod status_columns;
 mod status_visibility;
 mod symbols;
 mod task;
+mod task_chat;
 mod task_event;
 mod task_fields;
 mod task_filter;
@@ -48,6 +51,7 @@ pub use due_calculation::{
 };
 pub use error::{DomainError, RepoError, RepoResult};
 pub use file_tree::{BUILT_IN_IGNORED, EntryKind, TreeNode, build_tree, is_built_in_ignored};
+pub use ids::ChatThreadId;
 pub use ids::PlanDraftId;
 pub use ids::{ActivityId, ColumnId, ProjectId, TaskId, TeamMemberId, WorkspaceId};
 pub use list_view::{ListColumn, ListSort, ListView, SortColumn, SortDirection, ToggleOutcome};
@@ -71,9 +75,15 @@ pub use project::{
 pub use project_view::{ProjectView, ProjectViewState, ScrollOffset, scroll_key};
 pub use repository::{
     CodeSourceRepository, ColumnRepository, ListViewRepository, PlanDraftRepository,
-    ProjectFilterRepository, ProjectRepository, ProjectViewRepository, SettingsRepository,
-    TaskRepository, TeamMemberRepository, WorkspaceRepository,
+    ProjectFilterRepository, ProjectRepository, ProjectViewRepository, ReviewNoteRepository,
+    SettingsRepository, TaskChatRepository, TaskRepository, TeamMemberRepository,
+    WorkspaceRepository,
 };
+pub use retrieval::{
+    DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, estimate_tokens, is_test_path, pack_hunks, score_symbol,
+    task_terms,
+};
+pub use review_note::{NoteKind, ReviewNote};
 pub use schedule_draft::{
     DraftIssue, PREVIEW_COUNT, SAMPLE_ESTIMATE_HOURS, ScheduleDraft, TIME_FORMAT_MESSAGE,
     TimeField, parse_time, preview_due_dates,
@@ -83,6 +93,7 @@ pub use status_columns::{StatusColumn, status_columns};
 pub use status_visibility::{check_hideable, resolve_visible_status, visible_statuses};
 pub use symbols::{Language, Symbol, SymbolKind, sort_symbols};
 pub use task::{Estimate, Task, TaskRecord};
+pub use task_chat::{ChatMessage, MessageRole};
 pub use task_event::{TaskEvent, TaskEventKind, changed_fields};
 pub use task_fields::{
     DueDate, EstimateError, MAX_TAG_CHARS, MAX_TAGS, Priority, TagError, normalize_tag,

@@ -68,3 +68,27 @@ pub async fn run_with(
         "the stream ended before the response finished".to_string(),
     )));
 }
+
+/// The same as `run_with`, but returns the whole reply rather than reporting it as it arrives. For answers that are
+/// only read once they're complete.
+pub async fn complete_with(
+    provider: &dyn ChatProvider,
+    request: ChatRequest,
+    cancel: CancellationToken,
+) -> Result<String, AiError> {
+    let outcome = std::sync::Mutex::new(None);
+    run_with(provider, request, cancel, |update| match update {
+        Update::Finished(text) => {
+            *outcome.lock().expect("the outcome isn't poisoned") = Some(Ok(text))
+        }
+        Update::Failed(err) => {
+            *outcome.lock().expect("the outcome isn't poisoned") = Some(Err(err))
+        }
+        Update::Text(_) => {}
+    })
+    .await;
+    outcome
+        .into_inner()
+        .expect("the outcome isn't poisoned")
+        .unwrap_or(Err(AiError::Cancelled))
+}

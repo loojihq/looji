@@ -120,6 +120,16 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "project_repository",
         sql: include_str!("sql/0023_project_repository.sql"),
     },
+    Migration {
+        version: 24,
+        name: "repo_index",
+        sql: include_str!("sql/0024_repo_index.sql"),
+    },
+    Migration {
+        version: 25,
+        name: "task_chat_and_notes",
+        sql: include_str!("sql/0025_task_chat_and_notes.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -623,5 +633,45 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rows, 0, "a project with no folder connected has no row");
+    }
+
+    #[test]
+    fn a_project_from_before_the_repository_index_keeps_its_data_and_gets_empty_caches() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        migrate(&mut connection, &MIGRATIONS[..23]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO workspaces (id, name, icon_file, created_at, updated_at)
+                     VALUES ('w', 'Work', NULL, 0, 0);
+                 INSERT INTO projects (id, workspace_id, name, description, created_at, updated_at)
+                     VALUES ('p', 'w', 'Website', NULL, 0, 0);",
+            )
+            .unwrap();
+
+        migrate(&mut connection, MIGRATIONS).unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM projects WHERE id = 'p'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Website", "the project is kept");
+        for table in [
+            "index_entries",
+            "index_files",
+            "index_symbols",
+            "task_threads",
+            "task_messages",
+        ] {
+            let rows: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(rows, 0, "{table} starts empty");
+        }
     }
 }
