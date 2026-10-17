@@ -13,7 +13,6 @@ use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken, ChatMessage, ChatRequest,
     generation::{Update, run_request},
-    models::DEFAULT_MODEL,
     planning::{RefineKind, Refinement, build_refinement_prompt, parse_refinement},
 };
 use looji_domain::{
@@ -249,7 +248,7 @@ impl WorkspaceView {
             &dialog.members,
         );
         let request = ChatRequest {
-            model: DEFAULT_MODEL.to_string(),
+            model: super::preferences_panel::plan_model(cx),
             system: None,
             messages: vec![ChatMessage::user(prompt)],
             max_tokens: MAX_TOKENS,
@@ -258,11 +257,16 @@ impl WorkspaceView {
         let cancel = CancellationToken::new();
         let queue = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&queue);
-        let request_future = run_request(request, cancel.clone(), move |update| {
-            if let Ok(mut queue) = sink.lock() {
-                queue.push(update);
-            }
-        });
+        let request_future = run_request(
+            super::preferences_panel::ai_provider(cx),
+            request,
+            cancel.clone(),
+            move |update| {
+                if let Ok(mut queue) = sink.lock() {
+                    queue.push(update);
+                }
+            },
+        );
         // Detached. The reader below is what waits for it, and cancelling stops it.
         drop(looji_ai::runtime().spawn(request_future));
 

@@ -7,7 +7,7 @@ use gpui::{prelude::*, *};
 use looji_domain::{ReportItem, Timestamp, group_by_status};
 use looji_report::{ReportInput, ReportKind, write_report};
 
-use super::{WorkspaceView, panel::format_time, task_dialog::button};
+use super::{WorkspaceView, panel::format_time};
 use crate::theme::Theme;
 
 impl WorkspaceView {
@@ -108,8 +108,14 @@ fn documents_folder() -> PathBuf {
 
 /// The export button in the header, drawn while a project is selected.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    button("export-report", "Export PDF", false, theme)
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.export_report(cx)))
+    crate::components::button_icon(
+        "export-report",
+        "file-text",
+        "Export PDF",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.export_report(cx)))
 }
 
 #[cfg(test)]

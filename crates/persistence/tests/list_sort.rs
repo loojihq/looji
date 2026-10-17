@@ -33,13 +33,13 @@ fn project(store: &SqliteStore) -> Project {
 /// so ties are common, and some due dates are empty.
 fn seed(store: &SqliteStore, project: &Project, count: usize) -> HashMap<TeamMemberId, String> {
     let dana = TeamMember::new(
-        project.id(),
+        project.workspace_id(),
         "Dana",
         looji_domain::MemberColour::for_new_member(0),
     )
     .unwrap();
     let ana = TeamMember::new(
-        project.id(),
+        project.workspace_id(),
         "Ana",
         looji_domain::MemberColour::for_new_member(1),
     )

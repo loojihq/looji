@@ -4,7 +4,7 @@
 use looji_domain::{
     DraftState, Estimate, MemberColour, PlanDraft, PlanDraftId, PlanDraftRepository, PlanEdit,
     PlanStory, PlanTask, Priority, Project, ProjectId, ProjectRepository, RepoError, TeamMember,
-    TeamMemberId, TeamMemberRepository, Timestamp, Workspace, WorkspaceRepository,
+    TeamMemberId, TeamMemberRepository, Timestamp, Workspace, WorkspaceId, WorkspaceRepository,
 };
 use looji_persistence::SqliteStore;
 use tempfile::TempDir;
@@ -12,7 +12,7 @@ use tempfile::TempDir;
 struct Fixture {
     dir: TempDir,
     project: ProjectId,
-    other_project: ProjectId,
+    other_workspace: WorkspaceId,
     alex: TeamMemberId,
 }
 
@@ -26,7 +26,8 @@ fn at(millis: i64) -> Timestamp {
     Timestamp::from_unix_millis(millis)
 }
 
-/// A file database with two projects in one workspace, and one team member on the first.
+/// A file database with a project in one workspace, a project in another, and one team member in the
+/// first workspace.
 fn fixture() -> Fixture {
     let dir = TempDir::new().unwrap();
     let store = SqliteStore::open(&dir.path().join("looji.db")).unwrap();
@@ -34,14 +35,21 @@ fn fixture() -> Fixture {
     WorkspaceRepository::save(&store, &workspace).unwrap();
     let project = Project::new(workspace.id(), "looji").unwrap();
     ProjectRepository::save(&store, &project).unwrap();
-    let other = Project::new(workspace.id(), "elsewhere").unwrap();
+    let elsewhere = Workspace::new("Elsewhere").unwrap();
+    WorkspaceRepository::save(&store, &elsewhere).unwrap();
+    let other = Project::new(elsewhere.id(), "elsewhere").unwrap();
     ProjectRepository::save(&store, &other).unwrap();
-    let alex = TeamMember::new(project.id(), "Alex Kim", MemberColour::for_new_member(0)).unwrap();
+    let alex = TeamMember::new(
+        project.workspace_id(),
+        "Alex Kim",
+        MemberColour::for_new_member(0),
+    )
+    .unwrap();
     TeamMemberRepository::save(&store, &alex).unwrap();
     Fixture {
         dir,
         project: project.id(),
-        other_project: other.id(),
+        other_workspace: elsewhere.id(),
         alex: alex.id(),
     }
 }
@@ -230,8 +238,12 @@ fn removing_the_team_member_clears_the_assignment_on_the_draft() {
 #[test]
 fn a_member_of_another_project_cannot_be_assigned() {
     let fx = fixture();
-    let outsider =
-        TeamMember::new(fx.other_project, "Sam Lee", MemberColour::for_new_member(0)).unwrap();
+    let outsider = TeamMember::new(
+        fx.other_workspace,
+        "Sam Lee",
+        MemberColour::for_new_member(0),
+    )
+    .unwrap();
     let store = fx.open();
     TeamMemberRepository::save(&store, &outsider).unwrap();
     let draft = ready_draft(&fx, &store, vec![task("One")]);

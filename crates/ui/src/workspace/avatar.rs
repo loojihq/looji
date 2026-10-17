@@ -9,12 +9,21 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::{AvatarColors, Theme};
 
-pub const AVATAR_SIZE: Pixels = px(28.);
-
-/// Renders the icon if it's set and its file exists. If the file is missing or fails to load,
-/// renders the initial instead.
-pub fn render(workspace: &Workspace, icons_dir: &Path, theme: &Theme) -> impl IntoElement {
-    let initial = initial_avatar(workspace.id(), workspace.name(), theme);
+/// Renders the workspace's icon at `size`, if it's set and its file exists. If the file is missing or
+/// fails to load, renders the initial instead. The initial's text scales with `size`, so the letter
+/// sits at the same proportion in every avatar.
+pub fn render(
+    workspace: &Workspace,
+    icons_dir: &Path,
+    size: Pixels,
+    theme: &Theme,
+) -> impl IntoElement {
+    let initial = avatar_with(
+        workspace.id(),
+        workspace.name(),
+        size,
+        &theme.palette.avatars,
+    );
     let icon = workspace
         .icon_file()
         .map(|file| icon_path(icons_dir, file))
@@ -28,32 +37,33 @@ pub fn render(workspace: &Workspace, icons_dir: &Path, theme: &Theme) -> impl In
                 theme.palette.avatars,
             );
             img(path)
-                .size(AVATAR_SIZE)
+                .size(size)
                 .rounded_full()
                 .object_fit(ObjectFit::Cover)
-                .with_fallback(move || avatar_with(id, &name, &colors))
+                .with_fallback(move || avatar_with(id, &name, size, &colors))
                 .into_any_element()
         }
         None => initial,
     }
 }
 
-fn initial_avatar(id: WorkspaceId, name: &str, theme: &Theme) -> AnyElement {
-    avatar_with(id, name, &theme.palette.avatars)
-}
-
-fn avatar_with(id: WorkspaceId, name: &str, colors: &[AvatarColors; 6]) -> AnyElement {
+fn avatar_with(
+    id: WorkspaceId,
+    name: &str,
+    size: Pixels,
+    colors: &[AvatarColors; 6],
+) -> AnyElement {
     let pair = colors[palette_index(id, colors.len())];
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .size(AVATAR_SIZE)
+        .size(size)
         .rounded_full()
         .bg(pair.background)
         .text_color(pair.text)
-        .text_sm()
+        .text_size(size * 0.42)
         .child(initial(name))
         .into_any_element()
 }

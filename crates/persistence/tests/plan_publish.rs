@@ -37,7 +37,12 @@ fn fixture() -> Fixture {
     WorkspaceRepository::save(&store, &workspace).unwrap();
     let project = Project::new(workspace.id(), "looji").unwrap();
     ProjectRepository::save(&store, &project).unwrap();
-    let alex = TeamMember::new(project.id(), "Alex Kim", MemberColour::for_new_member(0)).unwrap();
+    let alex = TeamMember::new(
+        project.workspace_id(),
+        "Alex Kim",
+        MemberColour::for_new_member(0),
+    )
+    .unwrap();
     TeamMemberRepository::save(&store, &alex).unwrap();
     Fixture {
         dir,
@@ -106,7 +111,7 @@ fn publishing_creates_a_backlog_task_for_each_draft_task_and_marks_the_draft_pub
 
     let publication = {
         let store = fx.open();
-        PlanDraftRepository::publish(&store, id, at(10))
+        PlanDraftRepository::publish(&store, id, at(10), Status::Backlog)
             .unwrap()
             .unwrap()
     };
@@ -151,7 +156,7 @@ fn a_title_the_project_already_has_is_skipped_ignoring_case_and_the_counts_agree
 
     let publication = {
         let store = fx.open();
-        PlanDraftRepository::publish(&store, id, at(10))
+        PlanDraftRepository::publish(&store, id, at(10), Status::Backlog)
             .unwrap()
             .unwrap()
     };
@@ -180,7 +185,7 @@ fn published_tasks_go_after_the_backlog_tasks_already_there_in_plan_order() {
 
     {
         let store = fx.open();
-        PlanDraftRepository::publish(&store, id, at(10)).unwrap();
+        PlanDraftRepository::publish(&store, id, at(10), Status::Backlog).unwrap();
     }
 
     assert_eq!(
@@ -214,7 +219,7 @@ fn a_failure_partway_through_rolls_back_every_insert_and_leaves_the_draft_unpubl
     let before = backlog_titles(&fx.open(), fx.project);
 
     let store = fx.open();
-    let result = PlanDraftRepository::publish(&store, id, at(10));
+    let result = PlanDraftRepository::publish(&store, id, at(10), Status::Backlog);
 
     assert!(matches!(result, Err(RepoError::Storage(_))), "{result:?}");
     assert_eq!(
@@ -240,12 +245,12 @@ fn publishing_twice_is_refused_and_writes_nothing_the_second_time() {
     };
     {
         let store = fx.open();
-        PlanDraftRepository::publish(&store, id, at(10)).unwrap();
+        PlanDraftRepository::publish(&store, id, at(10), Status::Backlog).unwrap();
     }
     let after_first = backlog_titles(&fx.open(), fx.project);
 
     let store = fx.open();
-    let second = PlanDraftRepository::publish(&store, id, at(11));
+    let second = PlanDraftRepository::publish(&store, id, at(11), Status::Backlog);
 
     assert!(
         matches!(
@@ -268,7 +273,7 @@ fn a_published_plan_refuses_edits() {
     };
     {
         let store = fx.open();
-        PlanDraftRepository::publish(&store, id, at(10)).unwrap();
+        PlanDraftRepository::publish(&store, id, at(10), Status::Backlog).unwrap();
     }
 
     let store = fx.open();
@@ -290,7 +295,7 @@ fn publishing_a_draft_that_doesnt_exist_finds_nothing() {
     let fx = fixture();
     let store = fx.open();
     assert_eq!(
-        PlanDraftRepository::publish(&store, PlanDraftId::new(), at(10)).unwrap(),
+        PlanDraftRepository::publish(&store, PlanDraftId::new(), at(10), Status::Backlog).unwrap(),
         None
     );
 }

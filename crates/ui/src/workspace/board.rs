@@ -52,27 +52,6 @@ pub(super) fn render(
         .min_h_0()
         .p(theme.spacing.lg)
         .gap(theme.spacing.md)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap(theme.spacing.sm)
-                .child(
-                    div()
-                        .text_size(theme.typography.heading)
-                        .child(project.name().to_string()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(theme.spacing.sm)
-                        .child(new_task_button(theme, cx))
-                        .child(column_toggle(project, theme, cx)),
-                ),
-        )
         .when_some(drag.keyboard_notice(), |header, text| {
             header.child(
                 div()
@@ -124,7 +103,7 @@ fn column_view(
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .rounded(theme.radius.md)
+        .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
         .border_1()
         .border_color(theme.palette.border)
@@ -141,12 +120,15 @@ fn header(column: &StatusColumn<'_>, theme: &Theme) -> impl IntoElement {
         .h(HEADER_HEIGHT)
         .px(theme.spacing.sm)
         .text_size(theme.typography.body)
-        .child(status_label(column.status))
         .child(
             div()
-                .px(theme.spacing.sm)
-                .rounded(theme.radius.sm)
-                .bg(theme.palette.surface_selected)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.palette.text_primary)
+                .child(status_label(column.status)),
+        )
+        // The count sits on the right as plain text, as in the design, not in a pill.
+        .child(
+            div()
                 .text_size(theme.typography.caption)
                 .text_color(theme.palette.text_secondary)
                 .child(column.count().to_string()),
@@ -657,52 +639,146 @@ impl WorkspaceView {
     }
 }
 
-/// The toggle for the optional In review column. Hiding a column that has tasks asks first.
-fn column_toggle(
+/// The Columns control: a button that opens a menu with a checkbox for each column. Backlog and In review can be
+/// hidden, and their tasks move to the nearest shown column. To Do, In progress and Done are always shown.
+pub(super) fn columns_button(
+    view: &WorkspaceView,
+    project: &Project,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let trigger = crate::components::button_icon(
+        "columns-menu-toggle",
+        "layout-kanban",
+        "Columns",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_board_columns_menu(cx)));
+    // Presses on the button and its menu stay with them, so the header doesn't close the menu first.
+    let mut item = div()
+        .relative()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(trigger);
+    if view.board_columns_open {
+        item = item.child(deferred(columns_menu(project, theme, cx)).with_priority(1));
+    }
+    item.into_any_element()
+}
+
+/// The menu under the Columns button: a checkbox for each column, and what can be hidden.
+fn columns_menu(
     project: &Project,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let shown = project.is_status_visible(Status::InReview);
-    let label = if shown {
-        "In review column: shown"
-    } else {
-        "In review column: hidden"
-    };
+    let mut rows = div().flex().flex_col().gap(px(2.));
+    for (index, status) in Status::ALL.into_iter().enumerate() {
+        let shown = project.is_status_visible(status);
+        let optional = matches!(status, Status::Backlog | Status::InReview);
+        let row = div()
+            .id(("column-option", index as u64))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.spacing.sm)
+            .px(theme.spacing.sm)
+            .py(theme.spacing.xs)
+            .rounded(theme.radius.md)
+            .child(crate::components::checkbox(shown, theme))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(status_label(status)),
+            );
+        let row = if optional {
+            row.cursor_pointer()
+                .text_color(theme.palette.text_primary)
+                .hover(|style| style.bg(theme.palette.surface_hover))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.toggle_column(status, !shown, cx)
+                }))
+        } else {
+            row.text_color(theme.palette.text_secondary)
+        };
+        rows = rows.child(row);
+    }
     div()
-        .id("column-toggle-in-review")
-        .flex_shrink_0()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
+        .id("columns-menu")
+        .absolute()
+        .text_size(theme.typography.body)
+        .top(px(36.))
+        .right_0()
+        .w(px(248.))
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .p(theme.spacing.sm)
+        .rounded(theme.radius.lg)
+        .bg(theme.palette.surface)
         .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_secondary)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child(label)
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            this.request_column_visibility(Status::InReview, !shown, cx);
-        }))
+        .border_color(theme.palette.border)
+        .shadow(theme.elevation.overlay.clone())
+        .occlude()
+        .child(
+            div()
+                .px(theme.spacing.sm)
+                .pt(theme.spacing.xs)
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child("Board columns"),
+        )
+        .child(rows)
+        .child(
+            div()
+                .px(theme.spacing.sm)
+                .pb(theme.spacing.xs)
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(
+                    "To do, In progress and Done are always shown. Backlog and In review can be hidden; their tasks move to the nearest shown column.",
+                ),
+        )
 }
 
-/// The button that starts a new task in the first shown column.
-fn new_task_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("new-task")
-        .flex_shrink_0()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_secondary)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("+ New task")
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-            this.open_task_dialog(Mode::Create, window, cx)
-        }))
+/// The button that starts a new task in the first shown column. It becomes Cancel while the form is open.
+pub(super) fn new_task_button(
+    view: &WorkspaceView,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    let creating = view
+        .task_dialog
+        .as_ref()
+        .is_some_and(|dialog| matches!(dialog.form.mode, Mode::Create));
+    let (icon_name, label) = if creating {
+        ("x", "Cancel")
+    } else {
+        ("plus", "New task")
+    };
+    crate::components::button_icon(
+        "new-task",
+        icon_name,
+        label,
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+        this.open_task_dialog(Mode::Create, window, cx)
+    }))
+}
+
+impl WorkspaceView {
+    /// Opens or closes the Columns menu.
+    pub(super) fn toggle_board_columns_menu(&mut self, cx: &mut Context<Self>) {
+        self.board_columns_open = !self.board_columns_open;
+        cx.notify();
+    }
+
+    /// Shows or hides a column from the Columns menu. The menu stays open, so several columns can be changed.
+    fn toggle_column(&mut self, status: Status, visible: bool, cx: &mut Context<Self>) {
+        self.request_column_visibility(status, visible, cx);
+    }
 }

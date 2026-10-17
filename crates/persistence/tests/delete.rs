@@ -36,8 +36,12 @@ fn seed(store: &SqliteStore, name: &str) -> Seeded {
 
         let mut task = Task::new(project.id(), "Write it", Status::Todo, position("a0")).unwrap();
         if index == 0 {
-            let member =
-                TeamMember::new(project.id(), "Dana", MemberColour::for_new_member(0)).unwrap();
+            let member = TeamMember::new(
+                project.workspace_id(),
+                "Dana",
+                MemberColour::for_new_member(0),
+            )
+            .unwrap();
             TeamMemberRepository::save(store, &member).unwrap();
             task.assign(Some(member.id()));
         }
@@ -138,8 +142,7 @@ fn deleting_a_workspace_removes_every_row_it_owns() {
     assert_eq!(
         count_where(
             &connection,
-            "SELECT COUNT(*) FROM team_members
-             WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+            "SELECT COUNT(*) FROM team_members WHERE workspace_id = ?1",
             &key
         ),
         0

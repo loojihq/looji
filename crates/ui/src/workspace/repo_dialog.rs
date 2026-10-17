@@ -66,12 +66,16 @@ impl WorkspaceView {
             return;
         };
         self.repo_dialog = Some(RepoDialog::new(project));
+        let main = cx.entity();
+        cx.defer(move |cx| {
+            super::dialog_window::open(cx, main, super::dialog_window::Kind::Repository)
+        });
         self.refresh_code_source(cx);
         self.focus_handle.focus(window);
         cx.notify();
     }
 
-    fn close_repo_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_repo_dialog(&mut self, cx: &mut Context<Self>) {
         self.repo_dialog = None;
         cx.notify();
     }
@@ -385,22 +389,18 @@ impl WorkspaceView {
 
 /// The repository button in the header. It's drawn only while a project is selected.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("repo-open")
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("Repository")
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_repo_dialog(window, cx)))
+    crate::components::button_icon(
+        "repo-open",
+        "git-branch",
+        "Repository",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_repo_dialog(window, cx)))
 }
 
 /// The repository dialog, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
@@ -451,15 +451,10 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(460.))
+        .w_full()
         .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(div().text_size(theme.typography.title).child("Repository"))
         .child(
             div()
                 .text_size(theme.typography.caption)
@@ -514,25 +509,7 @@ pub(super) fn overlay(
             ),
         );
 
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .child(
-                div()
-                    .id("repo-backdrop")
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.palette.scrim)
-                    .occlude()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_repo_dialog(cx)))
-                    .child(panel),
-            )
-            .into_any_element(),
-    )
+    Some(panel.into_any_element())
 }
 
 /// The status as a small labelled badge.

@@ -31,7 +31,7 @@ fn project(store: &SqliteStore) -> Project {
 /// Seeds `count` tasks with varied fields. Positions are unique and sort in creation order.
 fn seed(store: &SqliteStore, project: &Project, count: usize) -> Vec<Task> {
     let member = TeamMember::new(
-        project.id(),
+        project.workspace_id(),
         "Dana",
         looji_domain::MemberColour::for_new_member(0),
     )

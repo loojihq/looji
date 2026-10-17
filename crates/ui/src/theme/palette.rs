@@ -41,6 +41,9 @@ pub struct Palette {
     pub avatars: [AvatarColors; 6],
     /// Shadow colour used by the dialog elevation.
     pub shadow: Hsla,
+    /// The close button's hover fill and its glyph, as Windows draws them on the title bar.
+    pub caption_close: Hsla,
+    pub on_caption_close: Hsla,
 }
 
 impl Palette {
@@ -73,6 +76,8 @@ impl Palette {
             on_accent: rgb(t::ON_ACCENT).into(),
             avatars: avatars(t::AVATARS),
             shadow: black().opacity(t::SHADOW_ALPHA),
+            caption_close: rgb(t::CAPTION_CLOSE).into(),
+            on_caption_close: rgb(t::ON_CAPTION_CLOSE).into(),
         }
     }
 
@@ -98,6 +103,8 @@ impl Palette {
             on_accent: rgb(t::ON_ACCENT).into(),
             avatars: avatars(t::AVATARS),
             shadow: black().opacity(t::SHADOW_ALPHA),
+            caption_close: rgb(t::CAPTION_CLOSE).into(),
+            on_caption_close: rgb(t::ON_CAPTION_CLOSE).into(),
         }
     }
 }

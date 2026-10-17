@@ -169,13 +169,18 @@ The rest of the plan, for context only:\n\
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
-    use looji_domain::{MemberColour, Priority, ProjectId, TeamMember};
+    use looji_domain::{MemberColour, Priority, TeamMember, WorkspaceId};
 
     use super::{PLAN_FIELDS, STORY_FIELDS, TASK_FIELDS, build_prompt};
     use crate::planning::parse::{RawPlan, read_reply};
 
     fn member(name: &str, index: usize) -> TeamMember {
-        TeamMember::new(ProjectId::new(), name, MemberColour::for_new_member(index)).unwrap()
+        TeamMember::new(
+            WorkspaceId::new(),
+            name,
+            MemberColour::for_new_member(index),
+        )
+        .unwrap()
     }
 
     /// An object with every field the prompt names, built from those names. The parser must accept it, so the

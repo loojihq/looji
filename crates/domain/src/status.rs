@@ -23,13 +23,8 @@ impl Status {
         Status::Done,
     ];
 
-    /// The four statuses the board always shows. A project can't hide these.
-    pub const DEFAULTS: [Status; 4] = [
-        Status::Backlog,
-        Status::Todo,
-        Status::InProgress,
-        Status::Done,
-    ];
+    /// The three statuses the board always shows. A project can't hide these.
+    pub const DEFAULTS: [Status; 3] = [Status::Todo, Status::InProgress, Status::Done];
 
     /// Whether this is one of the four statuses that can never be hidden.
     pub fn is_default(self) -> bool {
@@ -65,19 +60,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_defaults_are_the_four_that_are_never_hidden() {
-        assert_eq!(Status::DEFAULTS.len(), 4);
+    fn the_defaults_are_the_three_that_are_never_hidden() {
+        assert_eq!(Status::DEFAULTS.len(), 3);
         assert!(Status::DEFAULTS.iter().all(|status| status.is_default()));
         assert!(!Status::InReview.is_default());
+        assert!(!Status::Backlog.is_default());
     }
 
     #[test]
-    fn every_status_is_a_default_or_the_one_optional_status() {
+    fn every_status_is_a_default_or_an_optional_one() {
         let optional: Vec<Status> = Status::ALL
             .into_iter()
             .filter(|status| !status.is_default())
             .collect();
-        assert_eq!(optional, vec![Status::InReview]);
+        assert_eq!(optional, vec![Status::Backlog, Status::InReview]);
     }
 
     #[test]

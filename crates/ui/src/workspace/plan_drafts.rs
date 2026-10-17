@@ -56,6 +56,10 @@ impl WorkspaceView {
         let Some(project) = self.projects.active_id() else {
             return;
         };
+        let main = cx.entity();
+        cx.defer(move |cx| {
+            super::dialog_window::open(cx, main, super::dialog_window::Kind::Drafts)
+        });
         self.plan_drafts = Some(PlanDraftsDialog {
             project,
             drafts: Vec::new(),
@@ -200,8 +204,14 @@ impl WorkspaceView {
 
 /// The Drafts button in the header.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    button("plan-drafts-open", "Drafts", false, theme)
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_plan_drafts(cx)))
+    crate::components::button_icon(
+        "plan-drafts-open",
+        "copy",
+        "Drafts",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_plan_drafts(cx)))
 }
 
 /// One draft's row: its title, state, and update time, and the actions it offers.
@@ -280,15 +290,21 @@ fn row(
         )
     };
 
+    // A card as in the design: a medium-weight title, the state line under it, and the actions last.
     let mut column = div()
         .flex()
         .flex_col()
         .gap(theme.spacing.xs)
-        .p(theme.spacing.sm)
-        .rounded(theme.radius.md)
+        .px(theme.spacing.md)
+        .py(theme.spacing.sm)
+        .rounded(theme.radius.lg)
         .border_1()
-        .border_color(theme.palette.border_control)
-        .child(div().child(draft.title()))
+        .border_color(theme.palette.border)
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .child(draft.title().to_string()),
+        )
         .child(
             div()
                 .text_size(theme.typography.caption)
@@ -311,7 +327,7 @@ fn row(
 }
 
 /// The list, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
@@ -377,18 +393,5 @@ pub(super) fn overlay(
                 ),
             ));
 
-    Some(
-        div()
-            .id("plan-drafts-backdrop")
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.palette.scrim)
-            .occlude()
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_plan_drafts(cx)))
-            .child(panel)
-            .into_any_element(),
-    )
+    Some(panel.into_any_element())
 }

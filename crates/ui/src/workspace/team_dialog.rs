@@ -1,13 +1,13 @@
-//! The team dialog: a project's members, with add, rename, and remove. It opens from the Team button
-//! in the header and owns the keyboard while it's open.
+//! The team dialog: a workspace's members, with add, rename, and remove. It opens from the Team section
+//! of the workspace screen and owns the keyboard while it's open.
 //!
 //! Removing a member unassigns its tasks and never deletes them. The confirmation says how many tasks
 //! that is, and Cancel is the default.
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, MemberColour, ProjectId, RepoError, TeamMember, TeamMemberId,
-    TeamMemberRepository, validate_member_name,
+    DomainError, MemberColour, RepoError, TeamMember, TeamMemberId, TeamMemberRepository,
+    WorkspaceId, validate_member_name,
 };
 
 use super::card::tooltip;
@@ -15,7 +15,7 @@ use super::fields::{member_mark, text_box};
 use super::members::{self, Entry};
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use crate::{components, theme::Theme};
 
 /// A member being renamed, with the name typed so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub(super) struct Removal {
 /// An open team dialog. The members themselves are on the view, so they stay current.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TeamDialog {
-    pub project: ProjectId,
+    pub workspace: WorkspaceId,
     /// The name typed for a new member.
     pub adding: String,
     pub add_error: Option<String>,
@@ -47,9 +47,9 @@ pub(super) struct TeamDialog {
 }
 
 impl TeamDialog {
-    fn new(project: ProjectId) -> Self {
+    fn new(workspace: WorkspaceId) -> Self {
         Self {
-            project,
+            workspace,
             adding: String::new(),
             add_error: None,
             renaming: None,
@@ -69,13 +69,15 @@ fn name_message(err: &DomainError) -> String {
 }
 
 impl WorkspaceView {
-    /// Opens the team dialog for the selected project. Nothing opens when no project is selected.
-    pub(super) fn open_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active_id() else {
+    /// Opens the team dialog for the active workspace.
+    pub(super) fn open_team_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.team_dialog.is_some() {
             return;
-        };
-        self.team_dialog = Some(TeamDialog::new(project));
-        self.focus_handle.focus(window);
+        }
+        // The team editor shows inline in the workspace screen's Team card. Only one inline form is open at
+        // a time, so the project form closes.
+        self.project_dialog = None;
+        self.team_dialog = Some(TeamDialog::new(self.list.active_workspace_id()));
         cx.notify();
     }
 
@@ -84,17 +86,15 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Reloads the selected project's members. Cards, the detail panel, and the task dialog read the
+    /// Reloads the active workspace's members. Cards, the detail panel, and the task dialog read the
     /// list when they draw, so this is all a change to the team needs.
     pub(super) fn reload_members(&mut self, cx: &mut Context<Self>) {
-        self.members = match self.projects.active_id() {
-            Some(project) => TeamMemberRepository::list_for_project(store(cx), project)
-                .unwrap_or_else(|err| {
-                    self.status = Some(format!("Could not load the team: {err}"));
-                    Vec::new()
-                }),
-            None => Vec::new(),
-        };
+        let workspace = self.list.active_workspace_id();
+        self.members = TeamMemberRepository::list_for_workspace(store(cx), workspace)
+            .unwrap_or_else(|err| {
+                self.status = Some(format!("Could not load the team: {err}"));
+                Vec::new()
+            });
     }
 
     /// Keys while the dialog is open. A confirmation or a rename takes the keys first, then the add
@@ -166,9 +166,9 @@ impl WorkspaceView {
         let Some(dialog) = self.team_dialog.as_ref() else {
             return;
         };
-        let (project, name) = (dialog.project, dialog.adding.clone());
+        let (workspace, name) = (dialog.workspace, dialog.adding.clone());
         let colour = MemberColour::for_new_member(self.members.len());
-        let member = match TeamMember::new(project, &name, colour) {
+        let member = match TeamMember::new(workspace, &name, colour) {
             Ok(member) => member,
             Err(err) => {
                 return self.set_add_error(name_message(&err), cx);
@@ -353,43 +353,22 @@ impl WorkspaceView {
     }
 }
 
-/// The team button in the header. It's drawn only while a project is selected.
-pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("team-open")
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("Team")
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_team_dialog(window, cx)))
-}
-
-/// The team dialog, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+/// The team editor's body: the members, their rename and remove, and the add field. It fills the
+/// workspace screen's Team card. Nothing is drawn when it isn't open.
+pub(super) fn inline(
     view: &WorkspaceView,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.team_dialog.as_ref()?;
-    let project = view
-        .projects
-        .active()
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
     let entries = members::entries(&view.members);
 
     let mut list = div().flex().flex_col().gap(theme.spacing.xs);
     if entries.is_empty() {
-        list = list.child(
-            div()
-                .text_color(theme.palette.text_secondary)
-                .child("No one is on this team yet. Add the people who work on this project."),
-        );
+        list =
+            list.child(div().text_color(theme.palette.text_secondary).child(
+                "No one is on this team yet. Add the people who work across this workspace.",
+            ));
     }
     for (index, entry) in entries.iter().enumerate() {
         list = list.child(member_row(index, entry, dialog, theme, cx));
@@ -427,61 +406,33 @@ pub(super) fn overlay(
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_team_member(cx))),
         );
 
-    let panel =
-        div()
-            .id("team-panel")
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.md)
-            .w(px(460.))
-            .max_h(px(560.))
-            .p(theme.spacing.lg)
-            .rounded(theme.radius.lg)
-            .bg(theme.palette.surface_raised)
-            .shadow(theme.elevation.overlay.clone())
-            .border_1()
-            .border_color(theme.palette.border)
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .child(div().text_size(theme.typography.title).child("Team"))
-            .child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child(format!("Members of {project}")),
-            )
-            .child(list)
-            .child(add_row)
-            .when_some(dialog.add_error.clone(), |panel, message| {
-                panel.child(error_text(message, theme))
-            })
-            .when_some(dialog.error.clone(), |panel, message| {
-                panel.child(error_text(message, theme))
-            })
-            .child(div().flex().flex_row().justify_end().child(
-                button("team-done", "Done", false, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.close_team_dialog(cx)),
-                ),
-            ));
+    let add_section = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(components::section_label("Add someone", theme))
+        .child(add_row)
+        .children(
+            dialog
+                .add_error
+                .clone()
+                .map(|message| error_text(message, theme)),
+        )
+        .children(
+            dialog
+                .error
+                .clone()
+                .map(|message| error_text(message, theme)),
+        );
 
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .child(
-                div()
-                    .id("team-backdrop")
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.palette.scrim)
-                    .occlude()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_team_dialog(cx)))
-                    .child(panel),
-            )
-            .into_any_element(),
-    )
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.lg)
+        .child(list)
+        .child(add_section);
+
+    Some(body.into_any_element())
 }
 
 /// One member: a row with their mark and name, or the rename field, or the removal confirmation.

@@ -8,7 +8,9 @@ mod card;
 mod chat;
 mod chat_render;
 mod columns;
+mod date_picker;
 mod delete;
+mod dialog_window;
 mod drag;
 mod dragging;
 mod export;
@@ -19,8 +21,10 @@ mod landing;
 mod layout;
 mod list_view;
 mod markdown;
+mod markdown_view;
 mod members;
 mod moves;
+mod palette;
 mod panel;
 mod plan_drafts;
 mod plan_refine;
@@ -35,9 +39,11 @@ mod repo_dialog;
 mod roadmap;
 mod roadmap_layout;
 mod schedule_dialog;
+mod screen;
 mod search;
 mod sidebar;
 mod state;
+mod switcher;
 mod task_dialog;
 mod task_edit;
 mod task_editors;
@@ -46,6 +52,7 @@ mod team_dialog;
 mod tour;
 mod updates;
 mod workload_view;
+mod workspace_setup;
 
 use delete::PendingDelete;
 use project_state::ProjectList;
@@ -64,7 +71,7 @@ use crate::{
     APP_NAME,
     database::AppDatabase,
     theme::{ActiveTheme, Theme},
-    title_bar::TitleBar,
+    title_bar::{SidebarHead, TitleBar},
 };
 
 const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1280.), px(800.));
@@ -97,8 +104,6 @@ pub struct WorkspaceView {
     members: Vec<TeamMember>,
     /// The create-project dialog, while it's open.
     project_dialog: Option<ProjectDialog>,
-    /// A column hide waiting for confirmation.
-    pending_column: Option<columns::PendingColumn>,
     /// The card drag in progress, and the last drag's outcome.
     drag: dragging::DragSession,
     /// The create or edit task dialog, while it's open.
@@ -167,8 +172,21 @@ pub struct WorkspaceView {
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
+    /// Whether the Columns menu is open on the project header.
+    board_columns_open: bool,
+    /// The calendar open under a date field, in the task form or the planning window.
+    open_calendar: Option<date_picker::Calendar>,
+    /// Whether the Preferences window is open.
+    preferences_open: bool,
     /// One focus handle for each control in the filter bar, in tab order.
     filter_focus: Vec<FocusHandle>,
+    /// The command palette, while it's open.
+    palette: Option<palette::PaletteState>,
+    /// The workspace screen in place of a board, if one is open, and the tasks it gathered.
+    screen: Option<screen::Screen>,
+    screen_entries: Vec<screen::Entry>,
+    /// Whether the workspace switcher's menu is open.
+    workspace_menu: bool,
 }
 
 impl WorkspaceView {
@@ -185,7 +203,6 @@ impl WorkspaceView {
                     board: Vec::new(),
                     members: Vec::new(),
                     project_dialog: None,
-                    pending_column: None,
                     drag: dragging::DragSession::default(),
                     task_dialog: None,
                     team_dialog: None,
@@ -233,11 +250,19 @@ impl WorkspaceView {
                     quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
+                    board_columns_open: false,
+                    open_calendar: None,
+                    preferences_open: false,
+                    palette: None,
+                    screen: None,
+                    screen_entries: Vec::new(),
+                    workspace_menu: false,
                     filter_focus: (0..filter_bar::CONTROL_COUNT)
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
                 };
                 view.reload_projects(cx);
+                view.gather_screen_tasks(cx);
                 view.start_update_checks(cx);
                 view.start_tour_if_new(cx);
                 view
@@ -268,6 +293,8 @@ impl WorkspaceView {
                 // The project being left keeps its view and scroll, saved before the switch.
                 self.save_project_view(cx);
                 self.list.set_active(id);
+                // A screen belongs to the workspace it was opened in.
+                self.screen = None;
                 // The previous workspace's project must not stay selected.
                 self.reload_projects(cx);
             }
@@ -285,7 +312,11 @@ impl WorkspaceView {
                 let id = workspace.id();
                 self.list.push(workspace);
                 self.status = None;
+                // Make the new workspace the active one first, so its name is the one being edited.
+                self.switch_to(id, cx);
                 self.begin_rename(id, window, cx);
+                // The new workspace's own screen holds the name field and the next steps.
+                self.open_screen(screen::Screen::Workspace, cx);
             }
             Err(err) => {
                 self.status = Some(format!("Could not create a workspace: {err}"));
@@ -427,6 +458,13 @@ impl WorkspaceView {
         if self.tour.is_some() {
             return self.tour_key(event, cx);
         }
+        if self.workspace_menu && event.keystroke.key == "escape" {
+            return self.close_workspace_menu(cx);
+        }
+        // The palette takes every key while it's open, so typing doesn't reach the board.
+        if self.palette.is_some() {
+            return self.palette_key(event, window, cx);
+        }
         // The search field takes its keys first, so shortcuts and card moves don't fire while typing.
         if self.search_focused && self.search_key(event, window, cx) {
             return;
@@ -437,6 +475,9 @@ impl WorkspaceView {
         let modifiers = event.keystroke.modifiers;
         if event.keystroke.key == "f" && (modifiers.control || modifiers.platform) {
             return self.focus_search(window, cx);
+        }
+        if event.keystroke.key == "k" && (modifiers.control || modifiers.platform) {
+            return self.open_palette(cx);
         }
         if self.key_pressed(event, cx) {
             return;
@@ -469,10 +510,8 @@ impl WorkspaceView {
             return;
         }
         // Tab moves between cards and other controls, unless a dialog or a rename owns the keyboard.
-        let modal = self.pending_column.is_some()
-            || self.project_dialog.is_some()
-            || self.pending_delete.is_some()
-            || self.rename.is_some();
+        let modal =
+            self.project_dialog.is_some() || self.pending_delete.is_some() || self.rename.is_some();
         if self.drag.keyboard != keyboard::Hold::Idle {
             if let Some(key) = keyboard::Key::from_name(&event.keystroke.key)
                 && self.keyboard_key(None, key, window, cx)
@@ -488,12 +527,6 @@ impl WorkspaceView {
                 window.focus_next();
             }
             cx.notify();
-            return;
-        }
-        if self.pending_column.is_some() {
-            if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
-                self.cancel_column_hide(cx);
-            }
             return;
         }
         if self.project_dialog.is_some() {
@@ -573,38 +606,11 @@ impl Render for WorkspaceView {
             self.schedule_scroll_restore(window);
         }
         let theme = cx.theme().clone();
-        let header = match self.projects.active() {
-            Some(project) => format!("{} / {}", self.list.active().name(), project.name()),
-            None => self.list.active().name().to_string(),
+        let header = project_header(self, &theme, cx);
+        let body = match self.screen {
+            Some(screen) => screen::render(self, screen, &theme, cx),
+            None => projects::content(self, &theme, cx),
         };
-        let body = projects::content(self, &theme, cx);
-        let team = self.projects.active_id().is_some().then(|| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .child(list_view::switch(self, &theme, cx))
-                .child(export::open_button(&theme, cx))
-                .child(plan_drafts::open_button(&theme, cx))
-                .child(plan_wizard::open_button(&theme, cx))
-                .child(schedule_dialog::open_button(&theme, cx))
-                .child(repo_dialog::open_button(&theme, cx))
-                .child(team_dialog::open_button(&theme, cx))
-                .into_any_element()
-        });
-        let delete_dialog = self
-            .pending_delete
-            .clone()
-            .map(|pending| delete::dialog(&pending, &theme, cx).into_any_element());
-        let column_dialog = self
-            .pending_column
-            .clone()
-            .map(|pending| columns::dialog(&pending, &theme, cx));
-        let project_dialog = self
-            .project_dialog
-            .clone()
-            .map(|dialog| projects::dialog(&dialog, &theme, cx));
 
         div()
             .id("workspace")
@@ -616,8 +622,11 @@ impl Render for WorkspaceView {
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.blur_tag_editor(cx);
                     this.blur_search(cx);
+                    this.close_task_menus(cx);
                     this.filter_menu = None;
+                    this.board_columns_open = false;
                     this.list_columns_open = false;
+                    this.close_workspace_menu(cx);
                 }),
             )
             .flex()
@@ -625,66 +634,240 @@ impl Render for WorkspaceView {
             .size_full()
             .bg(theme.palette.surface)
             .text_color(theme.palette.text_primary)
-            .child(TitleBar::new(APP_NAME))
+            // Windows drags the window from this strip over the top of the window, as JLC does. It is
+            // painted first, so the title bar's controls and the bars' own elements sit above it.
+            .when(cfg!(target_os = "windows"), |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(crate::title_bar::TITLE_BAR_HEIGHT)
+                        .window_control_area(WindowControlArea::Drag),
+                )
+            })
+            // The sidebar runs the full height, and the title bar covers only the main pane.
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h_0()
-                    .child(sidebar::render(self, cx))
-                    .child(main_pane(
-                        header,
-                        team,
-                        body,
-                        panel::render(self, &theme, cx),
-                        &theme,
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_none()
+                            .h_full()
+                            .child(SidebarHead::new(APP_NAME, sidebar::SIDEBAR_WIDTH))
+                            .child(sidebar::render(self, cx)),
+                    )
+                    .child(main_pane(header, body, panel::render(self, &theme, cx))),
             )
-            .children(task_dialog::overlay(self, &theme, cx))
-            .children(team_dialog::overlay(self, &theme, cx))
-            .children(chat::overlay(self, &theme, window, cx))
+            .children(palette::overlay(self, &theme, cx))
             .children(updates::notice(self, &theme, cx))
             .children(tour::overlay(self, &theme, cx))
-            .children(repo_dialog::overlay(self, &theme, cx))
-            .children(schedule_dialog::overlay(self, &theme, window, cx))
-            .children(plan_wizard::overlay(self, &theme, window, cx))
-            .children(plan_drafts::overlay(self, &theme, cx))
             .child(dragging::listeners(cx.entity().downgrade()))
-            .children(delete_dialog)
-            .children(project_dialog)
-            .children(column_dialog)
             // Last, so the lifted card draws above everything else.
             .children(dragging::overlay(self, &theme))
     }
 }
 
-fn main_pane(
-    header: String,
-    trailing: Option<AnyElement>,
-    body: AnyElement,
-    side: Option<AnyElement>,
+/// The top of the main pane: a breadcrumb and title, the project's counts, New task, and the view
+/// tabs with the project's other actions on the right of the same line.
+fn project_header(
+    view: &WorkspaceView,
     theme: &Theme,
-) -> impl IntoElement {
-    div()
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    // A workspace screen has its own title, and no project tabs or actions.
+    if let Some(screen) = view.screen {
+        return screen::header(view, screen, theme);
+    }
+    let workspace = view.list.active().name().to_string();
+    let project = view.projects.active();
+
+    let crumb = div()
+        .text_size(theme.typography.caption)
+        .text_color(theme.palette.text_secondary)
+        .truncate()
+        .child(format!("{workspace} / Projects"));
+
+    let Some(project) = project else {
+        // No project yet: the workspace's name, and nothing to act on.
+        return div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .px(theme.spacing.lg)
+            .pt(theme.spacing.md)
+            .child(crumb)
+            .child(
+                div()
+                    .mt(theme.spacing.xs)
+                    .text_size(theme.typography.heading)
+                    .font_weight(FontWeight::MEDIUM)
+                    .truncate()
+                    .child(workspace),
+            )
+            .into_any_element();
+    };
+
+    let total = view.board.len();
+    let done = view
+        .board
+        .iter()
+        .filter(|task| task.status() == looji_domain::Status::Done)
+        .count();
+    let open = total - done;
+
+    // The card: the project's name and counts, the actions, and how far through its tasks it is.
+    let card = div()
         .flex()
         .flex_col()
-        .flex_1()
-        .min_w_0()
-        .h_full()
+        .gap(theme.spacing.md)
+        .p(theme.spacing.lg)
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .bg(theme.palette.surface_raised)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .justify_between()
+                .gap(theme.spacing.md)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(theme.typography.heading)
+                                .font_weight(FontWeight::MEDIUM)
+                                .truncate()
+                                .child(project.name().to_string()),
+                        )
+                        .child(
+                            div()
+                                .mt(px(2.))
+                                .text_size(theme.typography.body)
+                                .text_color(theme.palette.text_secondary)
+                                .child(format!(
+                                    "{total} {} · {open} open",
+                                    if total == 1 { "task" } else { "tasks" }
+                                )),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_end()
+                        .gap(theme.spacing.sm)
+                        .child(plan_wizard::open_button(theme, cx))
+                        .child(export::open_button(theme, cx))
+                        .child(board::columns_button(view, project, theme, cx))
+                        .child(board::new_task_button(view, theme, cx)),
+                ),
+        )
+        .child(progress(done, total, theme))
+        // The forms open inside the card, under its summary, so they read as part of the project.
+        .children(
+            task_dialog::new_task_form(view, theme, cx).map(|form| inline_section(form, theme)),
+        );
+
+    // The views share one row: the segmented switch on the left, and the project's other windows on the right.
+    let views = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.sm)
+        .child(list_view::switch(view, theme, cx))
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(theme.spacing.sm)
-                .h(px(40.))
-                .px(theme.spacing.lg)
-                .border_b_1()
-                .border_color(theme.palette.border)
-                .text_size(theme.typography.title)
-                .child(div().flex_1().min_w_0().truncate().child(header))
-                .children(trailing),
+                .child(plan_drafts::open_button(theme, cx))
+                .child(schedule_dialog::open_button(theme, cx))
+                .child(repo_dialog::open_button(theme, cx)),
+        );
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.md)
+        .flex_shrink_0()
+        .px(theme.spacing.lg)
+        .pt(theme.spacing.md)
+        .child(crumb)
+        .child(card)
+        .child(views)
+        .into_any_element()
+}
+
+/// How far through the project's tasks it is: a bar filled to the share of done tasks, with the count.
+fn progress(done: usize, total: usize, theme: &Theme) -> impl IntoElement {
+    let fraction = if total == 0 {
+        0.0
+    } else {
+        done as f32 / total as f32
+    };
+    let percent = (fraction * 100.0).round() as u32;
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(
+            div()
+                .w_full()
+                .h(px(6.))
+                .rounded(px(3.))
+                .bg(theme.palette.border)
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded(px(3.))
+                        .bg(theme.palette.accent),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(format!("{done} of {total} done"))
+                .child(format!("{percent}%")),
+        )
+}
+
+fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .child(TitleBar)
+        // The header scrolls when a panel makes it tall, so the page under it stays in reach.
+        .child(
+            div()
+                .id("header-scroll")
+                .flex_shrink_0()
+                .max_h(relative(0.6))
+                .overflow_y_scroll()
+                .child(header),
         )
         .child(
             div()
@@ -715,4 +898,13 @@ pub(super) fn typed_text(keystroke: &Keystroke) -> Option<&str> {
         None if keystroke.key == "space" => Some(" "),
         None => None,
     }
+}
+
+/// A form inside the project card: a divider above it, and its own space.
+fn inline_section(form: AnyElement, theme: &Theme) -> impl IntoElement {
+    div()
+        .pt(theme.spacing.md)
+        .border_t_1()
+        .border_color(theme.palette.border)
+        .child(form)
 }

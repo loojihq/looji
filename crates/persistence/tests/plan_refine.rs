@@ -33,7 +33,12 @@ fn fixture() -> Fixture {
     WorkspaceRepository::save(&store, &workspace).unwrap();
     let project = Project::new(workspace.id(), "looji").unwrap();
     ProjectRepository::save(&store, &project).unwrap();
-    let alex = TeamMember::new(project.id(), "Alex Kim", MemberColour::for_new_member(0)).unwrap();
+    let alex = TeamMember::new(
+        project.workspace_id(),
+        "Alex Kim",
+        MemberColour::for_new_member(0),
+    )
+    .unwrap();
     TeamMemberRepository::save(&store, &alex).unwrap();
     Fixture {
         dir,

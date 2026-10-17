@@ -7,6 +7,7 @@
 
 pub mod anthropic;
 pub mod chat;
+pub mod claude_code;
 mod error;
 pub mod fake;
 pub mod generation;
@@ -42,8 +43,59 @@ pub fn runtime() -> &'static tokio::runtime::Handle {
         .handle()
 }
 
-/// The provider the app uses, built from the stored key. Fails with `NoApiKey` when no key has been saved.
-pub fn connect() -> Result<Arc<dyn ChatProvider>, AiError> {
-    let key = key_store::load()?.ok_or(AiError::NoApiKey)?;
-    Ok(Arc::new(anthropic::AnthropicProvider::new(key)))
+/// Which provider answers. Claude Code runs the local `claude` command with the user's own sign-in. The Anthropic
+/// option calls the API with a key saved in the system's key store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    ClaudeCode,
+    Anthropic,
+}
+
+impl Provider {
+    /// Every choice, in the order the settings offer them.
+    pub const ALL: [Provider; 2] = [Provider::ClaudeCode, Provider::Anthropic];
+
+    /// The name the setting is stored under.
+    pub fn stored(self) -> &'static str {
+        match self {
+            Provider::ClaudeCode => "claude_code",
+            Provider::Anthropic => "anthropic",
+        }
+    }
+
+    /// The choice a stored name stands for. Unknown names give `None`.
+    pub fn from_stored(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.stored() == text)
+    }
+
+    /// The name shown in the settings.
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::ClaudeCode => "Claude Code",
+            Provider::Anthropic => "Anthropic API key",
+        }
+    }
+}
+
+/// The provider for a choice. Claude Code fails with a message when its command isn't installed, and the API
+/// fails with `NoApiKey` when no key has been saved.
+pub fn connect(provider: Provider) -> Result<Arc<dyn ChatProvider>, AiError> {
+    match provider {
+        Provider::ClaudeCode => {
+            if claude_code::installed() {
+                Ok(Arc::new(claude_code::ClaudeCodeProvider::new()))
+            } else {
+                Err(AiError::CommandFailed(
+                    "Claude Code isn't installed on this computer. Install it and sign in, then try again."
+                        .to_string(),
+                ))
+            }
+        }
+        Provider::Anthropic => {
+            let key = key_store::load()?.ok_or(AiError::NoApiKey)?;
+            Ok(Arc::new(anthropic::AnthropicProvider::new(key)))
+        }
+    }
 }

@@ -17,7 +17,7 @@ const BAR_WIDTH: f32 = 240.;
 const LABEL_WIDTH: f32 = 200.;
 
 /// The project's calendar, from its working schedule. A project with no selection gets the default schedule.
-fn project_calendar(view: &WorkspaceView) -> WorkingCalendar {
+pub(super) fn project_calendar(view: &WorkspaceView) -> WorkingCalendar {
     view.projects
         .active()
         .map(|project| project.working_schedule())
@@ -185,23 +185,11 @@ fn controls(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let preset =
-        |label: &'static str, id: u64, target: Option<Period>| {
-            div()
-                .id(("workload-preset", id))
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(theme.palette.border_control)
-                .text_size(theme.typography.caption)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.palette.surface_hover))
-                .child(label)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.set_workload_period(target, cx)
-                }))
-        };
+    let preset = |label: &'static str, id: u64, target: Option<Period>| {
+        crate::components::pill(("workload-preset", id), label, false, theme).on_click(
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.set_workload_period(target, cx)),
+        )
+    };
     div()
         .flex()
         .flex_row()
@@ -217,52 +205,27 @@ fn controls(
         .child(preset("Next two weeks", 1, Some(next_two_weeks())))
         .child(preset("This month", 2, Some(this_month())))
         .child(
-            div()
-                .id("workload-earlier")
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(theme.palette.border_control)
-                .cursor_pointer()
-                .child("Earlier")
-                .on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.shift_workload_period(-1, cx)),
-                ),
+            crate::components::pill("workload-earlier", "Earlier", false, theme).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.shift_workload_period(-1, cx)),
+            ),
         )
         .child(
-            div()
-                .id("workload-later")
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(theme.palette.border_control)
-                .cursor_pointer()
-                .child("Later")
-                .on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.shift_workload_period(1, cx)),
-                ),
+            crate::components::pill("workload-later", "Later", false, theme).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.shift_workload_period(1, cx)),
+            ),
         )
         .child(
-            div()
-                .id("workload-done")
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(theme.palette.border_control)
-                .text_size(theme.typography.caption)
-                .cursor_pointer()
-                .when(view.workload.include_done, |button| {
-                    button.bg(theme.palette.surface_selected)
-                })
-                .child(if view.workload.include_done {
+            crate::components::pill(
+                "workload-done",
+                if view.workload.include_done {
                     "Including done"
                 } else {
                     "Done left out"
-                })
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_workload_done(cx))),
+                },
+                view.workload.include_done,
+                theme,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_workload_done(cx))),
         )
         .into_any_element()
 }

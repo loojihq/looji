@@ -112,9 +112,30 @@ fn validate(migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
+/// Migrations that rebuild a table other tables reference with ON DELETE CASCADE. Dropping that table
+/// with foreign keys on would delete those rows, so they're off while these run. The foreign key check
+/// still runs before the migration commits.
+const REBUILDS_WITHOUT_FOREIGN_KEYS: &[u32] = &[28];
+
 /// Runs one migration and its bookkeeping row in a single transaction.
 /// Any failure drops the transaction, which rolls back the migration's changes.
 fn apply(connection: &mut Connection, migration: &Migration) -> Result<()> {
+    if !REBUILDS_WITHOUT_FOREIGN_KEYS.contains(&migration.version) {
+        return apply_in_transaction(connection, migration);
+    }
+    // Foreign keys can't change inside a transaction, so they're switched here, around it.
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .map_err(|err| failed(migration, err))?;
+    let result = apply_in_transaction(connection, migration);
+    // Back on even when the migration failed, so the connection is left as it was found.
+    let restored = connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(|err| failed(migration, err));
+    result.and(restored)
+}
+
+fn apply_in_transaction(connection: &mut Connection, migration: &Migration) -> Result<()> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|err| failed(migration, err))?;

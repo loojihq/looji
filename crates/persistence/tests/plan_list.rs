@@ -3,7 +3,7 @@
 
 use looji_domain::{
     DraftState, PlanDraft, PlanDraftId, PlanDraftRepository, PlanEdit, PlanTask, Project,
-    ProjectId, ProjectRepository, Timestamp, Workspace, WorkspaceId, WorkspaceRepository,
+    ProjectId, ProjectRepository, Status, Timestamp, Workspace, WorkspaceId, WorkspaceRepository,
 };
 use looji_persistence::{SqliteStore, open_database};
 use tempfile::TempDir;
@@ -114,7 +114,7 @@ fn a_published_plan_is_read_only_it_cannot_be_resumed_or_changed() {
     let store = fx.open();
     let plan = ready(&fx, "Published", 1);
     PlanDraftRepository::save(&store, &plan).unwrap();
-    PlanDraftRepository::publish(&store, plan.id(), at(10)).unwrap();
+    PlanDraftRepository::publish(&store, plan.id(), at(10), Status::Backlog).unwrap();
 
     let mut published = PlanDraftRepository::find(&store, plan.id())
         .unwrap()
@@ -153,7 +153,7 @@ fn a_duplicate_of_a_published_plan_is_a_new_unpublished_plan() {
     let store = fx.open();
     let plan = ready(&fx, "Published", 1);
     PlanDraftRepository::save(&store, &plan).unwrap();
-    PlanDraftRepository::publish(&store, plan.id(), at(10)).unwrap();
+    PlanDraftRepository::publish(&store, plan.id(), at(10), Status::Backlog).unwrap();
     let original = PlanDraftRepository::find(&store, plan.id())
         .unwrap()
         .unwrap();

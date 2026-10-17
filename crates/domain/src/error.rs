@@ -43,8 +43,8 @@ pub enum DomainError {
     InvalidIconFile { file_name: String },
     #[error("that team member no longer exists")]
     UnknownMember,
-    #[error("that team member belongs to another project")]
-    MemberFromOtherProject,
+    #[error("that team member belongs to another workspace")]
+    MemberFromOtherWorkspace,
     #[error("'{0}' is not a member colour")]
     UnknownColour(i64),
     #[error("{0}")]

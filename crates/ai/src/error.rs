@@ -28,6 +28,9 @@ pub enum AiError {
     /// The provider sent something this client can't read.
     #[error("unexpected response from the provider: {0}")]
     Protocol(String),
+    /// Claude Code couldn't be run, or it stopped without an answer. The message is written for the user.
+    #[error("{0}")]
+    CommandFailed(String),
     /// The caller stopped the stream. Text that arrived before this is still valid.
     #[error("the request was cancelled")]
     Cancelled,

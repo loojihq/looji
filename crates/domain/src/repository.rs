@@ -85,12 +85,12 @@ pub trait ColumnRepository {
 }
 
 pub trait TeamMemberRepository {
-    /// Adds a member, or saves a rename. A member's project and colour are fixed once it's added,
+    /// Adds a member, or saves a rename. A member's workspace and colour are fixed once it's added,
     /// so a save never changes them.
     fn save(&self, member: &TeamMember) -> RepoResult<()>;
     fn find(&self, id: TeamMemberId) -> RepoResult<Option<TeamMember>>;
     /// In the order they were added, which keeps their name suffixes stable.
-    fn list_for_project(&self, project: ProjectId) -> RepoResult<Vec<TeamMember>>;
+    fn list_for_workspace(&self, workspace: WorkspaceId) -> RepoResult<Vec<TeamMember>>;
     /// How many tasks are assigned to the member.
     fn assigned_task_count(&self, id: TeamMemberId) -> RepoResult<u64>;
     /// Removes the member, and unassigns its tasks in the same transaction. The tasks stay. Returns
@@ -145,13 +145,14 @@ pub trait PlanDraftRepository {
     -> RepoResult<Vec<crate::plan_draft::PlanDraft>>;
     /// Deletes a draft and its stories and tasks. This is how a draft is discarded.
     fn delete(&self, id: crate::ids::PlanDraftId) -> RepoResult<()>;
-    /// Publishes a ready plan's tasks into the project's Backlog, in one transaction, skipping titles the project
-    /// already has. The draft is marked published in the same transaction. A failure part way writes nothing. `None`
-    /// means there is no such draft.
+    /// Publishes a ready plan's tasks into the project's Backlog or To do column (`status`), in one transaction,
+    /// skipping titles the project already has. The draft is marked published in the same transaction. A failure
+    /// part way writes nothing. `None` means there is no such draft.
     fn publish(
         &self,
         id: crate::ids::PlanDraftId,
         at: crate::time::Timestamp,
+        status: crate::status::Status,
     ) -> RepoResult<Option<crate::plan_draft::Publication>>;
     /// Applies one change to a ready draft and saves it. The change is checked against the project's current team.
     /// A refused change is `Rejected` and writes nothing. `None` means there is no such draft.

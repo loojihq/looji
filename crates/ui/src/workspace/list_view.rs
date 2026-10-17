@@ -259,6 +259,36 @@ impl WorkspaceView {
     }
 }
 
+impl WorkspaceView {
+    /// Marks a task done, or back to To do when it's already done. It makes the same move as a drag on
+    /// the board, so the list, the board, and the database agree after the reload.
+    pub(super) fn toggle_complete(&mut self, id: looji_domain::TaskId, cx: &mut Context<Self>) {
+        let Some(task) = self.board.iter().find(|task| task.id() == id) else {
+            return;
+        };
+        let from = task.status();
+        let status = if from == looji_domain::Status::Done {
+            looji_domain::Status::Todo
+        } else {
+            looji_domain::Status::Done
+        };
+        let index = self
+            .board
+            .iter()
+            .filter(|other| other.status() == status)
+            .count();
+        self.commit_move(
+            super::drag::DropResult {
+                task: id,
+                from,
+                status,
+                index,
+            },
+            cx,
+        );
+    }
+}
+
 /// The Board and List switch in the header.
 /// The view switcher in the header: Board, List, Roadmap, and Workload. The selected one is marked. Each
 /// option can take focus, and the left and right arrows move between them and switch, as a radio group
@@ -269,44 +299,85 @@ pub(super) fn switch(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let mut row = div().flex().flex_row().gap(theme.spacing.xs);
+    // One tab group: a bordered box holding the four views. The chosen view is filled, and the others sit
+    // transparent in the same box until hovered.
+    let mut group = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(2.))
+        .p(px(3.))
+        .rounded(theme.radius.lg)
+        .border_1()
+        .border_color(theme.palette.border)
+        .bg(theme.palette.surface_raised);
     for (index, mode) in ViewMode::ALL.into_iter().enumerate() {
         let selected = view.view_mode == mode;
-        row = row.child(
-            div()
-                .id(("view-switch", index as u64))
-                .track_focus(&view.view_focus[index])
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .border_1()
-                .border_color(theme.palette.border_control)
-                .text_size(theme.typography.caption)
-                .cursor_pointer()
-                .when(selected, |button| button.bg(theme.palette.surface_selected))
-                .when(!selected, |button| {
-                    button.hover(|style| style.bg(theme.palette.surface_hover))
-                })
-                .child(view_label(mode))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.set_view_mode(mode, cx);
-                    this.view_focus[index].focus(window);
-                }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    let step: isize = match event.keystroke.key.as_str() {
-                        "left" => -1,
-                        "right" => 1,
-                        _ => return,
-                    };
-                    cx.stop_propagation();
-                    let next =
-                        (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
-                    this.set_view_mode(ViewMode::ALL[next], cx);
-                    this.view_focus[next].focus(window);
-                })),
-        );
+        let tab = div()
+            .id(("view-switch", index as u64))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.spacing.xs)
+            .h(px(28.))
+            .px(px(12.))
+            .rounded(theme.radius.md)
+            .text_size(theme.typography.body)
+            .cursor_pointer()
+            .track_focus(&view.view_focus[index])
+            .when(selected, |tab| {
+                tab.bg(theme.palette.surface_selected)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.palette.text_primary)
+            })
+            .when(!selected, |tab| {
+                tab.font_weight(FontWeight::NORMAL)
+                    .text_color(theme.palette.text_secondary)
+                    .hover(|style| {
+                        style
+                            .bg(theme.palette.surface_hover)
+                            .text_color(theme.palette.text_primary)
+                    })
+            })
+            .child(crate::components::icon(
+                view_icon(mode),
+                14.,
+                if selected {
+                    theme.palette.text_primary
+                } else {
+                    theme.palette.text_secondary
+                },
+            ))
+            .child(view_label(mode))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.set_view_mode(mode, cx);
+                this.view_focus[index].focus(window);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let step: isize = match event.keystroke.key.as_str() {
+                    "left" => -1,
+                    "right" => 1,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                let next =
+                    (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
+                this.set_view_mode(ViewMode::ALL[next], cx);
+                this.view_focus[next].focus(window);
+            }));
+        group = group.child(tab);
     }
-    row.into_any_element()
+    group.into_any_element()
+}
+
+/// The icon that stands for a view in the switch.
+fn view_icon(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::Board => "layout-kanban",
+        ViewMode::List => "list",
+        ViewMode::Roadmap => "route",
+        ViewMode::Workload => "chart-bar",
+    }
 }
 
 fn view_label(mode: ViewMode) -> &'static str {
@@ -402,15 +473,25 @@ fn header_row(
         .text_color(theme.palette.text_secondary);
     for (index, column) in view.list_settings.columns.iter().copied().enumerate() {
         let arrow = match (sort.column == column.sort(), sort.direction) {
-            (false, _) => "",
-            (true, SortDirection::Ascending) => " ↑",
-            (true, SortDirection::Descending) => " ↓",
+            (false, _) => None,
+            (true, SortDirection::Ascending) => Some("arrow-up"),
+            (true, SortDirection::Descending) => Some("arrow-down"),
         };
         row = row.child(
             cell(("list-heading", index as u64), column)
                 .cursor_pointer()
                 .hover(|style| style.text_color(theme.palette.text_primary))
-                .child(format!("{}{arrow}", column_label(column)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(2.))
+                        .child(column_label(column))
+                        .children(arrow.map(|name| {
+                            crate::components::icon(name, 12., theme.palette.text_primary)
+                        })),
+                )
                 .on_click(
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.sort_list(column, cx)),
                 ),
@@ -440,7 +521,21 @@ fn row(
         .border_color(theme.palette.border)
         .text_size(theme.typography.body)
         .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover));
+        .hover(|style| style.bg(theme.palette.surface_hover))
+        // The completion circle. A click marks the task done, or back to To do, without opening it.
+        .child(
+            div()
+                .id(("list-check", index as u64))
+                .flex_none()
+                .child(crate::components::checkbox(
+                    task.status() == looji_domain::Status::Done,
+                    theme,
+                ))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_complete(id, cx);
+                })),
+        );
     for (column_index, column) in view.list_settings.columns.iter().copied().enumerate() {
         let content = cell_content(column, task, entries, theme);
         row = row
@@ -516,7 +611,6 @@ fn columns_menu(
     for (index, column) in ListColumn::ALL.into_iter().enumerate() {
         let checked = view.list_settings.shows(column);
         let locked = checked && shown == 1;
-        let tick = if checked { "✓" } else { " " };
         let mut option = div()
             .id(("list-column-option", index as u64))
             .flex()
@@ -526,7 +620,7 @@ fn columns_menu(
             .px(theme.spacing.sm)
             .py(theme.spacing.xs)
             .rounded(theme.radius.sm)
-            .child(div().w(px(14.)).child(tick))
+            .child(crate::components::check_mark(checked, theme))
             .child(column_label(column));
         option = if locked {
             option.text_color(theme.palette.text_disabled)

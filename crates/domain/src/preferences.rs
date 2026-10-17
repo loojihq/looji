@@ -14,6 +14,8 @@ pub mod keys {
     pub const DEFAULT_VIEW: &str = "default_view";
     pub const SELECTED_MODEL: &str = "selected_model";
     pub const UPDATE_CHANNEL: &str = "update_channel";
+    pub const NOTIFY_DUE_TODAY: &str = "notify_due_today";
+    pub const NOTIFY_OVERDUE: &str = "notify_overdue";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -96,7 +98,7 @@ impl UpdateChannel {
 }
 
 /// Every preference, with defaults for anything not chosen.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preferences {
     pub theme: Theme,
     /// The fallback view. A project with its own saved view ignores this.
@@ -105,6 +107,33 @@ pub struct Preferences {
     /// A provider model ID. `None` means the feature picks its own default, and the model list
     /// is not checked here.
     pub selected_model: Option<String>,
+    /// Whether the sidebar's Today entry counts tasks due today.
+    pub notify_due_today: bool,
+    /// Whether the sidebar's Today entry counts tasks that are overdue.
+    pub notify_overdue: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            theme: Theme::default(),
+            default_view: DefaultView::default(),
+            update_channel: UpdateChannel::default(),
+            selected_model: None,
+            // Both reminders start on, so a new install shows what's due without a setting.
+            notify_due_today: true,
+            notify_overdue: true,
+        }
+    }
+}
+
+/// Reads an on or off setting. A missing or unrecognised value keeps the default, which is on.
+fn parse_flag(text: Option<&str>) -> bool {
+    !matches!(text, Some("off"))
+}
+
+fn flag_text(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 /// One preference to write.
@@ -115,6 +144,8 @@ pub enum Preference {
     UpdateChannel(UpdateChannel),
     /// `None` clears the choice, so the default applies again.
     SelectedModel(Option<String>),
+    NotifyDueToday(bool),
+    NotifyOverdue(bool),
 }
 
 impl Preferences {
@@ -125,6 +156,8 @@ impl Preferences {
             Preference::DefaultView(view) => self.default_view = *view,
             Preference::UpdateChannel(channel) => self.update_channel = *channel,
             Preference::SelectedModel(model) => self.selected_model = model.clone(),
+            Preference::NotifyDueToday(on) => self.notify_due_today = *on,
+            Preference::NotifyOverdue(on) => self.notify_overdue = *on,
         }
     }
 }
@@ -136,6 +169,8 @@ pub fn load<S: SettingsRepository>(settings: &S) -> RepoResult<Preferences> {
     let view = settings.get_setting(keys::DEFAULT_VIEW)?;
     let channel = settings.get_setting(keys::UPDATE_CHANNEL)?;
     let model = settings.get_setting(keys::SELECTED_MODEL)?;
+    let due_today = settings.get_setting(keys::NOTIFY_DUE_TODAY)?;
+    let overdue = settings.get_setting(keys::NOTIFY_OVERDUE)?;
 
     Ok(Preferences {
         theme: theme.as_deref().and_then(Theme::parse).unwrap_or_default(),
@@ -150,6 +185,8 @@ pub fn load<S: SettingsRepository>(settings: &S) -> RepoResult<Preferences> {
         selected_model: model
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty()),
+        notify_due_today: parse_flag(due_today.as_deref()),
+        notify_overdue: parse_flag(overdue.as_deref()),
     })
 }
 
@@ -163,6 +200,10 @@ pub fn save<S: SettingsRepository>(settings: &S, preference: &Preference) -> Rep
         }
         Preference::SelectedModel(Some(id)) => settings.set_setting(keys::SELECTED_MODEL, id),
         Preference::SelectedModel(None) => settings.remove_setting(keys::SELECTED_MODEL),
+        Preference::NotifyDueToday(on) => {
+            settings.set_setting(keys::NOTIFY_DUE_TODAY, flag_text(*on))
+        }
+        Preference::NotifyOverdue(on) => settings.set_setting(keys::NOTIFY_OVERDUE, flag_text(*on)),
     }
 }
 

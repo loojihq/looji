@@ -2,7 +2,7 @@
 //! its exact warnings, or its exact error kinds, so a malformed reply that fails for the wrong reason is caught.
 
 use looji_ai::planning::{ErrorKind, PlanParseError, PlanWarning, parse_plan};
-use looji_domain::{MemberColour, ProjectId, TeamMember, TeamMemberId};
+use looji_domain::{MemberColour, TeamMember, TeamMemberId, WorkspaceId};
 
 /// The team most fixtures assign into: two members, with distinct names.
 fn standard_team() -> Vec<TeamMember> {
@@ -15,12 +15,12 @@ fn shared_name_team() -> Vec<TeamMember> {
 }
 
 fn named_team(names: &[&str]) -> Vec<TeamMember> {
-    let project = ProjectId::new();
+    let workspace = WorkspaceId::new();
     names
         .iter()
         .enumerate()
         .map(|(index, name)| {
-            TeamMember::new(project, name, MemberColour::for_new_member(index)).unwrap()
+            TeamMember::new(workspace, name, MemberColour::for_new_member(index)).unwrap()
         })
         .collect()
 }

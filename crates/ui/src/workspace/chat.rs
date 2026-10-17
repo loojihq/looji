@@ -138,6 +138,8 @@ impl WorkspaceView {
             let _ = store(cx).set_setting(&model_key(task_id), &default);
         }
         self.chat_scroll.scroll_to_bottom();
+        let main = cx.entity();
+        cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Chat));
         self.focus_handle.focus(window);
         cx.notify();
     }
@@ -314,7 +316,8 @@ impl WorkspaceView {
             Some(active) if active.position == launch.position => Arc::clone(&active.queue),
             _ => return,
         };
-        spawn_reply(request, cancel, queue);
+        let provider = super::preferences_panel::ai_provider(cx);
+        spawn_reply(request, cancel, queue, provider);
         cx.notify();
     }
 
@@ -550,7 +553,12 @@ fn retrieve_code(
 
 /// Runs the request on the AI runtime and pushes what happens into the queue the reader drains. A debug build with
 /// `LOOJI_FAKE_AI` set uses a scripted provider, so streaming and failures can be checked without a key.
-fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex<Vec<Update>>>) {
+fn spawn_reply(
+    request: ChatRequest,
+    cancel: CancellationToken,
+    queue: Arc<Mutex<Vec<Update>>>,
+    provider: looji_ai::Provider,
+) {
     let future = async move {
         let sink = queue;
         let push = move |update: Update| {
@@ -558,7 +566,7 @@ fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex
                 queue.push(update);
             }
         };
-        match provider_for(&request) {
+        match provider_for(&request, provider) {
             Ok(provider) => run_with(provider.as_ref(), request, cancel, push).await,
             Err(err) => push(Update::Failed(err)),
         }
@@ -567,12 +575,15 @@ fn spawn_reply(request: ChatRequest, cancel: CancellationToken, queue: Arc<Mutex
 }
 
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-fn provider_for(request: &ChatRequest) -> Result<Arc<dyn ChatProvider>, AiError> {
+fn provider_for(
+    request: &ChatRequest,
+    choice: looji_ai::Provider,
+) -> Result<Arc<dyn ChatProvider>, AiError> {
     #[cfg(debug_assertions)]
     if let Some(provider) = fake_provider(request) {
         return Ok(provider);
     }
-    looji_ai::connect()
+    looji_ai::connect(choice)
 }
 
 /// A scripted reply for manual checks: "fail" in the message breaks the stream partway, "slow" makes the reply long,
@@ -615,8 +626,8 @@ fn fake_provider(request: &ChatRequest) -> Option<Arc<dyn ChatProvider>> {
 #[cfg(debug_assertions)]
 const MARKDOWN_SAMPLE: &str = "## Plan\n\nThe **login** fix has *three* parts:\n\n- check `verify_password`\n- add a test\n- update the [notes](https://example.com)\n\n| File | Change |\n| --- | --- |\n| login.rs | refuse empty |\n| invoice.py | round totals |\n\n```rust\nif password.is_empty() {\n    return None;\n}\n```\n\n```\nno language here\n```\n\nDone.\n";
 
-/// The chat dialog, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+/// The chat's panel, which the chat window fills. Nothing is drawn when the chat isn't open.
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     window: &Window,
@@ -665,20 +676,9 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(680.))
-        .h(px(600.))
+        .size_full()
         .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
-        .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .text_size(theme.typography.title)
-                .child(format!("Chat: {}", dialog.title)),
-        )
         .child(model_row)
         .child(
             div()
@@ -712,23 +712,5 @@ pub(super) fn overlay(
         ),
     );
 
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .child(
-                div()
-                    .id("chat-backdrop")
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.palette.scrim)
-                    .occlude()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_chat(cx)))
-                    .child(panel),
-            )
-            .into_any_element(),
-    )
+    Some(panel.into_any_element())
 }

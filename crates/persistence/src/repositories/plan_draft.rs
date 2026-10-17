@@ -122,7 +122,8 @@ impl SqliteStore {
     fn team_of(&self, project: ProjectId) -> RepoResult<Vec<TeamMemberId>> {
         query_all(
             &self.connection,
-            "SELECT id FROM team_members WHERE project_id = ?1",
+            "SELECT id FROM team_members
+              WHERE workspace_id = (SELECT workspace_id FROM projects WHERE id = ?1)",
             params![id_text(project.as_uuid())],
             |row| read_id(row, 0, TeamMemberId::from_uuid),
         )
@@ -294,7 +295,12 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
     /// Backlog tasks already there, in the order the plan has them. A title the project already has is skipped. The
     /// draft is marked published in the same transaction, so a failure part way leaves no task behind and the draft
     /// unpublished. `None` means there is no such draft.
-    fn publish(&self, id: PlanDraftId, at: Timestamp) -> RepoResult<Option<Publication>> {
+    fn publish(
+        &self,
+        id: PlanDraftId,
+        at: Timestamp,
+        status: Status,
+    ) -> RepoResult<Option<Publication>> {
         let Some(draft) = looji_domain::PlanDraftRepository::find(self, id)? else {
             return Ok(None);
         };
@@ -310,13 +316,13 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
             .map_err(|err| RepoError::Rejected(err.into()))?;
 
         let transaction = crate::write_transaction(&self.connection).map_err(storage)?;
-        let mut last = last_backlog_position(&transaction, project)?;
+        let mut last = last_position(&transaction, project, status)?;
         let mut published = Vec::new();
         for planned in &plan.create {
             let key = after(last.as_deref()).map_err(RepoError::Invalid)?;
             let position = Position::new(key.clone()).map_err(RepoError::Invalid)?;
-            let mut task = Task::new(project, &planned.title, Status::Backlog, position)
-                .map_err(RepoError::Invalid)?;
+            let mut task =
+                Task::new(project, &planned.title, status, position).map_err(RepoError::Invalid)?;
             task.set_priority(Some(planned.priority));
             task.set_estimate(planned.estimate);
             task.set_tags(planned.tags.clone());
@@ -346,15 +352,16 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
 }
 
 /// The position of the last Backlog task in a project, or `None` when the Backlog is empty.
-fn last_backlog_position(
+fn last_position(
     connection: &Connection,
     project: ProjectId,
+    status: Status,
 ) -> RepoResult<Option<String>> {
     Ok(query_all(
         connection,
-        "SELECT position FROM tasks WHERE project_id = ?1 AND status = 'backlog'
+        "SELECT position FROM tasks WHERE project_id = ?1 AND status = ?2
          ORDER BY position COLLATE BINARY DESC, id DESC LIMIT 1",
-        params![id_text(project.as_uuid())],
+        params![id_text(project.as_uuid()), status.as_str()],
         |row| get(row, 0),
     )?
     .into_iter()

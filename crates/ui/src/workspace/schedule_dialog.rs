@@ -189,20 +189,14 @@ impl ScheduleDialog {
 
 /// The text the Hours button shows.
 pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    div()
-        .id("schedule-open")
-        .px(theme.spacing.md)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .text_size(theme.typography.body)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.palette.surface_hover))
-        .child("Hours")
-        .on_click(
-            cx.listener(|this, _: &ClickEvent, window, cx| this.open_schedule_dialog(window, cx)),
-        )
+    crate::components::button_icon(
+        "schedule-open",
+        "clock",
+        "Hours",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_schedule_dialog(window, cx)))
 }
 
 impl WorkspaceView {
@@ -218,6 +212,8 @@ impl WorkspaceView {
             project.working_schedule(),
             anchor,
         ));
+        // The form shows under Working hours on the Preferences screen.
+        self.open_preferences(cx);
         self.schedule_focus[0].focus(window);
         cx.notify();
     }
@@ -230,7 +226,7 @@ impl WorkspaceView {
     }
 
     /// Closes at once when nothing is unsaved. Otherwise shows the discard prompt, which keeps editing by default.
-    fn request_schedule_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn request_schedule_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.schedule_dialog.as_mut() else {
             return;
         };
@@ -507,7 +503,7 @@ fn describe_day(day: DueDate) -> String {
 }
 
 /// The working hours dialog, drawn over the window. Nothing is drawn when it isn't open.
-pub(super) fn overlay(
+pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     window: &Window,
@@ -605,13 +601,9 @@ pub(super) fn overlay(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(480.))
+        .w_full()
         .p(theme.spacing.lg)
-        .rounded(theme.radius.lg)
         .bg(theme.palette.surface_raised)
-        .shadow(theme.elevation.overlay.clone())
-        .border_1()
-        .border_color(theme.palette.border)
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -665,19 +657,8 @@ pub(super) fn overlay(
                 .child(save),
         );
 
-    let mut layer = div()
-        .id("schedule-backdrop")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.palette.scrim)
-        .occlude()
-        .on_click(
-            cx.listener(|this, _: &ClickEvent, window, cx| this.request_schedule_close(window, cx)),
-        )
-        .child(panel);
+    // The panel fills the window. An unsaved-changes prompt is drawn over it, in the same window.
+    let mut layer = div().relative().size_full().child(panel);
     if dialog.confirming_discard {
         layer = layer.child(discard_prompt(theme, cx));
     }

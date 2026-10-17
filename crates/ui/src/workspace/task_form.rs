@@ -237,6 +237,10 @@ impl TaskForm {
     /// number or date uses, so the common mistakes can't be typed at all. Validation still checks
     /// what gets through.
     pub fn type_text(&mut self, text: &str) {
+        // The dates are chosen on the calendar, so typed text doesn't go into them.
+        if matches!(self.active, Field::Start | Field::Due) {
+            return;
+        }
         let accepted: String = match self.active {
             Field::Estimate => text
                 .chars()
@@ -275,6 +279,9 @@ impl TaskForm {
     /// Removes the last character of the active field. In the tags field, with nothing typed,
     /// removes the last chip.
     pub fn backspace(&mut self) {
+        if matches!(self.active, Field::Start | Field::Due) {
+            return;
+        }
         match self.active {
             Field::Title => {
                 self.values.title.pop();

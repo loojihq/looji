@@ -20,6 +20,7 @@ fn read_project(row: &Row<'_>) -> RepoResult<ProjectRecord> {
         working_start_min: get(row, 7)?,
         working_end_min: get(row, 8)?,
         workdays_mask: get(row, 9)?,
+        show_backlog: get(row, 10)?,
     })
 }
 
@@ -34,7 +35,7 @@ fn save_error(err: rusqlite::Error) -> RepoError {
 
 const PROJECT_COLUMNS: &str =
     "id, workspace_id, name, description, show_in_review, created_at, updated_at,
-    working_start_min, working_end_min, workdays_mask";
+    working_start_min, working_end_min, workdays_mask, show_backlog";
 
 impl ProjectRepository for SqliteStore {
     /// Inserts or updates the name and description. The column flags are written only on insert:
@@ -43,8 +44,8 @@ impl ProjectRepository for SqliteStore {
         self.connection
             .execute(
                 "INSERT INTO projects (id, workspace_id, name, description, show_in_review, created_at, updated_at,
-                                       working_start_min, working_end_min, workdays_mask)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                       working_start_min, working_end_min, workdays_mask, show_backlog)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT (id) DO UPDATE SET
                      name = excluded.name,
                      description = excluded.description,
@@ -63,6 +64,7 @@ impl ProjectRepository for SqliteStore {
                     i64::from(project.working_schedule().start()),
                     i64::from(project.working_schedule().end()),
                     i64::from(project.working_schedule().workdays().mask()),
+                    project.show_backlog(),
                 ],
             )
             .map_err(save_error)?;

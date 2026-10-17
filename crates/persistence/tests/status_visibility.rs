@@ -205,3 +205,33 @@ fn hiding_one_project_leaves_another_projects_column_alone() {
     assert!(shown(&store, &other));
     assert_eq!(counts(&store, other.id()), vec![0, 0, 0, 1, 0]);
 }
+
+#[test]
+fn backlog_can_be_hidden_and_shown_like_in_review() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let website = project(&store);
+    create(&store, website.id(), Status::Backlog, "a0");
+    create(&store, website.id(), Status::Todo, "a1");
+    // Backlog, Todo, InProgress, InReview, Done
+    assert_eq!(counts(&store, website.id()), vec![1, 1, 0, 0, 0]);
+
+    let moved = store
+        .set_status_visible(website.id(), Status::Backlog, false)
+        .unwrap();
+
+    // The task in Backlog moves to the nearest shown status, To do.
+    assert_eq!(moved, 1);
+    assert_eq!(counts(&store, website.id()), vec![0, 2, 0, 0, 0]);
+    let hidden = ProjectRepository::find(&store, website.workspace_id(), website.id())
+        .unwrap()
+        .unwrap();
+    assert!(!hidden.is_status_visible(Status::Backlog));
+    assert!(hidden.is_status_visible(Status::InReview));
+
+    let restored = store
+        .set_status_visible(website.id(), Status::Backlog, true)
+        .unwrap();
+
+    assert_eq!(restored, 1);
+    assert_eq!(counts(&store, website.id()), vec![1, 1, 0, 0, 0]);
+}

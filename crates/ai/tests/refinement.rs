@@ -5,15 +5,15 @@ use looji_ai::planning::{
     ErrorKind, PlanParseError, PlanWarning, RefineKind, Refinement, build_refinement_prompt,
     parse_refinement,
 };
-use looji_domain::{MemberColour, Priority, ProjectId, TeamMember};
+use looji_domain::{MemberColour, Priority, TeamMember, WorkspaceId};
 
 fn team() -> Vec<TeamMember> {
-    let project = ProjectId::new();
+    let workspace = WorkspaceId::new();
     ["Alex Kim", "Sam Lee"]
         .iter()
         .enumerate()
         .map(|(index, name)| {
-            TeamMember::new(project, name, MemberColour::for_new_member(index)).unwrap()
+            TeamMember::new(workspace, name, MemberColour::for_new_member(index)).unwrap()
         })
         .collect()
 }
