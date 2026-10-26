@@ -3,9 +3,10 @@
 //! timing, thresholds, and drop results are tested directly.
 //!
 //! A press on a card does one of three things:
-//! - released before [`LONG_PRESS`] without moving: a click, which opens the card;
-//! - held still for [`LONG_PRESS`]: the card lifts and follows the pointer;
-//! - moved fast from the start (a flick), mostly sideways: the card lifts at once.
+//! - released before the pointer moves [`SLOP`] or [`LONG_PRESS`] passes: a click, which opens the card;
+//! - the pointer moves beyond [`SLOP`]: the card lifts at once and follows the pointer, as a press and
+//!   drag does everywhere else;
+//! - held still for [`LONG_PRESS`]: the card lifts and follows the pointer.
 //!
 //! While lifted, every move recomputes the landing and stores it. A release commits the stored
 //! landing, not one recomputed from the release position, so the drop is what was on screen.
@@ -22,10 +23,6 @@ use super::layout::{BoardLayout, Point};
 pub const SLOP: f32 = 6.0;
 /// How long a press must stay still to lift the card.
 pub const LONG_PRESS: Duration = Duration::from_millis(450);
-/// The speed, in logical pixels per second, at which a move counts as a flick.
-pub const FLICK_SPEED: f32 = 1200.0;
-/// How much recent movement a flick is measured over.
-pub const FLICK_WINDOW: Duration = Duration::from_millis(100);
 
 /// Why a drag ended without a drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,11 +136,7 @@ enum Phase {
         origin: Point,
         /// Where the pointer sits on the card, so the card keeps its place under the pointer.
         grab: Point,
-        /// Recent samples, kept for the flick check.
-        recent: Vec<(Point, Duration)>,
     },
-    /// Moved without lifting. The release does nothing.
-    Ignored,
     Lifted {
         card: TaskId,
         grab: Point,
@@ -182,7 +175,7 @@ impl DragMachine {
                 card,
                 pointer,
                 card_origin,
-                at,
+                ..
             } => {
                 if !self.is_idle() {
                     return Vec::new();
@@ -192,14 +185,13 @@ impl DragMachine {
                     card,
                     origin: pointer,
                     grab: pointer.minus(card_origin),
-                    recent: vec![(pointer, at)],
                 };
                 vec![Effect::ArmTimer {
                     generation: self.generation,
                     after: LONG_PRESS,
                 }]
             }
-            Input::Move { pointer, at } => self.move_to(pointer, at),
+            Input::Move { pointer, .. } => self.move_to(pointer),
             Input::Up { pointer } => self.release(pointer),
             Input::Tick { generation } => self.long_press(generation),
             Input::Cancel(reason) => {
@@ -213,36 +205,24 @@ impl DragMachine {
         }
     }
 
-    fn move_to(&mut self, pointer: Point, at: Duration) -> Vec<Effect> {
+    fn move_to(&mut self, pointer: Point) -> Vec<Effect> {
         match &mut self.phase {
-            Phase::Pressed {
-                card,
-                origin,
-                grab,
-                recent,
-            } => {
-                recent.push((pointer, at));
-                recent.retain(|(_, sampled)| at.saturating_sub(*sampled) <= FLICK_WINDOW);
+            Phase::Pressed { card, origin, grab } => {
                 if origin.distance(pointer) <= SLOP {
                     return Vec::new();
                 }
+                // Dragging lifts the card right away, however fast the pointer moves.
                 let (card, grab) = (*card, *grab);
-                if is_flick(recent) {
-                    self.phase = Phase::Lifted {
-                        card,
-                        grab,
-                        pointer,
-                    };
-                    return vec![Effect::Lift {
-                        card,
-                        pointer,
-                        grab,
-                    }];
-                }
-                // Moved, but not a flick: a slow move or a scroll. It won't lift, and the
-                // release won't open the card.
-                self.phase = Phase::Ignored;
-                Vec::new()
+                self.phase = Phase::Lifted {
+                    card,
+                    grab,
+                    pointer,
+                };
+                vec![Effect::Lift {
+                    card,
+                    pointer,
+                    grab,
+                }]
             }
             Phase::Lifted {
                 pointer: current, ..
@@ -250,7 +230,7 @@ impl DragMachine {
                 *current = pointer;
                 vec![Effect::Follow { pointer }]
             }
-            Phase::Idle | Phase::Ignored => Vec::new(),
+            Phase::Idle => Vec::new(),
         }
     }
 
@@ -290,24 +270,6 @@ impl DragMachine {
             _ => Vec::new(),
         }
     }
-}
-
-/// A flick is fast movement that starts with the press and runs mostly sideways. Mostly
-/// vertical movement is a scroll, so it doesn't lift. Vertical reordering is done after a
-/// long press instead.
-fn is_flick(recent: &[(Point, Duration)]) -> bool {
-    let (Some(&(first, first_at)), Some(&(latest, latest_at))) = (recent.first(), recent.last())
-    else {
-        return false;
-    };
-    let seconds = latest_at.saturating_sub(first_at).as_secs_f32();
-    if seconds <= 0.0 {
-        return false;
-    }
-    let dx = latest.x - first.x;
-    let dy = latest.y - first.y;
-    let speed = first.distance(latest) / seconds;
-    speed > FLICK_SPEED && dx.abs() >= dy.abs()
 }
 
 /// The drag as the workspace sees it: the machine, plus where the card came from and where it
@@ -526,23 +488,26 @@ mod tests {
     }
 
     #[test]
-    fn movement_beyond_the_slop_cancels_the_long_press() {
+    fn a_press_that_moves_beyond_the_slop_lifts_the_card() {
         let mut machine = DragMachine::default();
         let generation = generation_of(&press(&mut machine, 0));
-        // Slow, so it's not a flick.
         machine.feed(Input::Move {
             pointer: point(140.0, 110.0),
             at: at(300),
         });
         assert!(machine.feed(Input::Tick { generation }).is_empty());
-        assert!(machine.lifted_at().is_none());
+        // The overlay keeps the grab point under the pointer, as the other lift tests check.
+        assert_eq!(machine.lifted_at(), Some((task(1), point(120.0, 100.0))));
+    }
+
+    #[test]
+    fn a_click_without_movement_opens_the_card() {
+        let mut machine = DragMachine::default();
+        press(&mut machine, 0);
         let effects = machine.feed(Input::Up {
-            pointer: point(140.0, 110.0),
+            pointer: point(120.0, 110.0),
         });
-        assert!(
-            effects.is_empty(),
-            "a scroll-like move doesn't open the card"
-        );
+        assert_eq!(effects, [Effect::OpenCard(task(1))]);
     }
 
     #[test]
@@ -558,13 +523,13 @@ mod tests {
     }
 
     #[test]
-    fn a_fast_sideways_move_from_the_start_lifts_at_once() {
+    fn a_press_and_drag_lifts_at_once_at_any_speed() {
         let mut machine = DragMachine::default();
         press(&mut machine, 0);
-        // 60 px in 30 ms is 2000 px/s, and it's all horizontal.
+        // A slow sideways move lifts the card as well, with the grab point kept.
         let effects = machine.feed(Input::Move {
             pointer: point(180.0, 110.0),
-            at: at(30),
+            at: at(500),
         });
         assert_eq!(
             effects,
@@ -577,26 +542,14 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_move_is_not_a_flick() {
-        let mut machine = DragMachine::default();
-        press(&mut machine, 0);
-        let effects = machine.feed(Input::Move {
-            pointer: point(180.0, 110.0),
-            at: at(500),
-        });
-        assert!(effects.is_empty());
-        assert!(machine.lifted_at().is_none());
-    }
-
-    #[test]
-    fn a_fast_vertical_move_is_a_scroll_not_a_flick() {
+    fn a_vertical_press_and_drag_lifts_too() {
         let mut machine = DragMachine::default();
         press(&mut machine, 0);
         let effects = machine.feed(Input::Move {
             pointer: point(120.0, 170.0),
             at: at(30),
         });
-        assert!(effects.is_empty());
+        assert!(matches!(effects.as_slice(), [Effect::Lift { .. }]));
     }
 
     #[test]

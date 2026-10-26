@@ -271,7 +271,7 @@ pub(super) fn overlay(view: &WorkspaceView, theme: &Theme) -> Option<AnyElement>
 }
 
 impl WorkspaceView {
-    /// A press on a card. The card is either clicked, lifted by a long press or flick, or left
+    /// A press on a card. The card is either clicked, lifted once the pointer moves, or after a long press, or left
     /// alone. The window listeners see the rest.
     pub(super) fn card_pressed(
         &mut self,
