@@ -20,7 +20,7 @@ pub const TITLE_BAR_HEIGHT: Pixels = px(32.);
 static APP_LOGO: LazyLock<Arc<Image>> = LazyLock::new(|| {
     Arc::new(Image::from_bytes(
         ImageFormat::Png,
-        include_bytes!("../../assets/app-icon-48.png").to_vec(),
+        include_bytes!("../../assets/app-icon-96.png").to_vec(),
     ))
 });
 

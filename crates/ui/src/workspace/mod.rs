@@ -23,6 +23,7 @@ mod layout;
 mod list_view;
 mod markdown;
 mod markdown_view;
+mod media;
 mod members;
 mod moves;
 mod palette;
@@ -43,6 +44,7 @@ mod roadmap_layout;
 mod schedule_dialog;
 mod screen;
 mod search;
+mod setting_menu;
 mod sidebar;
 mod state;
 mod switcher;
@@ -51,6 +53,7 @@ mod task_edit;
 mod task_editors;
 mod task_form;
 mod team_dialog;
+mod time_settings;
 mod tour;
 mod updates;
 mod workload_view;
@@ -145,7 +148,9 @@ pub struct WorkspaceView {
     /// The tag being typed for a task, while the tag input has the keyboard.
     tag_edit: Option<task_edit::TagEdit>,
     /// The card whose priority and tag editor is open.
-    card_editing: Option<TaskId>,
+    /// The card whose details are open, if one is. Its media is loaded alongside it.
+    expanded_card: Option<TaskId>,
+    expanded_media: Vec<looji_domain::Attachment>,
     /// The board search: what is typed, the query the board filters by, and whether the field has
     /// the keyboard.
     search_draft: TextEdit,
@@ -178,6 +183,10 @@ pub struct WorkspaceView {
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
+    /// The AI or time dropdown that is open in Preferences or project settings, if one is.
+    setting_menu: Option<setting_menu::OpenMenu>,
+    /// Where the task dialog's description area is scrolled to.
+    description_scroll: gpui::ScrollHandle,
     /// Whether the Columns menu is open on the project header.
     board_columns_open: bool,
     /// The calendar open under a date field, in the task form or the planning window.
@@ -235,7 +244,8 @@ impl WorkspaceView {
                         .collect(),
                     panel: None,
                     tag_edit: None,
-                    card_editing: None,
+                    expanded_card: None,
+                    expanded_media: Vec::new(),
                     search_draft: TextEdit::default(),
                     search_query: String::new(),
                     search_focused: false,
@@ -258,6 +268,8 @@ impl WorkspaceView {
                     quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
+                    setting_menu: None,
+                    description_scroll: gpui::ScrollHandle::new(),
                     board_columns_open: false,
                     open_calendar: None,
                     preferences_open: false,

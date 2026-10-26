@@ -145,6 +145,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "backlog_column",
         sql: include_str!("sql/0028_backlog_column.sql"),
     },
+    Migration {
+        version: 29,
+        name: "task_attachments",
+        sql: include_str!("sql/0029_task_attachments.sql"),
+    },
 ];
 
 #[cfg(test)]

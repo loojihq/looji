@@ -27,5 +27,6 @@ package() {
     cd "$pkgname-$pkgver"
     install -Dm755 target/release/looji "$pkgdir/usr/bin/looji"
     install -Dm644 packaging/linux/looji.desktop "$pkgdir/usr/share/applications/looji.desktop"
+    install -Dm644 assets/branding/app-icon-512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/looji.png"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

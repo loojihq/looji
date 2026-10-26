@@ -1,4 +1,4 @@
-//! The task detail panel: the full task, its history, and links to its chat and repository. It reads
+//! The task detail panel: the full task, its history, and its AI chat. It reads
 //! the task from the board by ID, so an edit made here changes the card straight away. Each edit is
 //! written with its history entry, then the board's copy is updated in place, with no reload.
 //!
@@ -6,12 +6,16 @@
 //! says so. A draft the user was typing is logged rather than thrown away silently.
 
 use gpui::{prelude::*, *};
-use looji_domain::{Status, Task, TaskEvent, TaskEventKind, TaskId, TeamMemberId, Timestamp};
+use looji_domain::{
+    Attachment, AttachmentRepository, Status, Task, TaskEvent, TaskEventKind, TaskId, TeamMemberId,
+    Timestamp,
+};
 
 use super::board::status_label;
 use super::card::{civil_from_days, tooltip};
 use super::drag::DropResult;
 use super::fields::{field, member_mark, segment};
+use super::media;
 use super::members;
 use super::task_editors;
 use super::{WorkspaceView, store};
@@ -39,6 +43,8 @@ pub(super) struct PanelState {
     /// Newest first, as it's shown.
     pub history: Vec<TaskEvent>,
     pub draft: Option<Draft>,
+    /// The task's media, shown with its description.
+    pub media: Vec<Attachment>,
     /// Why the last edit didn't save, shown until the next attempt.
     pub error: Option<String>,
     /// Plain information, such as a link that isn't available yet.
@@ -117,11 +123,16 @@ impl WorkspaceView {
                 Vec::new()
             }
         };
+        let media = store(cx).list_for_task(task).unwrap_or_else(|err| {
+            eprintln!("could not load the media of task {}: {err}", task.as_uuid());
+            Vec::new()
+        });
         let already_open = self.panel.is_some();
         self.panel = Some(PanelState {
             task,
             history,
             draft: None,
+            media,
             error: None,
             notice: None,
         });
@@ -396,20 +407,25 @@ pub(super) fn render(
         ))
         .child(prop_row("Status", statuses, theme))
         .child(prop_row("Priority", priorities, theme))
-        .child(field(
-            "Description",
-            None,
+        .child(
             div()
-                .id("panel-description")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.start_draft(DraftField::Description, cx)
-                    }),
+                .flex()
+                .flex_col()
+                .gap(theme.spacing.xs)
+                .child(media::description_label(panel.task, theme, cx))
+                .child(
+                    div()
+                        .id("panel-description")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.start_draft(DraftField::Description, cx)
+                            }),
+                        )
+                        .child(description_body),
                 )
-                .child(description_body),
-            theme,
-        ))
+                .children(media::tiles(panel.task, &panel.media, false, theme, cx)),
+        )
         .child(prop_row(
             "Assignee",
             // The assignee is chosen in the edit dialog, so the row opens it.
@@ -456,22 +472,9 @@ pub(super) fn render(
                 .child(
                     segment(false, theme)
                         .id("panel-chat")
-                        .child("Chat")
+                        .child("Ask AI")
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                             this.open_chat(window, cx)
-                        })),
-                )
-                .child(
-                    segment(false, theme)
-                        .id("panel-repository")
-                        .child("Repository")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            if let Some(panel) = this.panel.as_mut() {
-                                panel.notice = Some(
-                                    "Repository links arrive with the repository task.".into(),
-                                );
-                            }
-                            cx.notify();
                         })),
                 ),
         )

@@ -4,8 +4,10 @@
 //! repository traits in [`repository`]; the persistence crate implements them.
 
 mod activity;
+mod attachment;
 mod board;
 mod chat;
+mod clock;
 mod code_source;
 mod due_calculation;
 mod error;
@@ -46,7 +48,10 @@ mod workspace;
 mod wsl_path;
 mod zone;
 
+pub use clock::{Clock, UtcOffset, format_clock_time, parse_clock_time};
+
 pub use activity::{ActivityKind, TaskActivity};
+pub use attachment::{Attachment, AttachmentRepository, MediaKind};
 pub use board::{Column, ColumnRecord};
 pub use chat::{
     ModelChoice, Reply, ReplyState, approximate_tokens, recent_within_budget, resolve_model,

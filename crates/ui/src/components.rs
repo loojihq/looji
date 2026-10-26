@@ -164,7 +164,7 @@ pub fn edit_box(edit: &TextEdit, placeholder: &str, active: bool, theme: &Theme)
         .border_color(if active {
             theme.palette.text_secondary
         } else {
-            theme.palette.border_control
+            theme.palette.border
         })
         .bg(theme.palette.surface)
         .text_size(theme.typography.body)
@@ -380,7 +380,7 @@ pub fn select(id: impl Into<ElementId>, label: &str, open: bool, theme: &Theme) 
         .text_color(theme.palette.text_primary)
         .cursor_pointer()
         .border_1()
-        .border_color(theme.palette.border_control)
+        .border_color(theme.palette.border)
         .when(open, |select| select.bg(theme.palette.surface_selected))
         .when(!open, |select| {
             select
@@ -682,6 +682,9 @@ pub fn dropdown_menu(
         .flex_col()
         .gap(theme.spacing.xs)
         .p(theme.spacing.xs)
+        // Long lists scroll inside the menu, so it stays within the window's height.
+        .max_h(px(260.))
+        .overflow_y_scroll()
         .rounded(theme.radius.lg)
         .bg(theme.palette.surface)
         .border_1()
@@ -713,7 +716,7 @@ pub fn dropdown_row(
         .border_1()
         .when(selected, |row| {
             row.bg(theme.palette.surface_selected)
-                .border_color(theme.palette.accent)
+                .border_color(theme.palette.surface_selected)
         })
         .when(!selected, |row| {
             row.border_color(theme.palette.surface)

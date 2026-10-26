@@ -86,10 +86,19 @@ fn code_key(task: TaskId) -> String {
 impl WorkspaceView {
     /// Opens the chat for the selected task. Nothing opens when no task is selected.
     pub(super) fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(panel) = self.panel.as_ref() else {
+        let Some(task_id) = self.panel.as_ref().map(|panel| panel.task) else {
             return;
         };
-        let task_id = panel.task;
+        self.open_chat_for(task_id, window, cx);
+    }
+
+    /// Opens the AI chat about one task. Nothing opens when the task is no longer on the board.
+    pub(super) fn open_chat_for(
+        &mut self,
+        task_id: TaskId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(task) = self.board.iter().find(|task| task.id() == task_id).cloned() else {
             return;
         };

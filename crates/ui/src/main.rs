@@ -4,6 +4,7 @@
 mod assets;
 mod components;
 mod database;
+mod edit_area;
 mod settings;
 mod text_edit;
 mod theme;
@@ -36,6 +37,7 @@ fn main() {
     };
     let database_path = persistence::database_path(&data_dir);
     let icons_dir = persistence::icons::icons_dir(&data_dir);
+    let attachments_dir = persistence::attachments::attachments_dir(&data_dir);
 
     // Opening creates the folder and an empty database on first run.
     let store = match SqliteStore::open(&database_path) {
@@ -73,6 +75,7 @@ fn main() {
                 store,
                 database_path: database_path.clone(),
                 icons_dir: icons_dir.clone(),
+                attachments_dir: attachments_dir.clone(),
             });
             quit_when_last_window_closes(cx);
 

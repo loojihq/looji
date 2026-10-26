@@ -3,6 +3,7 @@
 //! All SQL lives here. Each aggregate reads rows into a domain `*Record`, and the
 //! record is validated on the way into an entity, so a bad row fails loudly.
 
+mod attachment;
 mod code_source;
 mod column;
 mod filter;

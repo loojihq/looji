@@ -3,21 +3,23 @@
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
-#[cfg(debug_assertions)]
-use looji_domain::{Position, TaskRepository};
-use looji_domain::{Project, Status, StatusColumn, Task, TaskId, status_columns};
+
+use looji_domain::{Attachment, Project, Status, StatusColumn, Task, TaskId, status_columns};
 
 use super::WorkspaceView;
-use super::card::{AssigneeMark, CalendarDate, CardDensity, CardView, task_card};
-#[cfg(debug_assertions)]
-use super::drag::Exit;
+use super::card::{
+    AssigneeMark, CalendarDate, CardView, card_group, civil_from_days, format_due, format_estimate,
+    task_card,
+};
 use super::dragging::{DragSession, record_columns};
 use super::landing::{Slot, column_sequence, stack_tops};
+use super::media;
 use super::members;
 use super::search;
-use super::task_edit::TagEdit;
-use super::task_editors;
+
 use super::task_form::Mode;
+use crate::components;
+use crate::database::AppDatabase;
 use crate::theme::Theme;
 
 const HEADER_HEIGHT: Pixels = px(36.);
@@ -43,9 +45,7 @@ pub(super) fn render(
 ) -> impl IntoElement {
     let columns = status_columns(tasks, &project.visible_statuses());
     let today = CalendarDate::utc_today();
-    #[cfg(not(debug_assertions))]
-    let _ = cx;
-    let root = div()
+    div()
         .flex()
         .flex_col()
         .flex_1()
@@ -82,10 +82,7 @@ pub(super) fn render(
                 .children(columns.iter().enumerate().map(|(index, column)| {
                     column_view(index, column, cards, theme, today, drag, cx)
                 })),
-        );
-    #[cfg(debug_assertions)]
-    let root = root.child(debug_controls(theme, cx, drag.last_exit()));
-    root
+        )
 }
 
 fn column_view(
@@ -241,7 +238,7 @@ fn body(
                 let near = top + height >= window_start && top <= window_end;
                 // The card being dragged or edited is always real, wherever it is.
                 let pinned =
-                    dragged == Some(*id) || source_task == Some(*id) || cards.editing == Some(*id);
+                    dragged == Some(*id) || source_task == Some(*id) || cards.expanded == Some(*id);
                 (near || pinned).then_some(*id)
             }
             Slot::Placeholder => None,
@@ -368,8 +365,11 @@ fn card_slot(
     cx: &mut Context<WorkspaceView>,
 ) -> Stateful<Div> {
     let id = task.id();
+    let group = card_group(id);
     div()
         .id(("card", id.as_uuid().as_u128() as u64))
+        .group(group.clone())
+        .relative()
         .track_focus(focus)
         .tab_index(0)
         .rounded(theme.radius.sm)
@@ -388,82 +388,204 @@ fn card_slot(
         )
         .child(task_card(
             card_view(task, cards),
-            CardDensity::Compact,
             today,
             theme,
-            Some(card_editor(task, cards, theme, cx)),
+            (cards.expanded == Some(task.id()))
+                .then(|| card_details(task, cards, today, theme, cx)),
         ))
+        .child(
+            div().absolute().top(px(6.)).right(px(6.)).child(
+                components::icon_button(
+                    ("card-edit", id.as_uuid().as_u128() as u64),
+                    "edit",
+                    theme,
+                )
+                .invisible()
+                .group_hover(group, |style| style.visible())
+                // The press stays with the pencil, so it never starts a drag of the card.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.open_task_dialog(Mode::Edit(id), window, cx)
+                })),
+            ),
+        )
 }
 
-/// The foot of a card: its editor while it's open, otherwise an "Edit" link that opens it. The
-/// editor's presses are contained, so a press here never starts a drag of the card.
-fn card_editor(
+/// The most characters of a description the expanded card shows. A longer one ends in More, which opens the task.
+const DESCRIPTION_LIMIT: usize = 240;
+
+/// The start of a description, cut at a word and ended with an ellipsis when it's longer than `limit` characters.
+/// The flag says whether anything was left out.
+pub(super) fn shorten(text: &str, limit: usize) -> (String, bool) {
+    let text = text.trim();
+    if text.chars().count() <= limit {
+        return (text.to_string(), false);
+    }
+    let cut: String = text.chars().take(limit).collect();
+    let cut = match cut.rfind(char::is_whitespace) {
+        Some(index) if index > 0 => cut[..index].to_string(),
+        _ => cut,
+    };
+    (format!("{}\u{2026}", cut.trim_end()), true)
+}
+
+/// One line of the facts under a description: a quiet label, then its value.
+fn fact(label: &str, value: String, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .gap(theme.spacing.xs)
+        .text_size(theme.typography.caption)
+        .child(
+            div()
+                .text_color(theme.palette.text_secondary)
+                .child(label.to_string()),
+        )
+        .child(div().font_weight(FontWeight::MEDIUM).child(value))
+}
+
+/// The details of an expanded card: the description, with More when it is long, the task's media, the facts
+/// (priority, estimate, assignee, when it was last updated), and a way to have the AI explain the task. The card
+/// above already shows the title and the tags.
+fn card_details(
     task: &Task,
     cards: &CardContext,
+    today: CalendarDate,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let id = task.id();
-    if cards.editing != Some(id) {
-        return div()
-            .flex()
-            .flex_row()
-            .justify_end()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .id(("card-edit", 0_u64))
-                    .px(theme.spacing.xs)
-                    .cursor_pointer()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child("Edit")
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.open_card_editor(id, window, cx)
-                    })),
-            )
-            .into_any_element();
-    }
-    div()
+    let view = card_view(task, cards);
+    let (description, truncated) = shorten(task.description(), DESCRIPTION_LIMIT);
+    let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+    let updated = {
+        let (year, month, day) =
+            civil_from_days(task.updated_at().unix_millis().div_euclid(86_400_000));
+        CalendarDate::new(year, month, day)
+            .map(|date| format_due(date, today))
+            .unwrap_or_else(|| "Unknown".to_string())
+    };
+
+    let mut details = div()
         .flex()
         .flex_col()
-        .gap(theme.spacing.xs)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(task_editors::priority_picker(
-            "card-priority",
-            task,
-            theme,
-            cx,
-        ))
-        .child(task_editors::tag_editor(
-            "card-tags",
-            task,
-            cards.tag_edit.as_ref(),
-            theme,
-            cx,
-        ))
-        .child(
-            div().flex().flex_row().justify_end().child(
+        .gap(theme.spacing.sm)
+        .mt(theme.spacing.xs)
+        .pt(theme.spacing.sm)
+        .border_t_1()
+        .border_color(theme.palette.border)
+        .cursor_default()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+
+    if !description.is_empty() {
+        let mut text = div().flex().flex_col().gap(theme.spacing.xs).child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .line_height(relative(1.5))
+                .child(description),
+        );
+        if truncated {
+            text = text.child(
                 div()
-                    .id(("card-done", 0_u64))
-                    .px(theme.spacing.sm)
+                    .id(("card-more", id.as_uuid().as_u128() as u64))
                     .cursor_pointer()
                     .text_size(theme.typography.caption)
-                    .child("Done")
+                    .font_weight(FontWeight::MEDIUM)
+                    .hover(|style| style.text_color(theme.palette.text_primary))
+                    .text_color(theme.palette.text_secondary)
+                    .child("More")
                     .on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.close_card_editor(cx)),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.open_panel(id, cx)),
                     ),
-            ),
+            );
+        }
+        details = details.child(text);
+    }
+    details = details.children(media::strip(id, &cards.media, &dir, false, theme, cx));
+
+    let facts = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap_x(theme.spacing.md)
+        .gap_y(theme.spacing.xs)
+        .child(fact(
+            "Priority",
+            view.priority
+                .map(|priority| priority.label().trim_end_matches(" priority").to_string())
+                .unwrap_or_else(|| "None".to_string()),
+            theme,
+        ))
+        .child(fact(
+            "Estimate",
+            view.estimate_minutes
+                .and_then(format_estimate)
+                .unwrap_or_else(|| "None".to_string()),
+            theme,
+        ))
+        .child(fact(
+            "Assignee",
+            view.assignee
+                .as_ref()
+                .map(|mark| mark.label.clone())
+                .unwrap_or_else(|| "Unassigned".to_string()),
+            theme,
+        ))
+        .child(fact("Updated", updated, theme));
+
+    details
+        .child(facts)
+        .child(
+            div()
+                .id(("card-explain", id.as_uuid().as_u128() as u64))
+                .flex()
+                .flex_row()
+                .flex_none()
+                .items_center()
+                .gap(theme.spacing.xs)
+                .h(px(28.))
+                .px(theme.spacing.sm)
+                .self_start()
+                .rounded(theme.radius.md)
+                .border_1()
+                .border_color(theme.palette.border)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.palette.surface_hover))
+                .text_size(theme.typography.caption)
+                .child(components::icon(
+                    "message-ai",
+                    14.,
+                    theme.palette.text_secondary,
+                ))
+                .child("Explain task")
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.open_chat_for(id, window, cx)
+                })),
         )
         .into_any_element()
+}
+
+impl WorkspaceView {
+    /// Expands a card to show its details, or collapses it when it's already expanded. One card is open at a time.
+    pub(super) fn toggle_card_details(&mut self, task: TaskId, cx: &mut Context<Self>) {
+        if self.expanded_card == Some(task) {
+            self.expanded_card = None;
+            self.expanded_media.clear();
+        } else {
+            self.expanded_card = Some(task);
+            self.load_media(task, cx);
+        }
+        cx.notify();
+    }
 }
 
 /// What the cards need from the view beyond their own task: the team, and the card editor that's
 /// open, if any.
 pub(super) struct CardContext {
     pub members: Vec<members::Entry>,
-    pub editing: Option<TaskId>,
-    pub tag_edit: Option<TagEdit>,
+    pub expanded: Option<TaskId>,
+    pub media: Vec<Attachment>,
     /// The search terms in use. Empty when nothing is being searched.
     pub terms: Vec<String>,
 }
@@ -472,8 +594,8 @@ pub(super) struct CardContext {
 pub(super) fn card_context(view: &WorkspaceView) -> CardContext {
     CardContext {
         members: members::entries(&view.members),
-        editing: view.card_editing,
-        tag_edit: view.tag_edit.clone(),
+        expanded: view.expanded_card,
+        media: view.expanded_media.clone(),
         terms: search::terms(&view.search_query),
     }
 }
@@ -490,8 +612,7 @@ fn drop_zone(index: usize, searching: bool, theme: &Theme) -> impl IntoElement {
         .min_h(DROP_ZONE_HEIGHT)
         .rounded(theme.radius.md)
         .border_1()
-        .border_dashed()
-        .border_color(theme.palette.border_control)
+        .border_color(theme.palette.border)
         .text_size(theme.typography.caption)
         .text_color(theme.palette.text_secondary)
         .child(if searching { "No matches" } else { "No tasks" })
@@ -538,106 +659,6 @@ pub(super) fn status_label(status: Status) -> &'static str {
         Status::InProgress => "In progress",
         Status::InReview => "In review",
         Status::Done => "Done",
-    }
-}
-
-/// Temporary controls for creating and deleting tasks until the create dialog and the delete
-/// flow exist. Compiled only in debug builds.
-#[cfg(debug_assertions)]
-pub(super) fn debug_controls(
-    theme: &Theme,
-    cx: &mut Context<WorkspaceView>,
-    last_exit: Option<Exit>,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .gap(theme.spacing.sm)
-        .text_size(theme.typography.caption)
-        .text_color(theme.palette.text_secondary)
-        .child(exit_text(last_exit))
-        .child(
-            div()
-                .id("debug-add-task")
-                .cursor_pointer()
-                .hover(|style| style.text_color(theme.palette.text_primary))
-                .child("+ sample task")
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_sample_task(cx))),
-        )
-        .child(
-            div()
-                .id("debug-delete-task")
-                .cursor_pointer()
-                .hover(|style| style.text_color(theme.palette.text_primary))
-                .child("− last task")
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.delete_last_task(cx))),
-        )
-}
-
-/// What the last drag did, for checking drops and cancels by hand.
-#[cfg(debug_assertions)]
-fn exit_text(exit: Option<Exit>) -> String {
-    match exit {
-        None => String::new(),
-        Some(Exit::Dropped(result)) => format!(
-            "Last drop: {} at index {}",
-            status_label(result.status),
-            result.index
-        ),
-        Some(Exit::Unchanged) => "Last drop: same place, nothing saved".to_string(),
-        Some(Exit::Cancelled(reason)) => format!("Last drag cancelled: {reason:?}"),
-    }
-}
-
-impl WorkspaceView {
-    /// Creates a task in the selected project and adds it to the board. Debug builds only.
-    #[cfg(debug_assertions)]
-    pub(super) fn add_sample_task(&mut self, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active_id() else {
-            return;
-        };
-        let visible = self
-            .projects
-            .active()
-            .map(Project::visible_statuses)
-            .unwrap_or_default();
-        if visible.is_empty() {
-            return;
-        }
-        let status = visible[self.board.len() % visible.len()];
-        let title = format!("Sample task {}", self.board.len() + 1);
-        // After the column's last task, so the sample lands at the end.
-        let last = self
-            .board
-            .iter()
-            .rev()
-            .find(|other| other.status() == status)
-            .map(|other| other.position().as_str().to_string());
-        let position =
-            Position::new(looji_domain::after(last.as_deref()).expect("stored keys are valid"))
-                .expect("keys are never empty");
-        let task = Task::new(project, &title, status, position).expect("sample titles are valid");
-        match TaskRepository::save(super::store(cx), &task) {
-            Ok(()) => self.board.push(task),
-            Err(err) => self.status = Some(format!("Could not create the task: {err}")),
-        }
-        cx.notify();
-    }
-
-    /// Deletes the last task on the board. Debug builds only.
-    #[cfg(debug_assertions)]
-    pub(super) fn delete_last_task(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.board.last().map(Task::id) else {
-            return;
-        };
-        match TaskRepository::delete(super::store(cx), id) {
-            Ok(()) => {
-                self.board.pop();
-                self.close_panel_if_gone(cx);
-            }
-            Err(err) => self.status = Some(format!("Could not delete the task: {err}")),
-        }
-        cx.notify();
     }
 }
 
@@ -782,5 +803,33 @@ impl WorkspaceView {
     /// Shows or hides a column from the Columns menu. The menu stays open, so several columns can be changed.
     fn toggle_column(&mut self, status: Status, visible: bool, cx: &mut Context<Self>) {
         self.request_column_visibility(status, visible, cx);
+    }
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::shorten;
+
+    #[test]
+    fn a_short_description_is_shown_whole() {
+        assert_eq!(
+            shorten("  Fix the login.  ", 240),
+            ("Fix the login.".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn a_long_description_is_cut_at_a_word_and_says_so() {
+        let (text, truncated) = shorten("alpha beta gamma delta", 12);
+        assert!(truncated);
+        assert_eq!(text, "alpha beta\u{2026}");
+    }
+
+    #[test]
+    fn a_long_word_is_cut_in_place_and_emoji_are_not_split() {
+        let (text, truncated) =
+            shorten("\u{1f600}\u{1f600}\u{1f600}\u{1f600}\u{1f600}\u{1f600}", 3);
+        assert!(truncated);
+        assert_eq!(text, "\u{1f600}\u{1f600}\u{1f600}\u{2026}");
     }
 }

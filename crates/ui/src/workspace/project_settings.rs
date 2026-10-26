@@ -5,7 +5,7 @@
 use gpui::{prelude::*, *};
 
 use super::dialog_window::{self, Kind};
-use super::{WorkspaceView, ai_settings, repo_dialog, schedule_dialog};
+use super::{WorkspaceView, repo_dialog, schedule_dialog, setting_menu, time_settings};
 use crate::{components, theme::Theme};
 
 /// The sections the settings window lists.
@@ -13,6 +13,7 @@ use crate::{components, theme::Theme};
 pub(super) enum Section {
     #[default]
     Hours,
+    Time,
     Repository,
     Ai,
 }
@@ -21,6 +22,7 @@ impl Section {
     fn label(self) -> &'static str {
         match self {
             Section::Hours => "Working hours",
+            Section::Time => "Time",
             Section::Repository => "Repository",
             Section::Ai => "AI",
         }
@@ -51,6 +53,7 @@ impl WorkspaceView {
             return;
         };
         self.settings_section = Section::Hours;
+        self.setting_menu = None;
         self.repo_dialog = Some(repo_dialog::RepoDialog::new(id));
         self.project_settings_open = true;
         self.refresh_code_source(cx);
@@ -65,8 +68,11 @@ impl WorkspaceView {
             return;
         };
         let (id, schedule) = (project.id(), project.working_schedule());
-        let anchor = looji_domain::LocalMoment::from_timestamp_utc(looji_domain::Timestamp::now());
-        self.schedule_dialog = Some(schedule_dialog::ScheduleDialog::open(id, schedule, anchor));
+        let anchor = time_settings::local_now(cx, Some(id));
+        let clock = time_settings::clock_for(cx, Some(id));
+        self.schedule_dialog = Some(schedule_dialog::ScheduleDialog::open(
+            id, schedule, anchor, clock,
+        ));
         self.schedule_focus[0].focus(window, cx);
         cx.notify();
     }
@@ -74,6 +80,7 @@ impl WorkspaceView {
     /// Picks a section from the list on the left.
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.settings_section = section;
+        self.setting_menu = None;
         cx.notify();
     }
 
@@ -92,6 +99,7 @@ impl WorkspaceView {
         }
         self.schedule_dialog = None;
         self.repo_dialog = None;
+        self.setting_menu = None;
         self.project_settings_open = false;
         cx.notify();
     }
@@ -112,6 +120,12 @@ pub(super) fn panel(
             format!("{project}. {}", schedule_dialog::COPY),
             schedule_dialog::panel(view, theme, window, cx),
         ),
+        Section::Time => (
+            format!(
+                "How {project} shows times. Anything not set here uses the Preferences choice."
+            ),
+            Some(time_section(view, theme, cx).into_any_element()),
+        ),
         Section::Repository => (
             format!("The local git repository for {project}."),
             repo_dialog::panel(view, theme, cx),
@@ -124,20 +138,25 @@ pub(super) fn panel(
         ),
     };
 
-    let list = [Section::Hours, Section::Repository, Section::Ai]
-        .into_iter()
-        .fold(
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.xs)
-                .p(theme.spacing.sm)
-                .w(px(168.))
-                .flex_none()
-                .border_r_1()
-                .border_color(theme.palette.border),
-            |list, item| list.child(section_item(item, item == section, theme, cx)),
-        );
+    let list = [
+        Section::Hours,
+        Section::Time,
+        Section::Repository,
+        Section::Ai,
+    ]
+    .into_iter()
+    .fold(
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.xs)
+            .p(theme.spacing.sm)
+            .w(px(168.))
+            .flex_none()
+            .border_r_1()
+            .border_color(theme.palette.border),
+        |list, item| list.child(section_item(item, item == section, theme, cx)),
+    );
 
     let content = div()
         .flex_1()
@@ -157,6 +176,10 @@ pub(super) fn panel(
                 .text_size(theme.typography.caption)
                 .text_color(theme.palette.text_secondary)
                 .child(description),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_setting_menu(cx)),
         )
         .children(body);
 
@@ -223,53 +246,49 @@ fn section_item(
         )
 }
 
-/// The project's own AI provider and model. Each row cycles through the app's choice, then the options, so a
-/// project can be set to the app's default again.
-fn ai_section(
-    view: &WorkspaceView,
-    theme: &Theme,
-    cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement {
+/// The project's own clock and UTC offset. Each choice is a dropdown whose first row is Default, which hands the
+/// choice back to the app's setting in Preferences.
+fn time_section(view: &WorkspaceView, theme: &Theme, cx: &mut Context<WorkspaceView>) -> Div {
     let Some(project) = view.projects.active_id() else {
         return div();
     };
-    let app_provider = ai_settings::app_provider(cx);
-    let provider_label = match ai_settings::project_provider_choice(cx, project) {
-        Some(provider) => provider.label().to_string(),
-        None => format!("Default ({})", app_provider.label()),
-    };
-    let model_label = match ai_settings::project_model_choice(cx, project) {
-        Some(model) => model,
-        None => match crate::settings::current(cx).selected_model {
-            Some(model) => format!("Default ({model})"),
-            None => format!("Default ({})", looji_ai::models::DEFAULT_MODEL),
-        },
-    };
+    let scope = setting_menu::Scope::Project(project);
     div()
         .flex()
         .flex_col()
-        .child(
-            components::settings_row(
-                "Provider",
-                Some("Claude Code uses the install on this computer. The Anthropic API uses the key in Preferences."),
-                components::select("project-ai-provider", &provider_label, false, theme),
-                theme,
-            )
-            .id("project-ai-provider")
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.cycle_project_provider(project, cx)
-            })),
-        )
-        .child(
-            components::settings_row(
-                "Model",
-                Some("Used for planning and task chat in this project."),
-                components::select("project-ai-model", &model_label, false, theme),
-                theme,
-            )
-            .id("project-ai-model")
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.cycle_project_model(project, cx)
-            })),
-        )
+        .child(components::settings_row(
+            "Clock",
+            Some("How times are shown and typed."),
+            setting_menu::setting_select(view, setting_menu::Field::Clock, scope, theme, cx),
+            theme,
+        ))
+        .child(components::settings_row(
+            "Time zone",
+            Some("A fixed offset from UTC. Working hours count from today in this offset."),
+            setting_menu::setting_select(view, setting_menu::Field::Offset, scope, theme, cx),
+            theme,
+        ))
+}
+
+/// The project's own AI provider and model. Each choice is a dropdown whose first row is Default.
+fn ai_section(view: &WorkspaceView, theme: &Theme, cx: &mut Context<WorkspaceView>) -> Div {
+    let Some(project) = view.projects.active_id() else {
+        return div();
+    };
+    let scope = setting_menu::Scope::Project(project);
+    div()
+        .flex()
+        .flex_col()
+        .child(components::settings_row(
+            "Provider",
+            Some("Claude Code uses the install on this computer. The Anthropic API uses the key in Preferences."),
+            setting_menu::setting_select(view, setting_menu::Field::Provider, scope, theme, cx),
+            theme,
+        ))
+        .child(components::settings_row(
+            "Model",
+            Some("Used for planning and task chat in this project."),
+            setting_menu::setting_select(view, setting_menu::Field::Model, scope, theme, cx),
+            theme,
+        ))
 }

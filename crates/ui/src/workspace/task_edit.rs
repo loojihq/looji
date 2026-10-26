@@ -156,24 +156,6 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Opens a card for tag and priority editing, and puts the keyboard on its tag input.
-    pub(super) fn open_card_editor(
-        &mut self,
-        task: TaskId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.card_editing = Some(task);
-        self.focus_tag_input(task, window, cx);
-    }
-
-    /// Closes a card's editor. Typed text is added first, as for any blur.
-    pub(super) fn close_card_editor(&mut self, cx: &mut Context<Self>) {
-        self.blur_tag_editor(cx);
-        self.card_editing = None;
-        cx.notify();
-    }
-
     /// Types text into the tag input. A comma ends the tag before it, as in the dialog.
     pub(super) fn type_tag_text(&mut self, text: &str, cx: &mut Context<Self>) {
         let mut parts = text.split(',').peekable();
@@ -261,7 +243,7 @@ impl WorkspaceView {
             }
             "escape" => {
                 self.blur_tag_editor(cx);
-                self.card_editing = None;
+                self.expanded_card = None;
             }
             "enter" => self.commit_tag(cx),
             "down" if showing => self.step_highlight(true),
@@ -366,8 +348,8 @@ impl WorkspaceView {
     /// Clears the editors when their task is gone from the board.
     pub(super) fn close_tag_editors_if_gone(&mut self) {
         let on_board = |task: TaskId| self.board.iter().any(|other| other.id() == task);
-        if self.card_editing.is_some_and(|task| !on_board(task)) {
-            self.card_editing = None;
+        if self.expanded_card.is_some_and(|task| !on_board(task)) {
+            self.expanded_card = None;
         }
         if self
             .tag_edit

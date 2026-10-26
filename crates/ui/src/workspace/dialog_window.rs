@@ -43,8 +43,8 @@ impl Kind {
             },
             Kind::Plan => "Generate with AI".to_string(),
             Kind::Chat => match view.chat_dialog.as_ref() {
-                Some(dialog) => format!("Chat: {}", dialog.title),
-                None => "Chat".to_string(),
+                Some(dialog) => format!("Ask AI: {}", dialog.title),
+                None => "Ask AI".to_string(),
             },
         }
     }
@@ -53,7 +53,7 @@ impl Kind {
     /// space around it.
     fn size(self) -> Size<Pixels> {
         match self {
-            Kind::Task => size(px(552.), px(520.)),
+            Kind::Task => size(px(552.), px(660.)),
             Kind::TaskDetail => size(px(560.), px(720.)),
             Kind::Chat => size(px(680.), px(640.)),
             Kind::Preferences => size(px(720.), px(680.)),
@@ -244,17 +244,26 @@ impl Render for DialogWindow {
             .pl(theme.spacing.md)
             .pr(px(6.))
             .bg(theme.palette.surface_raised)
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |event, window, _| {
-                window_move::drag_from(event, window)
-            })
+            // The title is the drag area. The close button is outside it, so a press on it is never taken for a drag.
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(theme.typography.body)
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |event, window, _| {
+                        window_move::drag_from(event, window)
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(theme.typography.body)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    ),
             )
             .child(
                 components::icon_button("dialog-close", "x", &theme)

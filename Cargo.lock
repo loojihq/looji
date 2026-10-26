@@ -2980,6 +2980,7 @@ dependencies = [
 name = "looji-ui"
 version = "0.0.1"
 dependencies = [
+ "embed-resource",
  "gpui",
  "gpui_platform",
  "looji-ai",

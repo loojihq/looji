@@ -255,7 +255,9 @@ impl TaskForm {
                 .chars()
                 .filter(|c| c.is_ascii_digit() || *c == '-')
                 .collect(),
-            _ => text.to_string(),
+            Field::Description => text.replace("\r\n", "\n").replace('\r', "\n"),
+            // One-line fields take pasted line breaks as spaces.
+            _ => text.replace("\r\n", " ").replace(['\r', '\n'], " "),
         };
         if self.active == Field::Tags {
             // A comma ends the tag being typed. The text after the last comma stays as the draft.
@@ -285,6 +287,13 @@ impl TaskForm {
             Field::Tags => Some(&mut self.values.tag_draft),
             Field::Start | Field::Due | Field::Priority | Field::Assignee => None,
         }
+    }
+
+    /// The selected text of the active field, for copy and cut.
+    pub fn selected_text(&mut self) -> Option<String> {
+        let field = self.active_text()?;
+        let range = field.selection()?;
+        Some(field.as_str()[range].to_string())
     }
 
     /// Removes the selection, or the character before the caret, in the active field. In the tags

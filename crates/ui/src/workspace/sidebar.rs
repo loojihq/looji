@@ -38,17 +38,6 @@ pub fn render(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl Int
                 .flex()
                 .flex_col()
                 .gap(theme.spacing.xs)
-                .child(single_item(
-                    SidebarItem {
-                        id: "sidebar-search",
-                        icon: "search",
-                        label: "Search",
-                        trailing: Some("Ctrl F"),
-                    },
-                    |this, window, cx| this.focus_search(window, cx),
-                    &theme,
-                    cx,
-                ))
                 .child(screen_item(Screen::Today, "sun", "Today", view, &theme, cx))
                 .child(screen_item(
                     Screen::Week,
@@ -111,23 +100,4 @@ fn screen_item(
         theme,
     )
     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_screen(screen, cx)))
-}
-
-/// What one sidebar entry shows: its id, icon, label, and an optional trailing hint such as a shortcut.
-struct SidebarItem {
-    id: &'static str,
-    icon: &'static str,
-    label: &'static str,
-    trailing: Option<&'static str>,
-}
-
-/// A sidebar entry that runs an action when clicked. The action gets the window, for the dialogs it opens.
-fn single_item(
-    item: SidebarItem,
-    run: fn(&mut WorkspaceView, &mut Window, &mut Context<WorkspaceView>),
-    theme: &Theme,
-    cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement {
-    components::nav_item(item.id, item.icon, item.label, false, item.trailing, theme)
-        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| run(this, window, cx)))
 }

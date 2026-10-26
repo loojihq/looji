@@ -12,6 +12,8 @@ pub struct AppDatabase {
     pub database_path: PathBuf,
     /// Where workspace icon files live. Read by the views that render or replace icons.
     pub icons_dir: PathBuf,
+    /// Where files attached to tasks are copied. Read by the task views that show or add media.
+    pub attachments_dir: PathBuf,
 }
 
 impl Global for AppDatabase {}

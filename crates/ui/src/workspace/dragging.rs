@@ -15,7 +15,7 @@ use looji_domain::{Status, TaskId};
 use super::WorkspaceView;
 use super::autoscroll::{EDGE_ZONE, Ramp, advance, edge_velocity};
 use super::board::{card_context, card_view};
-use super::card::{CalendarDate, CardDensity, task_card};
+use super::card::{CalendarDate, task_card};
 use super::drag::{CancelReason, Command, Drag, Exit, Input};
 use super::keyboard::Hold;
 use super::layout::{BoardLayout, CardSlot, ColumnSlot, Point as DragPoint, Rect};
@@ -47,8 +47,6 @@ pub(super) struct DragSession {
     scroll_task: Option<Task<()>>,
     /// Whether a scroll loop is running, so only one runs at a time.
     scrolling: bool,
-    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
-    last_exit: Option<Exit>,
     /// The keyboard move in progress, if any.
     pub(super) keyboard: Hold,
     /// A card the press opened, for the release to hand to the edit dialog.
@@ -78,7 +76,6 @@ impl Default for DragSession {
             ramp: Ramp::default(),
             scroll_task: None,
             scrolling: false,
-            last_exit: None,
             keyboard: Hold::Idle,
             opened: None,
             keyboard_notice: None,
@@ -130,11 +127,6 @@ impl DragSession {
 
     pub(super) fn keyboard_notice(&self) -> Option<&str> {
         self.keyboard_notice.as_deref()
-    }
-
-    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Read by the debug controls only.
-    pub(super) fn last_exit(&self) -> Option<Exit> {
-        self.last_exit
     }
 }
 
@@ -268,7 +260,6 @@ pub(super) fn overlay(view: &WorkspaceView, theme: &Theme) -> Option<AnyElement>
             .shadow(theme.elevation.overlay.clone())
             .child(task_card(
                 card_view(task, &card_context(view)),
-                CardDensity::Compact,
                 today,
                 theme,
                 None,
@@ -295,7 +286,6 @@ impl WorkspaceView {
             Some(slot) => slot.bounds.origin,
             None => return,
         };
-        self.drag.last_exit = None;
         // A window that loses focus, for example on Alt-Tab, takes the release with it.
         self.drag.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -444,9 +434,9 @@ impl WorkspaceView {
             Input::Cancel(CancelReason::ReleasedOutside)
         };
         self.drive_drag(input, cx);
-        // A click on a card, with no drag, opens it for editing.
+        // A click on a card, with no drag, expands its details.
         if let Some(task) = self.drag.opened.take() {
-            self.open_panel(task, cx);
+            self.toggle_card_details(task, cx);
         }
     }
 
@@ -519,7 +509,6 @@ impl WorkspaceView {
         self.drag.scroll_owner = None;
         self.drag.pointer = None;
         self.drag.ramp.reset();
-        self.drag.last_exit = Some(exit);
         // Placed at a new index, in this column or another. A drop where the card already is
         // never reaches here: it ends as `Exit::Unchanged`.
         if let Exit::Dropped(result) = exit {
