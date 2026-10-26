@@ -347,6 +347,7 @@ impl WorkspaceView {
             // Retrieval reads the repository and may refresh its index, so it runs off the UI thread on its own
             // connection. Its outcome decides what the model is shown, but the reply starts either way.
             let database_path = cx.global::<AppDatabase>().database_path.clone();
+            let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
             // A task is looked up by its title and description. A question about the codebase is looked up by what
             // was asked.
             let (title, description) = if launch.whole_project {
@@ -354,9 +355,15 @@ impl WorkspaceView {
             } else {
                 (launch.title.clone(), launch.description.clone())
             };
-            let retrieval = cx
-                .background_executor()
-                .spawn(async move { retrieve_code(&database_path, project, &title, &description) });
+            let retrieval = cx.background_executor().spawn(async move {
+                retrieve_code(
+                    &database_path,
+                    &knowledge_path,
+                    project,
+                    &title,
+                    &description,
+                )
+            });
             cx.spawn(async move |this, cx| {
                 let (hunks, notice) = match retrieval.await {
                     Ok(hunks) => (hunks, None),
@@ -622,10 +629,17 @@ fn latest_question(history: &[AiMessage]) -> String {
 /// user, and the reply goes ahead without the code.
 fn retrieve_code(
     database_path: &Path,
+    knowledge_path: &Path,
     project: ProjectId,
     title: &str,
     description: &str,
 ) -> Result<Vec<Hunk>, String> {
+    // The knowledge base is current and ranked. Until it has read the project, the repository is read directly.
+    if let Some(hunks) =
+        super::knowledge::search_hunks(knowledge_path, project, &format!("{title} {description}"))
+    {
+        return Ok(hunks);
+    }
     let store = SqliteStore::open(database_path)
         .map_err(|err| format!("Repository code was not sent: {err}"))?;
     let root = store

@@ -18,6 +18,7 @@ mod export;
 mod fields;
 mod filter_bar;
 mod keyboard;
+mod knowledge;
 mod landing;
 mod layout;
 mod list_view;
@@ -122,6 +123,9 @@ pub struct WorkspaceView {
     chat_scroll: ScrollHandle,
     /// The check for a newer release, running in the background, and the notice it produced, if any.
     update_task: Option<gpui::Task<()>>,
+    /// The indexer for the open project's repository, and the loop that keeps it matched to the open project.
+    knowledge: Option<knowledge::Service>,
+    knowledge_task: Option<gpui::Task<()>>,
     update_notice: Option<looji_updates::UpdateStatus>,
     update_install: Option<updates::Install>,
     update_worker: Option<gpui::Task<()>>,
@@ -224,6 +228,8 @@ impl WorkspaceView {
                     chat_dialog: None,
                     chat_scroll: ScrollHandle::new(),
                     update_task: None,
+                    knowledge: None,
+                    knowledge_task: None,
                     update_notice: None,
                     update_install: None,
                     update_worker: None,
@@ -284,6 +290,7 @@ impl WorkspaceView {
                 view.reload_projects(cx);
                 view.gather_screen_tasks(cx);
                 view.start_update_checks(cx);
+                view.start_knowledge(cx);
                 view.start_tour_if_new(cx);
                 view
             });

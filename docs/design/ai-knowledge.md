@@ -379,6 +379,31 @@ Each phase ships on its own and is useful by itself.
 - A warm Claude Code session. Rerank where measurement says it helps.
 - Wireframes, and text from PDFs and images.
 
+## Phase 1 status
+
+Built in `crates/knowledge` (`looji-knowledge`) and wired into the app:
+
+- `knowledge.db`, a separate SQLite file of derived data, with chunks and an FTS5 index over identifier-aware words.
+- Chunking: code by symbol, docs by heading, issues as records, commits as messages with their files.
+- Ignore and secret rules: `.gitignore`, `.loojiignore`, excluded folders, secret file names, private keys, and
+  quoted secret values. Redaction never rewrites code that only names a secret.
+- A background indexer per open project with a file watcher (and a scan every few seconds for WSL and network paths),
+  git awareness, and issues kept current as the board changes.
+- Chat retrieval reads from it, with the old direct read as a fallback until a project has been indexed.
+- An index health view in the repository settings.
+- Evaluation fixtures with recall@10 and MRR floors per question type, run in `cargo test`.
+
+Differences from the plan above:
+
+- Commits are read with the `git` program, not `gix`, to keep the build small. A machine without `git` has no history.
+- Conversations are not indexed yet. They arrive with the agent in phase 2.
+- Commits are linked to issues by a mention of the issue's id, or by title-word overlap. Ids aren't shown in the app
+  yet, so overlap does most of the work.
+
+Baseline on the sample repository (lexical search only): identifier questions recall@10 1.00, paraphrases 1.00 with
+MRR 0.61, issues 1.00, docs 0.67. The one miss, "how is the system structured" for a document titled Architecture,
+shares no word with its answer. That is the case embeddings are for.
+
 ## Evaluation (built in phase 1, used for every change)
 
 - **Fixtures.** A small checked-in sample repository plus seeded issues, and a `questions.json` of about 40 questions

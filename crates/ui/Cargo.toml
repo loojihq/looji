@@ -22,6 +22,7 @@ uuid = "1.28.0"
 pulldown-cmark = "0.13.4"
 looji-report = { version = "0.0.1", path = "../report" }
 looji-updates = { version = "0.0.1", path = "../updates" }
+looji-knowledge = { version = "0.0.1", path = "../knowledge" }
 
 [build-dependencies]
 embed-resource = "3.0.12"

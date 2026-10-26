@@ -1,0 +1,26 @@
+# type | question | expected (a path fragment, or issue:<id>)
+identifier | where is verify_password defined | src/auth/login.rs
+identifier | what does charge_card do | src/payments/stripe.rs
+identifier | cart_total | src/cart.rs
+identifier | where is submitCheckout | web/checkout.ts
+identifier | refund_payment | src/payments/stripe.rs
+identifier | export_sales_report | tools/export_report.py
+identifier | what is IDLE_LIMIT_MINUTES | src/auth/session.rs
+identifier | build_invoice | src/payments/invoice.rs
+paraphrase | how do we check a customer's password | src/auth/login.rs
+paraphrase | how do customers get billed on their credit card | src/payments/stripe.rs
+paraphrase | where do we mail the invoice to the customer | src/payments/invoice.rs
+paraphrase | what happens when a session has been idle too long | src/auth/session.rs
+paraphrase | how does the checkout validate the shipping address | web/checkout.ts
+paraphrase | generate the monthly sales spreadsheet | tools/export_report.py
+paraphrase | how do we put a product in the shopping cart | src/cart.rs
+paraphrase | giving money back to a customer | src/payments/stripe.rs
+paraphrase | ending a customer's session when they leave | src/auth/login.rs
+docs | how is the system structured | docs/architecture.md
+docs | how do we run the shop | README.md
+docs | do we store card numbers | docs/architecture.md
+issues | who is working on the login timeout | issue:i-login-timeout
+issues | what is left for partial refunds | issue:i-partial-refunds
+issues | is anyone fixing the postcode check | issue:i-postcode
+issues | what about the finance spreadsheet export | issue:i-finance-export
+issues | invoice email problems | issue:i-invoice-email
