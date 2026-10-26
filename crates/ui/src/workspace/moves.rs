@@ -84,7 +84,13 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         match result {
-            Ok(_) => self.status = None,
+            Ok(_) => {
+                self.status = None;
+                // A task that has just been moved into review is reviewed. Nothing is moved on from it.
+                if super::review::entered_review(mv.from(), mv.to()) {
+                    self.start_review(mv.task(), false, cx);
+                }
+            }
             Err(err) => {
                 eprintln!("could not move task {}: {err}", mv.task().as_uuid());
                 self.status = Some(move_failure_message(&err).to_string());

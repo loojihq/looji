@@ -364,6 +364,7 @@ impl WorkspaceView {
                         arrived = true;
                     }
                 }
+                Update::Step(_) | Update::Source(_) => {}
                 Update::Finished(full) => {
                     self.finish_plan_run(&full, cx);
                     break;
@@ -408,6 +409,7 @@ impl WorkspaceView {
                         estimate: task.estimate,
                         assignee: task.assignee,
                         tags: task.tags.clone(),
+                        done_when: task.done_when.clone(),
                         section: None,
                         edited: false,
                     })

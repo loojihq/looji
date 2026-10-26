@@ -7,7 +7,7 @@ use super::parse::RefineKind;
 
 /// Which version of this prompt wrote a plan. Store it with a draft, so a draft shows which prompt made it. Change
 /// it whenever the prompt's wording or schema changes.
-pub const PROMPT_VERSION: u32 = 1;
+pub const PROMPT_VERSION: u32 = 2;
 
 /// The fields of each object in the response. The parser reads the same names, and a test checks that it accepts
 /// an object built from these.
@@ -57,6 +57,11 @@ fn task_fields_text(team: &[TeamMember]) -> String {
         (
             tags,
             "an array of strings. Use an empty array if there are none.".to_string(),
+        ),
+        (
+            "done_when",
+            "an optional array of 2 to 4 short, checkable statements that are true when the task is done, such as \"Empty passwords are refused\"."
+                .to_string(),
         ),
     ];
     lines

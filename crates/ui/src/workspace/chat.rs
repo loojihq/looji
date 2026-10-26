@@ -4,6 +4,7 @@
 //! message. The reply's markdown is drawn by `markdown` and `chat_render`.
 
 use std::{
+    collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -11,8 +12,8 @@ use std::{
 
 use gpui::{prelude::*, *};
 use looji_ai::{
-    AiError, CancellationToken, ChatMessage as AiMessage, ChatProvider, ChatRequest,
-    chat::{HISTORY_BUDGET_TOKENS, TaskBrief, build_chat_request},
+    AiError, CancellationToken, ChatMessage as AiMessage, ChatProvider, ChatRequest, Source,
+    chat::{HISTORY_BUDGET_TOKENS, TaskBrief, build_agent_request, build_chat_request},
     generation::{Update, run_with},
     models::{DEFAULT_MODEL, MODELS},
 };
@@ -38,6 +39,10 @@ pub(super) struct Active {
     pub reply: Reply,
     pub cancel: CancellationToken,
     pub queue: Arc<Mutex<Vec<Update>>>,
+    /// What an agent has done so far, oldest first, shown while it works.
+    pub steps: Vec<String>,
+    /// What an agent read, in the order it read it, without repeats.
+    pub sources: Vec<Source>,
     pub _reader: Task<()>,
 }
 
@@ -66,6 +71,8 @@ pub(super) struct ChatDialog {
     pub error: Option<String>,
     /// The code block whose copy button last said "Copied": the message position and the block's index in it.
     pub copied: Option<(u32, usize)>,
+    /// What each reply drew on, by the reply's position. Kept while the dialog is open.
+    pub sources: HashMap<u32, Vec<Source>>,
 }
 
 /// What a reply needs once its context is ready. Built before the reply starts, so retrieval can run in between.
@@ -142,6 +149,30 @@ impl WorkspaceView {
         self.open_chat_subject(subject, window, cx);
     }
 
+    /// Opens the chat about a task and asks for an explanation of it at once, so the button answers the question it
+    /// names. Repository code is turned on when the project has a repository, so the answer can point at the code.
+    pub(super) fn explain_issue(
+        &mut self,
+        task_id: TaskId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_chat_for(task_id, window, cx);
+        let Some(dialog) = self.chat_dialog.as_mut() else {
+            return;
+        };
+        if dialog.task != task_id {
+            return;
+        }
+        if dialog.code_available {
+            dialog.use_code = true;
+        }
+        dialog.draft = TextEdit::new(
+            "Explain this issue: what it asks for, which parts of the code it touches, and where to start.",
+        );
+        self.send_chat_message(cx);
+    }
+
     /// Opens the AI chat about the open project's whole codebase. It is saved with the project, under the project's
     /// own id.
     pub(super) fn open_project_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -190,6 +221,12 @@ impl WorkspaceView {
         let messages = thread
             .and_then(|thread| store(cx).messages(thread).ok())
             .unwrap_or_default();
+        let sources: HashMap<u32, Vec<Source>> = thread
+            .and_then(|thread| store(cx).message_sources(thread).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(position, text)| (position, sources_from_json(&text)))
+            .collect();
         self.chat_dialog = Some(ChatDialog {
             task: task_id,
             project,
@@ -213,6 +250,7 @@ impl WorkspaceView {
             active: None,
             error: None,
             copied: None,
+            sources,
         });
         if choice_saved_missing(saved.as_deref()) {
             // The saved model is gone, so the notice explains it and the saved value is replaced by the default.
@@ -328,6 +366,8 @@ impl WorkspaceView {
                 reply: Reply::streaming(),
                 cancel: cancel.clone(),
                 queue,
+                steps: Vec::new(),
+                sources: Vec::new(),
                 _reader: reader,
             });
         }
@@ -343,10 +383,18 @@ impl WorkspaceView {
             status,
             whole_project,
         };
-        if use_code {
+        let agent_root = if use_code && !fake_ai() {
+            store(cx).load_path(project).ok().flatten()
+        } else {
+            None
+        };
+        if let Some(root) = agent_root {
+            self.launch_agent_reply(launch, project, root, cancel, cx);
+        } else if use_code {
             // Retrieval reads the repository and may refresh its index, so it runs off the UI thread on its own
             // connection. Its outcome decides what the model is shown, but the reply starts either way.
             let database_path = cx.global::<AppDatabase>().database_path.clone();
+            let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
             // A task is looked up by its title and description. A question about the codebase is looked up by what
             // was asked.
             let (title, description) = if launch.whole_project {
@@ -354,9 +402,15 @@ impl WorkspaceView {
             } else {
                 (launch.title.clone(), launch.description.clone())
             };
-            let retrieval = cx
-                .background_executor()
-                .spawn(async move { retrieve_code(&database_path, project, &title, &description) });
+            let retrieval = cx.background_executor().spawn(async move {
+                retrieve_code(
+                    &database_path,
+                    &knowledge_path,
+                    project,
+                    &title,
+                    &description,
+                )
+            });
             cx.spawn(async move |this, cx| {
                 let (hunks, notice) = match retrieval.await {
                     Ok(hunks) => (hunks, None),
@@ -412,6 +466,38 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Starts a reply from an agent, which searches and reads the repository itself instead of being handed code.
+    fn launch_agent_reply(
+        &mut self,
+        launch: Launch,
+        project: ProjectId,
+        root: String,
+        cancel: CancellationToken,
+        cx: &mut Context<Self>,
+    ) {
+        let brief = TaskBrief {
+            title: &launch.title,
+            description: &launch.description,
+            status: &launch.status,
+            whole_project: launch.whole_project,
+        };
+        let (request, _left_out) =
+            build_agent_request(&launch.model, brief, &launch.history, HISTORY_BUDGET_TOKENS);
+        let queue = match self
+            .chat_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.active.as_ref())
+        {
+            Some(active) if active.position == launch.position => Arc::clone(&active.queue),
+            _ => return,
+        };
+        let provider = super::ai_settings::provider_for(cx, Some(project));
+        let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
+        let agent = super::agent::agent_for(provider, &knowledge_path, project, Path::new(&root));
+        spawn_agent_reply(request, cancel, queue, agent);
+        cx.notify();
+    }
+
     /// Reads the updates the stream has sent since the last read. Returns whether the reader should keep going.
     fn read_chat_updates(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(dialog) = self.chat_dialog.as_mut() else {
@@ -427,6 +513,12 @@ impl WorkspaceView {
         for update in updates {
             match update {
                 Update::Text(token) => active.reply.push(&token),
+                Update::Step(step) => active.steps.push(step),
+                Update::Source(source) => {
+                    if !active.sources.contains(&source) {
+                        active.sources.push(source);
+                    }
+                }
                 Update::Finished(_) => active.reply.complete(),
                 Update::Failed(err) => active.reply.fail(failure_text(&err)),
             }
@@ -442,6 +534,10 @@ impl WorkspaceView {
             active.reply.text.clone(),
             active.reply.state.clone(),
         );
+        let (position, sources) = (active.position, std::mem::take(&mut active.sources));
+        if !sources.is_empty() {
+            dialog.sources.insert(position, sources);
+        }
         dialog.active = None;
         self.save_reply(finished, cx);
         cx.notify();
@@ -455,6 +551,16 @@ impl WorkspaceView {
     ) {
         if let Err(err) = store(cx).finish_message(thread, position, &text, &state) {
             self.chat_error(format!("Could not save the reply: {err}"), cx);
+        }
+        let sources = self
+            .chat_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.sources.get(&position))
+            .map(|sources| sources_to_json(sources));
+        if let Some(sources) = sources
+            && let Err(err) = store(cx).set_message_sources(thread, position, &sources)
+        {
+            eprintln!("could not save the sources of a reply: {err}");
         }
         self.reload_chat(cx);
     }
@@ -475,6 +581,13 @@ impl WorkspaceView {
             active.reply.text.clone(),
             active.reply.state.clone(),
         );
+        if !active.sources.is_empty()
+            && let Some(dialog) = self.chat_dialog.as_mut()
+        {
+            dialog
+                .sources
+                .insert(active.position, std::mem::take(&mut active.sources));
+        }
         self.save_reply(finished, cx);
         cx.notify();
     }
@@ -598,6 +711,44 @@ impl WorkspaceView {
     }
 }
 
+/// A reply's sources as saved with it.
+fn sources_to_json(sources: &[Source]) -> String {
+    serde_json::Value::Array(
+        sources
+            .iter()
+            .map(|source| {
+                serde_json::json!({
+                    "kind": source.kind,
+                    "reference": source.reference,
+                    "label": source.label,
+                    "start_line": source.start_line,
+                    "end_line": source.end_line,
+                })
+            })
+            .collect(),
+    )
+    .to_string()
+}
+
+/// Sources as saved. Anything that can't be read is left out.
+fn sources_from_json(text: &str) -> Vec<Source> {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str(text) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            Some(Source {
+                kind: item["kind"].as_str()?.to_string(),
+                reference: item["reference"].as_str()?.to_string(),
+                label: item["label"].as_str().unwrap_or_default().to_string(),
+                start_line: item["start_line"].as_u64().unwrap_or(0) as u32,
+                end_line: item["end_line"].as_u64().unwrap_or(0) as u32,
+            })
+        })
+        .collect()
+}
+
 /// Whether a saved model name is one the provider no longer lists.
 fn choice_saved_missing(saved: Option<&str>) -> bool {
     matches!(saved, Some(model) if !MODELS.contains(&model))
@@ -622,10 +773,17 @@ fn latest_question(history: &[AiMessage]) -> String {
 /// user, and the reply goes ahead without the code.
 fn retrieve_code(
     database_path: &Path,
+    knowledge_path: &Path,
     project: ProjectId,
     title: &str,
     description: &str,
 ) -> Result<Vec<Hunk>, String> {
+    // The knowledge base is current and ranked. Until it has read the project, the repository is read directly.
+    if let Some(hunks) =
+        super::knowledge::search_hunks(knowledge_path, project, &format!("{title} {description}"))
+    {
+        return Ok(hunks);
+    }
     let store = SqliteStore::open(database_path)
         .map_err(|err| format!("Repository code was not sent: {err}"))?;
     let root = store
@@ -662,6 +820,33 @@ fn spawn_reply(
         }
     };
     drop(looji_ai::runtime().spawn(future));
+}
+
+/// Runs the request through an agent. A failure to set the agent up is reported like any failed reply.
+fn spawn_agent_reply(
+    request: ChatRequest,
+    cancel: CancellationToken,
+    queue: Arc<Mutex<Vec<Update>>>,
+    agent: Result<Arc<dyn ChatProvider>, AiError>,
+) {
+    let future = async move {
+        let sink = queue;
+        let push = move |update: Update| {
+            if let Ok(mut queue) = sink.lock() {
+                queue.push(update);
+            }
+        };
+        match agent {
+            Ok(agent) => run_with(agent.as_ref(), request, cancel, push).await,
+            Err(err) => push(Update::Failed(err)),
+        }
+    };
+    drop(looji_ai::runtime().spawn(future));
+}
+
+/// A debug build with `LOOJI_FAKE_AI` set answers from a script, so the agent is not used.
+fn fake_ai() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("LOOJI_FAKE_AI").is_some()
 }
 
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
@@ -807,4 +992,23 @@ pub(super) fn panel(
     );
 
     Some(panel.into_any_element())
+}
+
+#[cfg(test)]
+mod source_tests {
+    // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
+    use super::{Source, sources_from_json, sources_to_json};
+
+    #[test]
+    fn sources_read_back_as_they_were_saved_and_junk_gives_none() {
+        let sources = vec![Source {
+            kind: "code".into(),
+            reference: "src/auth.rs".into(),
+            label: "fn verify".into(),
+            start_line: 3,
+            end_line: 9,
+        }];
+        assert_eq!(sources_from_json(&sources_to_json(&sources)), sources);
+        assert!(sources_from_json("not json").is_empty());
+    }
 }

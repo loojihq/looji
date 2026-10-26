@@ -32,6 +32,7 @@ fn a_live_request_streams_text_and_finishes() {
         while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
             match event.expect("the live stream has no error") {
                 ChatEvent::Token(token) => text.push_str(&token),
+                ChatEvent::Step(_) | ChatEvent::Source(_) => {}
                 ChatEvent::Finished { .. } => finished = true,
             }
         }

@@ -460,6 +460,9 @@ pub(super) fn panel(
         .w_full()
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(status_text(&shown, theme))
+        .when(stored.is_some(), |panel| {
+            panel.children(super::knowledge::health_block(view, theme, cx))
+        })
         .when(stored.is_none(), |panel| panel.child(folder))
         .when_some(dialog.error.clone(), |panel, message| {
             panel.child(error_text(message, theme))

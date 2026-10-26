@@ -1,5 +1,6 @@
 //! The main window: a title bar over a sidebar of workspaces and projects, and the main pane.
 
+mod agent;
 mod ai_settings;
 mod autoscroll;
 mod avatar;
@@ -18,6 +19,7 @@ mod export;
 mod fields;
 mod filter_bar;
 mod keyboard;
+mod knowledge;
 mod landing;
 mod layout;
 mod list_view;
@@ -39,6 +41,7 @@ mod project_state;
 mod project_views;
 mod projects;
 mod repo_dialog;
+mod review;
 mod roadmap;
 mod roadmap_layout;
 mod schedule_dialog;
@@ -118,10 +121,15 @@ pub struct WorkspaceView {
     team_dialog: Option<team_dialog::TeamDialog>,
     /// The task chat, while it is open.
     chat_dialog: Option<chat::ChatDialog>,
+    /// The reviews of tasks that went into review, running or finished.
+    reviews: review::Reviews,
     /// Follows the newest message in the chat, so a streaming reply stays in view.
     chat_scroll: ScrollHandle,
     /// The check for a newer release, running in the background, and the notice it produced, if any.
     update_task: Option<gpui::Task<()>>,
+    /// The indexer for the open project's repository, and the loop that keeps it matched to the open project.
+    knowledge: Option<knowledge::Service>,
+    knowledge_task: Option<gpui::Task<()>>,
     update_notice: Option<looji_updates::UpdateStatus>,
     update_install: Option<updates::Install>,
     update_worker: Option<gpui::Task<()>>,
@@ -222,8 +230,11 @@ impl WorkspaceView {
                     task_dialog: None,
                     team_dialog: None,
                     chat_dialog: None,
+                    reviews: review::Reviews::new(),
                     chat_scroll: ScrollHandle::new(),
                     update_task: None,
+                    knowledge: None,
+                    knowledge_task: None,
                     update_notice: None,
                     update_install: None,
                     update_worker: None,
@@ -284,6 +295,7 @@ impl WorkspaceView {
                 view.reload_projects(cx);
                 view.gather_screen_tasks(cx);
                 view.start_update_checks(cx);
+                view.start_knowledge(cx);
                 view.start_tour_if_new(cx);
                 view
             });

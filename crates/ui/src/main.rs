@@ -30,7 +30,45 @@ fn data_dir() -> Option<std::path::PathBuf> {
     persistence::data_dir()
 }
 
+/// The knowledge tools as an MCP server on standard input and output, for `--knowledge-mcp <database> <project>
+/// <repository> [sources log]`. Claude Code starts looji this way to use the tools. Returns the exit code when it ran,
+/// and `None` when the arguments ask for the app.
+fn run_knowledge_server() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) != Some("--knowledge-mcp") {
+        return None;
+    }
+    let (Some(database), Some(project), Some(root)) = (args.get(2), args.get(3), args.get(4))
+    else {
+        eprintln!("usage: looji --knowledge-mcp <database> <project> <repository> [sources log]");
+        return Some(2);
+    };
+    let log = args.get(5).map(std::path::PathBuf::from);
+    let tools = match looji_knowledge::tools::KnowledgeTools::open(
+        std::path::Path::new(database),
+        project,
+        std::path::Path::new(root),
+    ) {
+        Ok(tools) => tools,
+        Err(err) => {
+            eprintln!("looji: the knowledge tools could not start: {err}");
+            return Some(1);
+        }
+    };
+    let stdin = std::io::stdin();
+    let result = looji_knowledge::mcp::serve(
+        &tools,
+        stdin.lock(),
+        std::io::stdout().lock(),
+        log.as_deref(),
+    );
+    Some(i32::from(result.is_err()))
+}
+
 fn main() {
+    if let Some(code) = run_knowledge_server() {
+        std::process::exit(code);
+    }
     wait_for_previous_version();
     let Some(data_dir) = data_dir() else {
         fail("looji could not find your user data folder.");
@@ -38,6 +76,7 @@ fn main() {
     let database_path = persistence::database_path(&data_dir);
     let icons_dir = persistence::icons::icons_dir(&data_dir);
     let attachments_dir = persistence::attachments::attachments_dir(&data_dir);
+    let knowledge_path = data_dir.join("knowledge.db");
 
     // Opening creates the folder and an empty database on first run.
     let store = match SqliteStore::open(&database_path) {
@@ -76,6 +115,7 @@ fn main() {
                 database_path: database_path.clone(),
                 icons_dir: icons_dir.clone(),
                 attachments_dir: attachments_dir.clone(),
+                knowledge_path: knowledge_path.clone(),
             });
             quit_when_last_window_closes(cx);
 

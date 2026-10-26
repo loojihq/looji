@@ -144,6 +144,7 @@ fn into_part(part: Refinement) -> RefinedPart {
             estimate: task.estimate,
             assignee: task.assignee,
             tags: task.tags,
+            done_when: task.done_when,
             section: None,
             edited: false,
         }),
@@ -311,7 +312,7 @@ impl WorkspaceView {
         let outcome = updates.into_iter().find_map(|update| match update {
             Update::Finished(text) => Some(Ok(text)),
             Update::Failed(err) => Some(Err(err.to_string())),
-            Update::Text(_) => None,
+            Update::Text(_) | Update::Step(_) | Update::Source(_) => None,
         });
         match outcome {
             Some(outcome) => {

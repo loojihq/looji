@@ -15,6 +15,10 @@ use crate::{
 pub enum Update {
     /// Text that just arrived.
     Text(String),
+    /// What an agent has started doing, between pieces of text.
+    Step(String),
+    /// Something the agent read, which the answer can cite.
+    Source(crate::types::Source),
     /// The response finished. The text is the whole response, so the caller can check it against what it received.
     Finished(String),
     /// The run couldn't finish. A cancelled run reports nothing, since the caller already knows.
@@ -60,6 +64,8 @@ pub async fn run_with(
                 text.push_str(&token);
                 send(Update::Text(token));
             }
+            Ok(ChatEvent::Step(step)) => send(Update::Step(step)),
+            Ok(ChatEvent::Source(source)) => send(Update::Source(source)),
             Ok(ChatEvent::Finished { .. }) => return send(Update::Finished(text)),
             Err(AiError::Cancelled) => return,
             Err(err) => return send(Update::Failed(err)),
@@ -85,7 +91,7 @@ pub async fn complete_with(
         Update::Failed(err) => {
             *outcome.lock().expect("the outcome isn't poisoned") = Some(Err(err))
         }
-        Update::Text(_) => {}
+        Update::Text(_) | Update::Step(_) | Update::Source(_) => {}
     })
     .await;
     outcome

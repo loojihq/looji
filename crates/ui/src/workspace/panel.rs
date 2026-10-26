@@ -127,6 +127,7 @@ impl WorkspaceView {
             eprintln!("could not load the media of task {}: {err}", task.as_uuid());
             Vec::new()
         });
+        self.load_review(task, cx);
         let already_open = self.panel.is_some();
         self.panel = Some(PanelState {
             task,
@@ -234,7 +235,7 @@ impl WorkspaceView {
     }
 
     /// Moves the task to another status column, at its end. This is the same move a drag makes.
-    fn set_panel_status(&mut self, status: Status, cx: &mut Context<Self>) {
+    pub(super) fn set_panel_status(&mut self, status: Status, cx: &mut Context<Self>) {
         let Some(task) = self.panel_task() else {
             return;
         };
@@ -486,6 +487,13 @@ pub(super) fn render(
                     .child(notice),
             )
         })
+        .children(super::review::section(
+            view,
+            panel.task,
+            task.status(),
+            theme,
+            cx,
+        ))
         .child(crate::components::section_label(
             "History, newest first",
             theme,

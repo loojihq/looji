@@ -560,7 +560,7 @@ fn card_details(
                 ))
                 .child("Explain issue")
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.open_chat_for(id, window, cx)
+                    this.explain_issue(id, window, cx)
                 })),
         )
         .into_any_element()

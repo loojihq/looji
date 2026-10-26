@@ -5,6 +5,7 @@
 //!
 //! Nothing here depends on GPUI or SQLite. Only the UI should depend on this crate.
 
+pub mod agent;
 pub mod anthropic;
 pub mod chat;
 pub mod claude_code;
@@ -26,7 +27,7 @@ pub use error::AiError;
 pub use key::ApiKey;
 pub use provider::{ChatProvider, EventStream};
 pub use tokio_util::sync::CancellationToken;
-pub use types::{ChatEvent, ChatMessage, ChatRequest, ChatRole, Usage};
+pub use types::{ChatEvent, ChatMessage, ChatRequest, ChatRole, Source, Usage};
 
 /// The runtime every provider's network work runs on. It's created on first use and lives for the process.
 pub fn runtime() -> &'static tokio::runtime::Handle {

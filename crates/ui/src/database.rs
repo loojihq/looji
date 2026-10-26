@@ -14,6 +14,9 @@ pub struct AppDatabase {
     pub icons_dir: PathBuf,
     /// Where files attached to tasks are copied. Read by the task views that show or add media.
     pub attachments_dir: PathBuf,
+    /// The knowledge database: chunks of the repository and the project, and their search index. It is all derived
+    /// data, so it can be deleted and rebuilt.
+    pub knowledge_path: PathBuf,
 }
 
 impl Global for AppDatabase {}
