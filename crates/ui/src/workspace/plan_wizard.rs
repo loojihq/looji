@@ -129,7 +129,16 @@ fn now() -> Timestamp {
 impl WorkspaceView {
     /// Opens the wizard for the selected project. Nothing opens when no project is selected. An interrupted draft
     /// from an earlier session is offered for resume.
+    /// Generate with AI. An unfinished plan opens instead, so there is only ever one.
     pub(super) fn open_plan_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.unfinished_plan(cx).is_some() {
+            return self.open_unfinished_plan(window, cx);
+        }
+        self.start_plan_wizard(window, cx);
+    }
+
+    /// Opens the planning window with a new plan.
+    pub(super) fn start_plan_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active_id() else {
             return;
         };

@@ -132,8 +132,8 @@ pub struct WorkspaceView {
     schedule_focus: Vec<FocusHandle>,
     /// The planning wizard, while it's open, and one focus handle for each of its controls.
     plan_wizard: Option<plan_wizard::PlanWizardDialog>,
-    /// The planning drafts of the selected project, while their list is open.
-    plan_drafts: Option<plan_drafts::PlanDraftsDialog>,
+    /// Whether the unfinished plan on the project page is asking to be discarded.
+    plan_discard: bool,
     plan_focus: Vec<FocusHandle>,
     /// The task open in its own window, while there is one.
     panel: Option<panel::PanelState>,
@@ -219,7 +219,7 @@ impl WorkspaceView {
                     code_check_seq: 0,
                     schedule_dialog: None,
                     plan_wizard: None,
-                    plan_drafts: None,
+                    plan_discard: false,
                     plan_focus: (0..plan_wizard::CONTROLS.len())
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
@@ -500,8 +500,9 @@ impl WorkspaceView {
         if self.chat_dialog.is_some() {
             return self.chat_key(event, cx);
         }
-        if self.plan_drafts.is_some() && event.keystroke.key == "escape" {
-            return self.close_plan_drafts(cx);
+        if self.plan_discard && event.keystroke.key == "escape" {
+            self.plan_discard = false;
+            return cx.notify();
         }
         if self.preferences_open && event.keystroke.key == "escape" {
             return self.close_preferences(cx);
@@ -736,7 +737,6 @@ fn project_header(
     // new-task form lives in the full header, so the full header stays while it's open.
     if view.drag.columns_scrolled()
         && view.task_dialog.is_none()
-        && view.plan_drafts.is_none()
         && view.repo_dialog.is_none()
         && view.schedule_dialog.is_none()
     {
@@ -821,14 +821,13 @@ fn project_header(
                 .flex_row()
                 .items_center()
                 .gap(theme.spacing.sm)
-                .child(plan_drafts::open_button(theme, cx))
                 .child(schedule_dialog::open_button(theme, cx))
                 .child(repo_dialog::open_button(theme, cx)),
         );
 
     // Drafts, the repository, and working hours open here under the views, not in windows.
     let inline: Vec<AnyElement> = [
-        plan_drafts::panel(view, theme, cx),
+        plan_drafts::card(view, theme, cx),
         repo_dialog::panel(view, theme, cx),
         schedule_dialog::panel(view, theme, window, cx),
     ]
