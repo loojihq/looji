@@ -318,6 +318,8 @@ fn body(
         .id(("column-body", index as u64))
         .overflow_y_scroll()
         .track_scroll(&drag.scroll_handle(status))
+        // A scroll can fold the project header, so the window redraws on each one.
+        .on_scroll(cx.listener(|_, _: &ScrollEvent, _, cx| cx.notify()))
 }
 
 /// Glides an item the given distance from its place to its place now, so siblings slide to make

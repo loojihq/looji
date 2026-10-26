@@ -723,6 +723,12 @@ fn project_header(
         .count();
     let open = total - done;
 
+    // Once the columns have scrolled, the header folds into one row, so the cards get the height. The inline
+    // new-task form lives in the full header, so the full header stays while it's open.
+    if view.drag.columns_scrolled() && view.task_dialog.is_none() {
+        return compact_header(view, project.name(), total, open, theme, cx);
+    }
+
     // The card: the project's name and counts, the actions, and how far through its tasks it is.
     let card = div()
         .flex()
@@ -819,6 +825,57 @@ fn project_header(
         .into_any_element()
 }
 
+/// The project header folded into one row: its name and open count, the views, and New task.
+fn compact_header(
+    view: &WorkspaceView,
+    name: &str,
+    total: usize,
+    open: usize,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.md)
+        .flex_shrink_0()
+        .px(theme.spacing.lg)
+        .py(theme.spacing.sm)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .min_w_0()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .truncate()
+                        .child(name.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(format!("{open} open · {total} total")),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .flex_shrink_0()
+                .child(list_view::switch(view, theme, cx))
+                .child(board::new_task_button(view, theme, cx)),
+        )
+        .into_any_element()
+}
 /// How far through the project's tasks it is: a bar filled to the share of done tasks, with the count.
 fn progress(done: usize, total: usize, theme: &Theme) -> impl IntoElement {
     let fraction = if total == 0 {

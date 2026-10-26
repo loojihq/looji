@@ -94,6 +94,13 @@ impl DragSession {
         &self.session
     }
 
+    /// Whether any column's cards have scrolled down from the top.
+    pub(super) fn columns_scrolled(&self) -> bool {
+        self.scrolls
+            .iter()
+            .any(|(_, handle)| f32::from(handle.offset().y) < 0.0)
+    }
+
     /// The scroll handle of a status column. The column's body tracks it.
     pub(super) fn scroll_handle(&self, status: Status) -> ScrollHandle {
         self.scrolls
