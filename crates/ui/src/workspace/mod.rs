@@ -339,7 +339,12 @@ impl WorkspaceView {
         };
         self.rename = Some(Rename {
             id,
-            draft: TextEdit::new(workspace.name()),
+            draft: {
+                // The whole name is selected, so typing replaces it.
+                let mut draft = TextEdit::new(workspace.name());
+                draft.select_all();
+                draft
+            },
             error: None,
         });
         self.focus_handle.focus(window, cx);
@@ -467,6 +472,10 @@ impl WorkspaceView {
         if self.workspace_menu && event.keystroke.key == "escape" {
             return self.close_workspace_menu(cx);
         }
+        // A workspace name being typed takes the keys first, so no other focus can swallow them.
+        if self.rename.is_some() {
+            return self.rename_key(event, cx);
+        }
         // The palette takes every key while it's open, so typing doesn't reach the board.
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
@@ -546,17 +555,19 @@ impl WorkspaceView {
             if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
                 self.cancel_delete(cx);
             }
-            return;
         }
+    }
+
+    /// Keys while a workspace name is being edited. Enter saves and Escape cancels; the rest edit the name.
+    fn rename_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let Some(rename) = self.rename.as_mut() else {
             return;
         };
-        let keystroke = &event.keystroke;
-        match keystroke.key.as_str() {
+        match event.keystroke.key.as_str() {
             "enter" => self.commit_rename(cx),
             "escape" => self.cancel_rename(cx),
             _ => {
-                if rename.draft.handle_key(keystroke) {
+                if rename.draft.handle_key(&event.keystroke) {
                     rename.error = None;
                     cx.notify();
                 }
