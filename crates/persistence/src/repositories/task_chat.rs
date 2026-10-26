@@ -98,6 +98,28 @@ impl TaskChatRepository for SqliteStore {
         )
     }
 
+    fn set_message_sources(
+        &self,
+        thread: ChatThreadId,
+        position: u32,
+        sources: &str,
+    ) -> RepoResult<()> {
+        execute(
+            &self.connection,
+            "UPDATE task_messages SET sources = ?3 WHERE thread_id = ?1 AND position = ?2",
+            params![id_text(thread.as_uuid()), position, sources],
+        )
+    }
+
+    fn message_sources(&self, thread: ChatThreadId) -> RepoResult<Vec<(u32, String)>> {
+        query_all(
+            &self.connection,
+            "SELECT position, sources FROM task_messages WHERE thread_id = ?1 AND sources != '' ORDER BY position",
+            params![id_text(thread.as_uuid())],
+            |row| Ok((get(row, 0)?, get(row, 1)?)),
+        )
+    }
+
     /// Removes the message at `position` and every message after it. Used to retry a reply: the failed one goes.
     fn truncate_from(&self, thread: ChatThreadId, position: u32) -> RepoResult<()> {
         execute(

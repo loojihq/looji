@@ -314,3 +314,23 @@ fn a_reply_with_no_team_members_assigns_nobody_and_warns_for_any_name() {
     assert_eq!(plan.tasks[0].assignee, None::<TeamMemberId>);
     assert_eq!(plan.warnings.len(), 1);
 }
+
+#[test]
+fn done_when_is_optional_trimmed_and_blank_points_are_dropped() {
+    let task = |extra: &str| {
+        format!(
+            r#"{{"spec": "s", "user_stories": [], "tasks": [{{"title": "Fix login", "priority": "medium", "estimate_hours": 1, "assignee": null, "tags": []{extra}}}]}}"#
+        )
+    };
+    let plain = parse_plan(&task(""), &[]).unwrap();
+    assert!(plain.tasks[0].done_when.is_empty());
+    let with = parse_plan(
+        &task(r#", "done_when": ["  Empty passwords are refused ", "", "A test covers it"]"#),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        with.tasks[0].done_when,
+        ["Empty passwords are refused", "A test covers it"]
+    );
+}

@@ -299,3 +299,32 @@ fn publishing_a_draft_that_doesnt_exist_finds_nothing() {
         None
     );
 }
+
+#[test]
+fn done_when_points_are_kept_with_the_draft_and_published_into_the_task_description() {
+    let fx = fixture();
+    let mut task = planned("Refuse empty passwords");
+    task.done_when = vec![
+        "Empty passwords are refused".to_string(),
+        "A test covers it".to_string(),
+    ];
+    let id = {
+        let store = fx.open();
+        ready_draft(&fx, &store, vec![task]).id()
+    };
+    assert_eq!(
+        reload(&fx, id).tasks()[0].done_when.len(),
+        2,
+        "the points survive a reload"
+    );
+
+    let store = fx.open();
+    PlanDraftRepository::publish(&store, id, at(10), Status::Backlog)
+        .unwrap()
+        .unwrap();
+    let tasks = TaskRepository::list_for_project(&store, fx.project).unwrap();
+    assert_eq!(
+        tasks[0].description(),
+        "Done when:\n- Empty passwords are refused\n- A test covers it"
+    );
+}

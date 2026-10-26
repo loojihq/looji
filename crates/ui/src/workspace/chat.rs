@@ -149,6 +149,30 @@ impl WorkspaceView {
         self.open_chat_subject(subject, window, cx);
     }
 
+    /// Opens the chat about a task and asks for an explanation of it at once, so the button answers the question it
+    /// names. Repository code is turned on when the project has a repository, so the answer can point at the code.
+    pub(super) fn explain_issue(
+        &mut self,
+        task_id: TaskId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_chat_for(task_id, window, cx);
+        let Some(dialog) = self.chat_dialog.as_mut() else {
+            return;
+        };
+        if dialog.task != task_id {
+            return;
+        }
+        if dialog.code_available {
+            dialog.use_code = true;
+        }
+        dialog.draft = TextEdit::new(
+            "Explain this issue: what it asks for, which parts of the code it touches, and where to start.",
+        );
+        self.send_chat_message(cx);
+    }
+
     /// Opens the AI chat about the open project's whole codebase. It is saved with the project, under the project's
     /// own id.
     pub(super) fn open_project_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -197,6 +221,12 @@ impl WorkspaceView {
         let messages = thread
             .and_then(|thread| store(cx).messages(thread).ok())
             .unwrap_or_default();
+        let sources: HashMap<u32, Vec<Source>> = thread
+            .and_then(|thread| store(cx).message_sources(thread).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(position, text)| (position, sources_from_json(&text)))
+            .collect();
         self.chat_dialog = Some(ChatDialog {
             task: task_id,
             project,
@@ -220,7 +250,7 @@ impl WorkspaceView {
             active: None,
             error: None,
             copied: None,
-            sources: HashMap::new(),
+            sources,
         });
         if choice_saved_missing(saved.as_deref()) {
             // The saved model is gone, so the notice explains it and the saved value is replaced by the default.
@@ -522,6 +552,16 @@ impl WorkspaceView {
         if let Err(err) = store(cx).finish_message(thread, position, &text, &state) {
             self.chat_error(format!("Could not save the reply: {err}"), cx);
         }
+        let sources = self
+            .chat_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.sources.get(&position))
+            .map(|sources| sources_to_json(sources));
+        if let Some(sources) = sources
+            && let Err(err) = store(cx).set_message_sources(thread, position, &sources)
+        {
+            eprintln!("could not save the sources of a reply: {err}");
+        }
         self.reload_chat(cx);
     }
 
@@ -669,6 +709,44 @@ impl WorkspaceView {
             }
         }
     }
+}
+
+/// A reply's sources as saved with it.
+fn sources_to_json(sources: &[Source]) -> String {
+    serde_json::Value::Array(
+        sources
+            .iter()
+            .map(|source| {
+                serde_json::json!({
+                    "kind": source.kind,
+                    "reference": source.reference,
+                    "label": source.label,
+                    "start_line": source.start_line,
+                    "end_line": source.end_line,
+                })
+            })
+            .collect(),
+    )
+    .to_string()
+}
+
+/// Sources as saved. Anything that can't be read is left out.
+fn sources_from_json(text: &str) -> Vec<Source> {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str(text) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            Some(Source {
+                kind: item["kind"].as_str()?.to_string(),
+                reference: item["reference"].as_str()?.to_string(),
+                label: item["label"].as_str().unwrap_or_default().to_string(),
+                start_line: item["start_line"].as_u64().unwrap_or(0) as u32,
+                end_line: item["end_line"].as_u64().unwrap_or(0) as u32,
+            })
+        })
+        .collect()
 }
 
 /// Whether a saved model name is one the provider no longer lists.
@@ -914,4 +992,23 @@ pub(super) fn panel(
     );
 
     Some(panel.into_any_element())
+}
+
+#[cfg(test)]
+mod source_tests {
+    // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
+    use super::{Source, sources_from_json, sources_to_json};
+
+    #[test]
+    fn sources_read_back_as_they_were_saved_and_junk_gives_none() {
+        let sources = vec![Source {
+            kind: "code".into(),
+            reference: "src/auth.rs".into(),
+            label: "fn verify".into(),
+            start_line: 3,
+            end_line: 9,
+        }];
+        assert_eq!(sources_from_json(&sources_to_json(&sources)), sources);
+        assert!(sources_from_json("not json").is_empty());
+    }
 }

@@ -212,7 +212,11 @@ fn sources_used(
         .flex()
         .flex_col()
         .gap(px(2.))
-        .child(caption(&format!("Sources used ({})", sources.len()), theme));
+        .child(caption(&format!("Sources used ({})", sources.len()), theme))
+        .child(caption(
+            "Context sent: this conversation and the task details. Code was read only through the sources below.",
+            theme,
+        ));
     for (index, source) in sources.iter().take(SHOWN).enumerate() {
         let text = match source.kind.as_str() {
             "code" | "doc" if source.start_line > 0 => format!(

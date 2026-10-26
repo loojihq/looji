@@ -197,6 +197,15 @@ pub trait TaskChatRepository {
         content: &str,
         state: &crate::chat::ReplyState,
     ) -> RepoResult<()>;
+    /// Saves what a reply drew on, as text the caller wrote, so it is still there when the thread is opened again.
+    fn set_message_sources(
+        &self,
+        thread: crate::ids::ChatThreadId,
+        position: u32,
+        sources: &str,
+    ) -> RepoResult<()>;
+    /// The sources saved for the thread's replies, by position. Replies with none are left out.
+    fn message_sources(&self, thread: crate::ids::ChatThreadId) -> RepoResult<Vec<(u32, String)>>;
     /// Removes the message at `position` and every message after it.
     fn truncate_from(&self, thread: crate::ids::ChatThreadId, position: u32) -> RepoResult<()>;
     /// The thread's messages, in the order they were written.

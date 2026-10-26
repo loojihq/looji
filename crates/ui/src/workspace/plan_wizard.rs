@@ -409,6 +409,7 @@ impl WorkspaceView {
                         estimate: task.estimate,
                         assignee: task.assignee,
                         tags: task.tags.clone(),
+                        done_when: task.done_when.clone(),
                         section: None,
                         edited: false,
                     })

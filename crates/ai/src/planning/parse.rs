@@ -51,6 +51,9 @@ struct RawTask {
     estimate_hours: Box<RawValue>,
     assignee: Box<RawValue>,
     tags: Vec<String>,
+    /// Optional, so a reply that leaves it out is still accepted.
+    #[serde(default)]
+    done_when: Vec<String>,
 }
 
 /// The kinds of failure, without their details. Tests compare these, so a case is judged by the kind it produced.
@@ -198,6 +201,8 @@ pub struct ParsedTask {
     pub estimate: Option<Estimate>,
     pub assignee: Option<TeamMemberId>,
     pub tags: Vec<String>,
+    /// What must be true for the task to be done. Blank points are dropped.
+    pub done_when: Vec<String>,
 }
 
 /// Something the parser noticed that doesn't stop the plan. `task` is the task's index, from zero.
@@ -363,6 +368,13 @@ fn check_task(
                 estimate,
                 assignee,
                 tags,
+                done_when: task
+                    .done_when
+                    .iter()
+                    .map(|point| point.trim().to_string())
+                    .filter(|point| !point.is_empty())
+                    .take(8)
+                    .collect(),
             })
         }
         _ => None,

@@ -131,6 +131,8 @@ pub struct PlanTask {
     pub estimate: Option<Estimate>,
     pub assignee: Option<TeamMemberId>,
     pub tags: Vec<String>,
+    /// What must be true for the task to be done. Published into the task's description under "Done when:".
+    pub done_when: Vec<String>,
     /// The index of the story this task belongs to, if any.
     pub section: Option<usize>,
     /// Whether a person wrote or changed this task, rather than the plan. Refinement asks before replacing it.
@@ -147,6 +149,7 @@ impl PlanTask {
             estimate: None,
             assignee: None,
             tags: Vec::new(),
+            done_when: Vec::new(),
             section: None,
             edited: false,
         })
@@ -735,6 +738,7 @@ impl PlanDraft {
                     estimate: task.estimate,
                     assignee: task.assignee,
                     tags,
+                    done_when: task.done_when,
                     section,
                     edited: false,
                 };

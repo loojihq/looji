@@ -144,6 +144,7 @@ fn into_part(part: Refinement) -> RefinedPart {
             estimate: task.estimate,
             assignee: task.assignee,
             tags: task.tags,
+            done_when: task.done_when,
             section: None,
             edited: false,
         }),

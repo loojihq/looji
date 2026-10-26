@@ -77,7 +77,7 @@ fn assemble(connection: &Connection, mut parts: PlanDraftParts) -> RepoResult<Pl
     )?;
     parts.tasks = query_all(
         connection,
-        "SELECT title, section_position, priority, estimate_minutes, assignee_id, tags, edited
+        "SELECT title, section_position, priority, estimate_minutes, assignee_id, tags, edited, done_when
          FROM plan_draft_tasks WHERE draft_id = ?1 ORDER BY position",
         params![key],
         read_task,
@@ -91,6 +91,7 @@ fn read_task(row: &Row<'_>) -> RepoResult<PlanTask> {
     let minutes: Option<i64> = get(row, 3)?;
     let tags: String = get(row, 5)?;
     let edited: i64 = get(row, 6)?;
+    let done_when: String = get(row, 7)?;
     Ok(PlanTask {
         title: get(row, 0)?,
         priority: priority.parse::<Priority>().map_err(RepoError::Invalid)?,
@@ -100,6 +101,11 @@ fn read_task(row: &Row<'_>) -> RepoResult<PlanTask> {
             .map_err(RepoError::Invalid)?,
         assignee: read_optional_id(row, 4, TeamMemberId::from_uuid)?,
         tags: split_tags(&tags),
+        done_when: done_when
+            .lines()
+            .map(str::to_string)
+            .filter(|point| !point.is_empty())
+            .collect(),
         section: section.map(|position| position as usize),
         edited: edited != 0,
     })
@@ -209,8 +215,8 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
             transaction
                 .execute(
                     "INSERT INTO plan_draft_tasks (draft_id, position, title, section_position, priority,
-                                                   estimate_minutes, assignee_id, tags, edited)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                                   estimate_minutes, assignee_id, tags, edited, done_when)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         key,
                         position as i64,
@@ -221,6 +227,8 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
                         task.assignee.map(|member| id_text(member.as_uuid())),
                         join_tags(&task.tags),
                         task.edited,
+                        task.done_when.join("
+"),
                     ],
                 )
                 .map_err(storage)?;
@@ -326,6 +334,21 @@ impl looji_domain::PlanDraftRepository for SqliteStore {
             task.set_priority(Some(planned.priority));
             task.set_estimate(planned.estimate);
             task.set_tags(planned.tags.clone());
+            if !planned.done_when.is_empty() {
+                let points: Vec<String> = planned
+                    .done_when
+                    .iter()
+                    .map(|point| format!("- {point}"))
+                    .collect();
+                task.set_description(format!(
+                    "Done when:
+{}",
+                    points.join(
+                        "
+"
+                    )
+                ));
+            }
             task.assign(planned.assignee);
             write_task(&transaction, &task)?;
             published.push(task.id());
