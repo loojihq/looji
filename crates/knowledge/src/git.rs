@@ -51,6 +51,36 @@ pub fn branch(root: &Path) -> Option<String> {
         .filter(|name| !name.is_empty() && name != "HEAD")
 }
 
+/// The uncommitted changes, as `git diff` shows them, for a reviewer to read. Files that look like secrets are left out,
+/// and so is anything past `max_chars`, which the text says. Empty when nothing changed or git isn't there.
+pub fn working_changes(root: &Path, max_chars: usize) -> String {
+    let Ok(names) = git(root, &["diff", "--name-only", "HEAD"]) else {
+        return String::new();
+    };
+    let files: Vec<&str> = names
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !crate::safety::is_secret_path(name))
+        .collect();
+    if files.is_empty() {
+        return String::new();
+    }
+    let mut args = vec!["diff", "--no-color", "-U2", "HEAD", "--"];
+    args.extend(files);
+    let Ok(mut text) = git(root, &args) else {
+        return String::new();
+    };
+    if text.len() > max_chars {
+        let mut end = max_chars;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("\n[the rest of the changes are not shown]");
+    }
+    text
+}
+
 /// Up to `limit` of the newest commits, newest first. With `since`, only the commits after that one. An unknown
 /// `since`, such as one that a rebase removed, gives the newest `limit` instead.
 pub fn recent_commits(root: &Path, limit: usize, since: Option<&str>) -> Result<Vec<CommitDoc>> {
@@ -236,6 +266,37 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn working_changes_show_edits_but_never_the_files_that_look_secret() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let run = |args: &[&str]| {
+            matches!(
+                Command::new("git").arg("-C").arg(dir.path()).args(args).output(),
+                Ok(output) if output.status.success()
+            )
+        };
+        if !run(&["init", "-q", "-b", "main"]) {
+            return;
+        }
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "Tester"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        std::fs::write(dir.path().join(".env"), "TOKEN=old\n").unwrap();
+        run(&["add", "-f", "."]);
+        run(&["commit", "-q", "-m", "First"]);
+        assert_eq!(working_changes(dir.path(), 10_000), "");
+
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.path().join(".env"), "TOKEN=new-secret-value\n").unwrap();
+        let changes = working_changes(dir.path(), 10_000);
+        assert!(changes.contains("+two"), "{changes}");
+        assert!(!changes.contains("new-secret-value"), "{changes}");
+
+        let short = working_changes(dir.path(), 20);
+        assert!(short.contains("not shown"));
     }
 
     #[test]

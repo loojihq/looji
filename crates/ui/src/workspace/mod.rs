@@ -41,6 +41,7 @@ mod project_state;
 mod project_views;
 mod projects;
 mod repo_dialog;
+mod review;
 mod roadmap;
 mod roadmap_layout;
 mod schedule_dialog;
@@ -120,6 +121,8 @@ pub struct WorkspaceView {
     team_dialog: Option<team_dialog::TeamDialog>,
     /// The task chat, while it is open.
     chat_dialog: Option<chat::ChatDialog>,
+    /// The reviews of tasks that went into review, running or finished.
+    reviews: review::Reviews,
     /// Follows the newest message in the chat, so a streaming reply stays in view.
     chat_scroll: ScrollHandle,
     /// The check for a newer release, running in the background, and the notice it produced, if any.
@@ -227,6 +230,7 @@ impl WorkspaceView {
                     task_dialog: None,
                     team_dialog: None,
                     chat_dialog: None,
+                    reviews: review::Reviews::new(),
                     chat_scroll: ScrollHandle::new(),
                     update_task: None,
                     knowledge: None,

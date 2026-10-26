@@ -4,6 +4,7 @@
 
 pub mod check;
 pub mod notes;
+pub mod verdict;
 
 use looji_domain::Hunk;
 use serde_json::Value;
