@@ -833,14 +833,11 @@ fn project_header(
         );
 
     // The unfinished plan opens here under the views.
-    let inline: Vec<AnyElement> = [
-        plan_drafts::card(view, theme, cx),
-        repo_dialog::panel(view, theme, cx),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|panel| inline_section(panel, theme).into_any_element())
-    .collect();
+    let inline: Vec<AnyElement> = [plan_drafts::card(view, theme, cx)]
+        .into_iter()
+        .flatten()
+        .map(|panel| inline_section(panel, theme).into_any_element())
+        .collect();
 
     div()
         .flex()

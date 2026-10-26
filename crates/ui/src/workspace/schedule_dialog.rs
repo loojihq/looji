@@ -390,8 +390,8 @@ impl WorkspaceView {
     }
 }
 
-/// A day of the week as a pill. The tick and the label say whether it's a workday; the fill and the focus ring
-/// repeat that, so colour isn't the only sign.
+/// A day of the week as a square: filled when it's a workday, outlined when it isn't. There's no tick, so the
+/// state is the fill alone.
 fn day_pill(
     day: usize,
     selected: bool,
@@ -400,16 +400,14 @@ fn day_pill(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let label = if selected {
-        format!("✓ {}", DAY_NAMES[day])
-    } else {
-        DAY_NAMES[day].to_string()
-    };
     div()
         .id(DAY_IDS[day])
         .track_focus(handle)
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(48.))
+        .h(px(36.))
         .rounded(theme.radius.md)
         .border_1()
         .border_color(if focused {
@@ -418,21 +416,22 @@ fn day_pill(
             theme.palette.border_control
         })
         .text_size(theme.typography.caption)
+        .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .when(selected, |pill| {
-            pill.bg(theme.palette.surface_selected)
-                .text_color(theme.palette.text_primary)
+            pill.bg(theme.palette.accent)
+                .text_color(theme.palette.on_accent)
         })
         .when(!selected, |pill| {
-            pill.text_color(theme.palette.text_secondary)
+            pill.bg(theme.palette.surface)
+                .text_color(theme.palette.text_secondary)
                 .hover(|style| style.bg(theme.palette.surface_hover))
         })
-        .child(label)
+        .child(DAY_NAMES[day])
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.toggle_schedule_day(day, window, cx)
         }))
 }
-
 /// A time box for the start or the end. Clicking it gives it the keyboard, and a time that doesn't read shows
 /// the format message.
 fn time_box(
@@ -535,31 +534,17 @@ pub(super) fn panel(
             cx,
         ));
 
-    // Read from the view state, which the dialog wrote when the draft last changed. Nothing is calculated here.
-    let preview = (!dialog.preview.is_empty()).then(|| {
-        let mut list = div().flex().flex_col().gap(theme.spacing.xs);
-        for day in &dialog.preview {
-            list = list.child(
-                div()
-                    .text_size(theme.typography.body)
-                    .child(describe_day(*day)),
-            );
-        }
+    // One sentence, from the view state the dialog wrote when the draft last changed. The list of dates is gone:
+    // the first one is enough to show what the hours do.
+    let preview = dialog.preview.first().map(|day| {
         div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.xs)
-            .child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child(format!(
-                        "Next {PREVIEW_COUNT} due dates for a {SAMPLE_ESTIMATE_HOURS:.0}-hour task"
-                    )),
-            )
-            .child(list)
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child(format!(
+                "A {SAMPLE_ESTIMATE_HOURS:.0}-hour task that starts today is due {}.",
+                describe_day(*day)
+            ))
     });
-
     let problems = dialog.problems();
     let blocked = !dialog.can_save();
     let save_focus = handle_for(focus, Control::Save);
