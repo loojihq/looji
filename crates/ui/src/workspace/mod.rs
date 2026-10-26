@@ -268,6 +268,14 @@ impl WorkspaceView {
                 view.start_tour_if_new(cx);
                 view
             });
+            // The app follows the system's light or dark setting, and changes when it does.
+            let mode = crate::theme::mode_for(window.appearance());
+            crate::theme::set_mode(mode, cx);
+            window
+                .observe_window_appearance(|window, cx| {
+                    crate::theme::set_mode(crate::theme::mode_for(window.appearance()), cx)
+                })
+                .detach();
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
             let focus = view.read(cx).focus_handle.clone();
             focus.focus(window, cx);
@@ -453,17 +461,6 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Switches between light and dark mode. Every window re-renders with the new palette.
-    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        let next = cx.theme().mode.toggled();
-        // Save first, so the screen never shows a theme that wasn't stored.
-        match crate::settings::update(cx, looji_domain::Preference::Theme(next.into())) {
-            Ok(()) => crate::theme::set_mode(next, cx),
-            Err(err) => self.status = Some(format!("Could not save the theme: {err}")),
-        }
-        cx.notify();
-    }
-
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // The tour is on top of everything, so it takes the keys first.
         if self.tour.is_some() {
@@ -618,7 +615,7 @@ impl Render for WorkspaceView {
             self.schedule_scroll_restore(window);
         }
         let theme = cx.theme().clone();
-        let header = project_header(self, &theme, cx);
+        let header = project_header(self, &theme, window, cx);
         let body = match self.screen {
             Some(screen) => screen::render(self, screen, &theme, cx),
             None => projects::content(self, &theme, cx),
@@ -691,6 +688,7 @@ impl Render for WorkspaceView {
 fn project_header(
     view: &WorkspaceView,
     theme: &Theme,
+    window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     // A workspace screen has its own title, and no project tabs or actions.
@@ -736,7 +734,12 @@ fn project_header(
 
     // Once the columns have scrolled, the header folds into one row, so the cards get the height. The inline
     // new-task form lives in the full header, so the full header stays while it's open.
-    if view.drag.columns_scrolled() && view.task_dialog.is_none() {
+    if view.drag.columns_scrolled()
+        && view.task_dialog.is_none()
+        && view.plan_drafts.is_none()
+        && view.repo_dialog.is_none()
+        && view.schedule_dialog.is_none()
+    {
         return compact_header(view, project.name(), total, open, theme, cx);
     }
 
@@ -823,6 +826,17 @@ fn project_header(
                 .child(repo_dialog::open_button(theme, cx)),
         );
 
+    // Drafts, the repository, and working hours open here under the views, not in windows.
+    let inline: Vec<AnyElement> = [
+        plan_drafts::panel(view, theme, cx),
+        repo_dialog::panel(view, theme, cx),
+        schedule_dialog::panel(view, theme, window, cx),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|panel| inline_section(panel, theme).into_any_element())
+    .collect();
+
     div()
         .flex()
         .flex_col()
@@ -833,6 +847,7 @@ fn project_header(
         .child(crumb)
         .child(card)
         .child(views)
+        .children(inline)
         .into_any_element()
 }
 

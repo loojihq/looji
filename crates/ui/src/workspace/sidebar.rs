@@ -6,7 +6,7 @@ use gpui::{prelude::*, *};
 use super::screen::Screen;
 use super::{WorkspaceView, projects, switcher};
 use crate::{
-    components, settings,
+    components,
     theme::{ActiveTheme, Theme},
 };
 
@@ -99,7 +99,7 @@ fn screen_item(
     };
     // Today shows how many tasks need attention, as the notification settings choose.
     let count = (screen == Screen::Today)
-        .then(|| view.attention_count(&settings::current(cx)))
+        .then(|| view.attention_count())
         .filter(|count| *count > 0)
         .map(|count| count.to_string());
     components::nav_item(

@@ -216,8 +216,7 @@ impl WorkspaceView {
             project.working_schedule(),
             anchor,
         ));
-        // The form shows under Working hours on the Preferences screen.
-        self.open_preferences(cx);
+        // The form opens inline in the project header.
         self.schedule_focus[0].focus(window, cx);
         cx.notify();
     }

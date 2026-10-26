@@ -66,7 +66,8 @@ fn main() {
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            theme::init(cx, preferences.theme.into());
+            // The window sets the mode from the system when it opens, so this only sets the starting value.
+            theme::init(cx, theme::Mode::Light);
             cx.set_global(settings::AppPreferences(preferences));
             cx.set_global(AppDatabase {
                 store,

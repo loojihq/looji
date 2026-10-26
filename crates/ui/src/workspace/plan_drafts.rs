@@ -56,10 +56,6 @@ impl WorkspaceView {
         let Some(project) = self.projects.active_id() else {
             return;
         };
-        let main = cx.entity();
-        cx.defer(move |cx| {
-            super::dialog_window::open(cx, main, super::dialog_window::Kind::Drafts)
-        });
         self.plan_drafts = Some(PlanDraftsDialog {
             project,
             drafts: Vec::new(),

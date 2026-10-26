@@ -10,16 +10,12 @@
 use gpui::{prelude::*, *};
 
 use super::WorkspaceView;
-use super::{
-    chat, plan_drafts, plan_wizard, preferences_panel, repo_dialog, task_dialog, task_form::Mode,
-};
+use super::{chat, plan_wizard, preferences_panel, task_dialog, task_form::Mode};
 use crate::{components, theme::ActiveTheme, title_bar::TITLE_BAR_HEIGHT, window_move};
 
 /// Which dialog a window shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
-    Repository,
-    Drafts,
     Task,
     TaskDetail,
     Chat,
@@ -31,8 +27,6 @@ impl Kind {
     /// The header's title. The task and chat dialogs name the task they are about.
     fn title(self, view: &WorkspaceView) -> String {
         match self {
-            Kind::Repository => "Repository".to_string(),
-            Kind::Drafts => "Planning drafts".to_string(),
             Kind::Task => match view.task_dialog.as_ref().map(|dialog| &dialog.form.mode) {
                 Some(Mode::Edit(_)) => "Edit task".to_string(),
                 _ => "New task".to_string(),
@@ -54,8 +48,6 @@ impl Kind {
     /// space around it.
     fn size(self) -> Size<Pixels> {
         match self {
-            Kind::Repository => size(px(492.), px(420.)),
-            Kind::Drafts => size(px(560.), px(460.)),
             Kind::Task => size(px(552.), px(520.)),
             Kind::TaskDetail => size(px(560.), px(720.)),
             Kind::Chat => size(px(680.), px(640.)),
@@ -72,8 +64,6 @@ impl Kind {
     /// Whether this dialog is open in the main window's state.
     fn is_open(self, view: &WorkspaceView) -> bool {
         match self {
-            Kind::Repository => view.repo_dialog.is_some(),
-            Kind::Drafts => view.plan_drafts.is_some(),
             Kind::Task => view.task_dialog.is_some(),
             Kind::TaskDetail => view.panel.is_some(),
             Kind::Chat => view.chat_dialog.is_some(),
@@ -85,8 +75,6 @@ impl Kind {
     /// Clears this dialog's state in the main window, for when its window closes by its own button.
     fn clear(self, view: &mut WorkspaceView) {
         match self {
-            Kind::Repository => view.repo_dialog = None,
-            Kind::Drafts => view.plan_drafts = None,
             Kind::Task => view.task_dialog = None,
             Kind::TaskDetail => view.panel = None,
             Kind::Chat => view.chat_dialog = None,
@@ -103,8 +91,6 @@ impl Kind {
         cx: &mut Context<WorkspaceView>,
     ) {
         match self {
-            Kind::Repository => view.close_repo_dialog(cx),
-            Kind::Drafts => view.close_plan_drafts(cx),
             Kind::Task => view.request_task_dialog_close(cx),
             Kind::TaskDetail => {
                 // The window closes itself once the panel is gone, so the card's focus stays put.
@@ -126,8 +112,6 @@ impl Kind {
         cx: &mut Context<WorkspaceView>,
     ) -> Option<AnyElement> {
         match self {
-            Kind::Repository => repo_dialog::panel(view, theme, cx),
-            Kind::Drafts => plan_drafts::panel(view, theme, cx),
             Kind::Task => task_dialog::panel(view, theme, cx),
             Kind::TaskDetail => super::panel::render(view, theme, cx),
             Kind::Chat => chat::panel(view, theme, window, cx),

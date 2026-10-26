@@ -391,30 +391,6 @@ pub fn select(id: impl Into<ElementId>, label: &str, open: bool, theme: &Theme) 
         .child(icon("chevron-down", 14., theme.palette.text_secondary))
 }
 
-/// An on/off switch. The track is accent when on.
-pub fn toggle(on: bool, theme: &Theme) -> Div {
-    div()
-        .relative()
-        .flex_none()
-        .w(px(34.))
-        .h(px(20.))
-        .rounded_full()
-        .bg(if on {
-            theme.palette.accent
-        } else {
-            theme.palette.border_control
-        })
-        .child(
-            div()
-                .absolute()
-                .top(px(2.))
-                .left(px(if on { 16. } else { 2. }))
-                .size(px(16.))
-                .rounded_full()
-                .bg(theme.palette.surface),
-        )
-}
-
 /// A tick box for a task. Filled when done, outlined otherwise.
 pub fn checkbox(done: bool, theme: &Theme) -> Div {
     let base = div()

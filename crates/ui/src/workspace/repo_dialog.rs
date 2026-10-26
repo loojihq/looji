@@ -65,10 +65,6 @@ impl WorkspaceView {
             return;
         };
         self.repo_dialog = Some(RepoDialog::new(project));
-        let main = cx.entity();
-        cx.defer(move |cx| {
-            super::dialog_window::open(cx, main, super::dialog_window::Kind::Repository)
-        });
         self.refresh_code_source(cx);
         self.focus_handle.focus(window, cx);
         cx.notify();

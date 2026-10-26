@@ -19,12 +19,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Shows the tour from the start, from the sidebar, for someone who wants it again.
-    pub(super) fn replay_tour(&mut self, cx: &mut Context<Self>) {
-        self.tour = Some(Tour::start());
-        cx.notify();
-    }
-
     /// Ends the tour and saves that it was seen, so it doesn't come back.
     fn end_tour(&mut self, finished: bool, cx: &mut Context<Self>) {
         self.tour = None;
