@@ -167,6 +167,8 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         kind: WindowKind::Dialog,
         is_minimizable: false,
+        // Created hidden and shown once its first frame is drawn, so the frame and borders never appear empty.
+        show: false,
         titlebar: Some(TitlebarOptions {
             title: Some(title.clone().into()),
             // Hides the system's title bar. The window draws its own header.
@@ -214,8 +216,12 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
         window.focus(&focus, cx);
         view
     });
-    if opened.is_err() {
-        eprintln!("could not open the {title} window");
+    match opened {
+        // The window has drawn once by now. Showing it puts the finished frame on screen.
+        Ok(handle) => {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+        Err(_) => eprintln!("could not open the {title} window"),
     }
 }
 

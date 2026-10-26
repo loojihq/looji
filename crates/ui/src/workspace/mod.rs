@@ -192,7 +192,7 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn open_window(cx: &mut App, list: WorkspaceList) -> Result<WindowHandle<Self>> {
-        cx.open_window(window_options(cx), |window, cx| {
+        let opened = cx.open_window(window_options(cx), |window, cx| {
             let view = cx.new(|cx| {
                 let mut view = Self {
                     focus_handle: cx.focus_handle(),
@@ -279,7 +279,12 @@ impl WorkspaceView {
             });
             view.update(cx, |view, _| view.quit_subscription = Some(quit));
             view
-        })
+        });
+        // The window has drawn once by now. Showing it puts the finished frame on screen.
+        if let Ok(handle) = &opened {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+        opened
     }
 
     /// Clicking a workspace ends any rename in progress, so it acts as the "blur" for the editor.
@@ -492,6 +497,9 @@ impl WorkspaceView {
         if self.plan_drafts.is_some() && event.keystroke.key == "escape" {
             return self.close_plan_drafts(cx);
         }
+        if self.preferences_open && event.keystroke.key == "escape" {
+            return self.close_preferences(cx);
+        }
         if self.plan_wizard.is_some() {
             return self.plan_wizard_key(event, window, cx);
         }
@@ -586,6 +594,8 @@ fn window_options(cx: &App) -> WindowOptions {
         }),
         app_id: Some(APP_NAME.to_lowercase()),
         window_min_size: Some(MIN_WINDOW_SIZE),
+        // Created hidden and shown once its first frame is drawn, so the frame and borders never appear empty.
+        show: false,
         ..Default::default()
     }
 }
