@@ -392,15 +392,44 @@ pub(super) fn panel(
     });
 
     let browse_label = if broken { "Locate again" } else { "Browse" };
-    let mut actions = div()
+
+    // The folder to connect, with Connect beside it. Enter in the field connects it too.
+    let folder = div()
         .flex()
         .flex_row()
+        .items_center()
         .gap(theme.spacing.sm)
-        .justify_start()
         .child(
-            button("repo-browse", browse_label, false, theme)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx))),
+            div()
+                .id("repo-path-field")
+                .flex_1()
+                .min_w_0()
+                .child(edit_box(
+                    &dialog.draft,
+                    "Path to the repository folder",
+                    true,
+                    theme,
+                )),
+        )
+        .child(
+            button("repo-connect", "Connect", true, theme).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    if let Some(draft) = this
+                        .repo_dialog
+                        .as_ref()
+                        .map(|dialog| dialog.draft.as_str().to_string())
+                    {
+                        this.connect_folder(draft, cx);
+                    }
+                },
+            )),
         );
+
+    // The other ways to change the folder, in one row: browse for it, start a stopped distribution, or forget it.
+    let mut actions = div().flex().flex_row().gap(theme.spacing.sm).child(
+        button("repo-browse", browse_label, false, theme)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx))),
+    );
     if let Some(distro) = stopped {
         actions = actions.child(
             button("repo-start", &format!("Start {distro}"), true, theme).on_click(cx.listener(
@@ -414,7 +443,7 @@ pub(super) fn panel(
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.disconnect_folder(cx))),
         );
     }
-    let browse_label = if broken { "Locate again" } else { "Browse" };
+
     let panel = div()
         .id("repo-panel")
         .flex()
@@ -422,78 +451,14 @@ pub(super) fn panel(
         .gap(theme.spacing.md)
         .w_full()
         .on_click(|_, _, cx| cx.stop_propagation())
-        // A row keeps the badge its own width; the panel is a column, which would stretch it.
-        .child(div().flex().flex_row().child(badge(&shown, theme)))
         .child(status_text(&shown, theme))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .child(
-                    div()
-                        .id("repo-path-field")
-                        .flex_1()
-                        .min_w_0()
-                        .child(edit_box(
-                            &dialog.draft,
-                            "Folder path, then press Enter",
-                            true,
-                            theme,
-                        )),
-                )
-                .child(
-                    button("repo-connect", "Connect", true, theme).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            if let Some(draft) = this
-                                .repo_dialog
-                                .as_ref()
-                                .map(|dialog| dialog.draft.as_str().to_string())
-                            {
-                                this.connect_folder(draft, cx);
-                            }
-                        },
-                    )),
-                ),
-        )
-        .child(
-            // A row, so the button sits at the start of the panel and not centred in it.
-            div().flex().flex_row().child(
-                button("repo-browse", browse_label, false, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx)),
-                ),
-            ),
-        )
+        .child(folder)
         .when_some(dialog.error.clone(), |panel, message| {
             panel.child(error_text(message, theme))
         })
         .child(actions);
 
     Some(panel.into_any_element())
-}
-
-/// The status as a small labelled badge.
-fn badge(shown: &Shown, theme: &Theme) -> Div {
-    let (label, colour) = match shown {
-        Shown::Checking => ("Checking", theme.palette.text_disabled),
-        Shown::Known(CodeSourceStatus::Connected { .. }) => ("Connected", theme.palette.accent),
-        Shown::Known(CodeSourceStatus::Broken { .. }) | Shown::Failed(_) => {
-            ("Broken", theme.palette.danger)
-        }
-        Shown::Known(CodeSourceStatus::NotConnected) => {
-            ("Not connected", theme.palette.text_secondary)
-        }
-    };
-    div()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(colour)
-        .text_color(colour)
-        .text_size(theme.typography.caption)
-        .child(label)
 }
 
 /// What the status means for the user: the saved path, the reason it's broken, or what to do next.
