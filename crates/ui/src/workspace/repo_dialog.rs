@@ -391,7 +391,15 @@ pub(super) fn panel(
         _ => None,
     });
 
-    let browse_label = if broken { "Locate again" } else { "Browse" };
+    // A project has one repository. While one is connected, the folder field gives way to changing or
+    // dropping it, so there is never a second way to connect beside the one that is.
+    let browse_label = if broken {
+        "Locate again"
+    } else if stored.is_some() {
+        "Change folder"
+    } else {
+        "Browse"
+    };
 
     // The folder to connect, with Connect beside it. Enter in the field connects it too.
     let folder = div()
@@ -452,7 +460,7 @@ pub(super) fn panel(
         .w_full()
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(status_text(&shown, theme))
-        .child(folder)
+        .when(stored.is_none(), |panel| panel.child(folder))
         .when_some(dialog.error.clone(), |panel, message| {
             panel.child(error_text(message, theme))
         })
@@ -471,9 +479,22 @@ fn status_text(shown: &Shown, theme: &Theme) -> Div {
         Shown::Known(CodeSourceStatus::NotConnected) => body
             .text_color(theme.palette.text_secondary)
             .child("Choose the folder that holds this project's git repository."),
+        // One repository per project, so the connected folder is shown as the answer, with its path under it.
         Shown::Known(CodeSourceStatus::Connected { path }) => body
-            .text_color(theme.palette.text_secondary)
-            .child(format!("Connected to {path}")),
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.xs)
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(theme.typography.body)
+                    .child("Connected"),
+            )
+            .child(
+                div()
+                    .text_color(theme.palette.text_secondary)
+                    .child(path.clone()),
+            ),
         Shown::Known(CodeSourceStatus::Broken { path, reason }) => body
             .flex()
             .flex_col()

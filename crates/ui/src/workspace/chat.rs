@@ -316,7 +316,7 @@ impl WorkspaceView {
             Some(active) if active.position == launch.position => Arc::clone(&active.queue),
             _ => return,
         };
-        let provider = super::preferences_panel::ai_provider(cx);
+        let provider = super::ai_settings::provider_for(cx, self.projects.active_id());
         spawn_reply(request, cancel, queue, provider);
         cx.notify();
     }

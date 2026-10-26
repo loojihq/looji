@@ -70,11 +70,16 @@ impl Provider {
             .find(|provider| provider.stored() == text)
     }
 
+    /// Whether the provider signs in with an API key the app stores. The others use their own sign-in.
+    pub fn needs_key(self) -> bool {
+        matches!(self, Provider::Anthropic)
+    }
+
     /// The name shown in the settings.
     pub fn label(self) -> &'static str {
         match self {
-            Provider::ClaudeCode => "Claude Code",
-            Provider::Anthropic => "Anthropic API key",
+            Provider::ClaudeCode => "Claude Code (local)",
+            Provider::Anthropic => "Anthropic API",
         }
     }
 }

@@ -5,7 +5,7 @@
 use gpui::{prelude::*, *};
 
 use super::dialog_window::{self, Kind};
-use super::{WorkspaceView, repo_dialog, schedule_dialog};
+use super::{WorkspaceView, ai_settings, repo_dialog, schedule_dialog};
 use crate::{components, theme::Theme};
 
 /// The sections the settings window lists.
@@ -14,6 +14,7 @@ pub(super) enum Section {
     #[default]
     Hours,
     Repository,
+    Ai,
 }
 
 impl Section {
@@ -21,6 +22,7 @@ impl Section {
         match self {
             Section::Hours => "Working hours",
             Section::Repository => "Repository",
+            Section::Ai => "AI",
         }
     }
 }
@@ -114,20 +116,28 @@ pub(super) fn panel(
             format!("The local git repository for {project}."),
             repo_dialog::panel(view, theme, cx),
         ),
+        Section::Ai => (
+            format!(
+                "How {project} plans and answers. Anything not set here uses the Preferences choice."
+            ),
+            Some(ai_section(view, theme, cx).into_any_element()),
+        ),
     };
 
-    let list = [Section::Hours, Section::Repository].into_iter().fold(
-        div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.xs)
-            .p(theme.spacing.sm)
-            .w(px(168.))
-            .flex_none()
-            .border_r_1()
-            .border_color(theme.palette.border),
-        |list, item| list.child(section_item(item, item == section, theme, cx)),
-    );
+    let list = [Section::Hours, Section::Repository, Section::Ai]
+        .into_iter()
+        .fold(
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme.spacing.xs)
+                .p(theme.spacing.sm)
+                .w(px(168.))
+                .flex_none()
+                .border_r_1()
+                .border_color(theme.palette.border),
+            |list, item| list.child(section_item(item, item == section, theme, cx)),
+        );
 
     let content = div()
         .flex_1()
@@ -210,5 +220,56 @@ fn section_item(
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.select_settings_section(section, cx)
             }),
+        )
+}
+
+/// The project's own AI provider and model. Each row cycles through the app's choice, then the options, so a
+/// project can be set to the app's default again.
+fn ai_section(
+    view: &WorkspaceView,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    let Some(project) = view.projects.active_id() else {
+        return div();
+    };
+    let app_provider = ai_settings::app_provider(cx);
+    let provider_label = match ai_settings::project_provider_choice(cx, project) {
+        Some(provider) => provider.label().to_string(),
+        None => format!("Default ({})", app_provider.label()),
+    };
+    let model_label = match ai_settings::project_model_choice(cx, project) {
+        Some(model) => model,
+        None => match crate::settings::current(cx).selected_model {
+            Some(model) => format!("Default ({model})"),
+            None => format!("Default ({})", looji_ai::models::DEFAULT_MODEL),
+        },
+    };
+    div()
+        .flex()
+        .flex_col()
+        .child(
+            components::settings_row(
+                "Provider",
+                Some("Claude Code uses the install on this computer. The Anthropic API uses the key in Preferences."),
+                components::select("project-ai-provider", &provider_label, false, theme),
+                theme,
+            )
+            .id("project-ai-provider")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.cycle_project_provider(project, cx)
+            })),
+        )
+        .child(
+            components::settings_row(
+                "Model",
+                Some("Used for planning and task chat in this project."),
+                components::select("project-ai-model", &model_label, false, theme),
+                theme,
+            )
+            .id("project-ai-model")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.cycle_project_model(project, cx)
+            })),
         )
 }

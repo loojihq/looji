@@ -247,7 +247,7 @@ impl WorkspaceView {
             &dialog.members,
         );
         let request = ChatRequest {
-            model: super::preferences_panel::plan_model(cx),
+            model: super::ai_settings::model_for(cx, self.projects.active_id()),
             system: None,
             messages: vec![ChatMessage::user(prompt)],
             max_tokens: MAX_TOKENS,
@@ -257,7 +257,7 @@ impl WorkspaceView {
         let queue = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&queue);
         let request_future = run_request(
-            super::preferences_panel::ai_provider(cx),
+            super::ai_settings::provider_for(cx, self.projects.active_id()),
             request,
             cancel.clone(),
             move |update| {

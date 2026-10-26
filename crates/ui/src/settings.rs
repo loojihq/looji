@@ -22,24 +22,6 @@ pub fn update(cx: &mut App, change: Preference) -> Result<(), RepoError> {
     Ok(())
 }
 
-/// Model IDs the picker cycles through. TEMPORARY: the model picker task replaces this with the
-/// provider's live list, since the list changes over time.
-pub const TEMPORARY_MODEL_CHOICES: &[&str] =
-    &["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];
-
-/// The next model after `current` in the temporary list. `None` is the default, and it comes
-/// after the last model and before the first.
-pub fn next_model(current: Option<&str>) -> Option<String> {
-    let choices: Vec<Option<&str>> = std::iter::once(None)
-        .chain(TEMPORARY_MODEL_CHOICES.iter().map(|id| Some(*id)))
-        .collect();
-    let index = choices
-        .iter()
-        .position(|choice| *choice == current)
-        .unwrap_or(0);
-    choices[(index + 1) % choices.len()].map(str::to_string)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
