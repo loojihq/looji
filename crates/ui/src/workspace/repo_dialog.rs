@@ -370,11 +370,7 @@ pub(super) fn panel(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.repo_dialog.as_ref()?;
-    let project = view
-        .projects
-        .active()
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
+
     let shown = match &view.code_source {
         Some(source) if source.project == dialog.project => source.shown.clone(),
         _ => Shown::Checking,
@@ -395,7 +391,16 @@ pub(super) fn panel(
         _ => None,
     });
 
-    let mut actions = div().flex().flex_row().gap(theme.spacing.sm).justify_end();
+    let browse_label = if broken { "Locate again" } else { "Browse" };
+    let mut actions = div()
+        .flex()
+        .flex_row()
+        .gap(theme.spacing.sm)
+        .justify_start()
+        .child(
+            button("repo-browse", browse_label, false, theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx))),
+        );
     if let Some(distro) = stopped {
         actions = actions.child(
             button("repo-start", &format!("Start {distro}"), true, theme).on_click(cx.listener(
@@ -410,73 +415,60 @@ pub(super) fn panel(
         );
     }
     let browse_label = if broken { "Locate again" } else { "Browse" };
-    let panel =
-        div()
-            .id("repo-panel")
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.md)
-            .w_full()
-            .p(theme.spacing.lg)
-            .bg(theme.palette.surface_raised)
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child(format!("The local git repository for {project}")),
-            )
-            // A row keeps the badge its own width; the panel is a column, which would stretch it.
-            .child(div().flex().flex_row().child(badge(&shown, theme)))
-            .child(status_text(&shown, theme))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(theme.spacing.sm)
-                    .child(
-                        div()
-                            .id("repo-path-field")
-                            .flex_1()
-                            .min_w_0()
-                            .child(edit_box(
-                                &dialog.draft,
-                                "Folder path, then press Enter",
-                                true,
-                                theme,
-                            )),
-                    )
-                    .child(
-                        button("repo-connect", "Connect", true, theme).on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                if let Some(draft) = this
-                                    .repo_dialog
-                                    .as_ref()
-                                    .map(|dialog| dialog.draft.as_str().to_string())
-                                {
-                                    this.connect_folder(draft, cx);
-                                }
-                            },
+    let panel = div()
+        .id("repo-panel")
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.md)
+        .w_full()
+        .on_click(|_, _, cx| cx.stop_propagation())
+        // A row keeps the badge its own width; the panel is a column, which would stretch it.
+        .child(div().flex().flex_row().child(badge(&shown, theme)))
+        .child(status_text(&shown, theme))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .child(
+                    div()
+                        .id("repo-path-field")
+                        .flex_1()
+                        .min_w_0()
+                        .child(edit_box(
+                            &dialog.draft,
+                            "Folder path, then press Enter",
+                            true,
+                            theme,
                         )),
-                    ),
-            )
-            .child(
-                // A row, so the button sits at the start of the panel and not centred in it.
-                div().flex().flex_row().child(
-                    button("repo-browse", browse_label, false, theme).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx)),
-                    ),
+                )
+                .child(
+                    button("repo-connect", "Connect", true, theme).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            if let Some(draft) = this
+                                .repo_dialog
+                                .as_ref()
+                                .map(|dialog| dialog.draft.as_str().to_string())
+                            {
+                                this.connect_folder(draft, cx);
+                            }
+                        },
+                    )),
                 ),
-            )
-            .when_some(dialog.error.clone(), |panel, message| {
-                panel.child(error_text(message, theme))
-            })
-            .child(actions.child(
-                button("repo-done", "Done", false, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.close_repo_dialog(cx)),
+        )
+        .child(
+            // A row, so the button sits at the start of the panel and not centred in it.
+            div().flex().flex_row().child(
+                button("repo-browse", browse_label, false, theme).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx)),
                 ),
-            ));
+            ),
+        )
+        .when_some(dialog.error.clone(), |panel, message| {
+            panel.child(error_text(message, theme))
+        })
+        .child(actions);
 
     Some(panel.into_any_element())
 }

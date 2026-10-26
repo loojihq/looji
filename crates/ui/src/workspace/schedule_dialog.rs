@@ -36,7 +36,7 @@ const MONTH_NAMES: [&str; 12] = [
 ];
 /// A time is at most `HH:MM` with the hour `24`, so five characters.
 const TIME_CHARS: usize = 5;
-const COPY: &str = "Existing due dates don't change. The new hours apply to tasks that move into progress from now on.";
+pub(super) const COPY: &str = "Existing due dates don't change. The new hours apply to tasks that move into progress from now on.";
 
 /// The controls the keyboard reaches, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,11 +498,6 @@ pub(super) fn panel(
             .position(|candidate| *candidate == control)
             .is_some_and(|index| focus[index].is_focused(window))
     };
-    let project = view
-        .projects
-        .find_by_id(dialog.project)
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
 
     let mut pills = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
     for (day, handle) in focus.iter().enumerate().take(DAY_NAMES.len()) {
@@ -586,17 +581,6 @@ pub(super) fn panel(
         .p(theme.spacing.lg)
         .bg(theme.palette.surface_raised)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .text_size(theme.typography.title)
-                .child("Working hours"),
-        )
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(format!("{project}. {COPY}")),
-        )
         .child(field("Workdays", None, days, theme))
         .child(times)
         .when_some(preview, |panel, preview| panel.child(preview))
@@ -629,11 +613,15 @@ pub(super) fn panel(
                 .justify_end()
                 .gap(theme.spacing.sm)
                 .child(
-                    button("schedule-cancel", "Cancel", false, theme)
-                        .track_focus(handle_for(focus, Control::Cancel))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.request_schedule_close(window, cx)
-                        })),
+                    button("schedule-discard", "Discard changes", false, theme)
+                        .when(!dialog.dirty(), |button| {
+                            button.opacity(0.5).cursor_default()
+                        })
+                        .when(dialog.dirty(), |button| {
+                            button.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.reset_working_hours(window, cx)
+                            }))
+                        }),
                 )
                 .child(save),
         );

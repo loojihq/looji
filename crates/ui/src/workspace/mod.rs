@@ -133,8 +133,9 @@ pub struct WorkspaceView {
     schedule_focus: Vec<FocusHandle>,
     /// The planning wizard, while it's open, and one focus handle for each of its controls.
     plan_wizard: Option<plan_wizard::PlanWizardDialog>,
-    /// Whether the project settings dialog is open.
+    /// Whether the project settings dialog is open, and which of its sections is showing.
     project_settings_open: bool,
+    settings_section: project_settings::Section,
     /// Whether the unfinished plan on the project page is asking to be discarded.
     plan_discard: bool,
     plan_focus: Vec<FocusHandle>,
@@ -224,6 +225,7 @@ impl WorkspaceView {
                     plan_wizard: None,
                     plan_discard: false,
                     project_settings_open: false,
+                    settings_section: project_settings::Section::default(),
                     plan_focus: (0..plan_wizard::CONTROLS.len())
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),

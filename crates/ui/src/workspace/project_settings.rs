@@ -1,11 +1,29 @@
 //! Project settings: the project's working hours and its repository, in one dialog window. It opens from the
-//! Settings button in the project header. Escape closes it, and unsaved working hours ask first.
+//! Settings button in the project header. A list on the left picks the section, the section fills the right, and
+//! Done closes the window. Escape closes it too, and unsaved working hours ask first.
 
 use gpui::{prelude::*, *};
 
 use super::dialog_window::{self, Kind};
 use super::{WorkspaceView, repo_dialog, schedule_dialog};
 use crate::{components, theme::Theme};
+
+/// The sections the settings window lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum Section {
+    #[default]
+    Hours,
+    Repository,
+}
+
+impl Section {
+    fn label(self) -> &'static str {
+        match self {
+            Section::Hours => "Working hours",
+            Section::Repository => "Repository",
+        }
+    }
+}
 
 /// The Settings button in the project header.
 pub(super) fn button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
@@ -27,18 +45,33 @@ impl WorkspaceView {
         if self.project_settings_open {
             return;
         }
+        let Some(id) = self.projects.active_id() else {
+            return;
+        };
+        self.settings_section = Section::Hours;
+        self.repo_dialog = Some(repo_dialog::RepoDialog::new(id));
+        self.project_settings_open = true;
+        self.refresh_code_source(cx);
+        self.reset_working_hours(window, cx);
+        let main = cx.entity();
+        cx.defer(move |cx| dialog_window::open(cx, main, Kind::ProjectSettings));
+    }
+
+    /// Reloads the working hours from the project, which discards any unsaved edit to them.
+    pub(super) fn reset_working_hours(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active() else {
             return;
         };
         let (id, schedule) = (project.id(), project.working_schedule());
         let anchor = looji_domain::LocalMoment::from_timestamp_utc(looji_domain::Timestamp::now());
         self.schedule_dialog = Some(schedule_dialog::ScheduleDialog::open(id, schedule, anchor));
-        self.repo_dialog = Some(repo_dialog::RepoDialog::new(id));
-        self.project_settings_open = true;
-        self.refresh_code_source(cx);
-        let main = cx.entity();
-        cx.defer(move |cx| dialog_window::open(cx, main, Kind::ProjectSettings));
         self.schedule_focus[0].focus(window, cx);
+        cx.notify();
+    }
+
+    /// Picks a section from the list on the left.
+    pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.settings_section = section;
         cx.notify();
     }
 
@@ -62,24 +95,120 @@ impl WorkspaceView {
     }
 }
 
-/// The settings body: the working hours, then the repository, each under its own heading.
+/// The settings window's body: the section list on the left, and the chosen section on the right, with Done below.
 pub(super) fn panel(
     view: &WorkspaceView,
     theme: &Theme,
     window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
-    let hours = schedule_dialog::panel(view, theme, window, cx);
-    let repository = repo_dialog::panel(view, theme, cx);
+    let project = view.projects.active()?.name().to_string();
+    let section = view.settings_section;
+
+    let (description, body) = match section {
+        Section::Hours => (
+            format!("{project}. {}", schedule_dialog::COPY),
+            schedule_dialog::panel(view, theme, window, cx),
+        ),
+        Section::Repository => (
+            format!("The local git repository for {project}."),
+            repo_dialog::panel(view, theme, cx),
+        ),
+    };
+
+    let list = [Section::Hours, Section::Repository].into_iter().fold(
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.xs)
+            .p(theme.spacing.sm)
+            .w(px(168.))
+            .flex_none()
+            .border_r_1()
+            .border_color(theme.palette.border),
+        |list, item| list.child(section_item(item, item == section, theme, cx)),
+    );
+
+    let content = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.md)
+        .p(theme.spacing.lg)
+        .child(
+            div()
+                .text_size(theme.typography.title)
+                .font_weight(FontWeight::MEDIUM)
+                .child(section.label()),
+        )
+        .child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.text_secondary)
+                .child(description),
+        )
+        .children(body);
+
+    let footer = div()
+        .flex()
+        .flex_row()
+        .justify_end()
+        .p(theme.spacing.md)
+        .border_t_1()
+        .border_color(theme.palette.border)
+        .child(
+            components::button("settings-done", "Done", components::Variant::Primary, theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.request_project_settings_close(window, cx)
+                })),
+        );
+
     Some(
         div()
             .flex()
             .flex_col()
-            .gap(theme.spacing.lg)
-            .p(theme.spacing.lg)
-            .children(hours)
-            .child(components::section_label("Repository", theme))
-            .children(repository)
+            .size_full()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .child(list)
+                    .child(content),
+            )
+            .child(footer)
             .into_any_element(),
     )
+}
+
+/// One entry in the section list. The chosen one is filled.
+fn section_item(
+    section: Section,
+    selected: bool,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    div()
+        .id(("settings-section", section as u64))
+        .px(theme.spacing.sm)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .cursor_pointer()
+        .when(selected, |item| {
+            item.bg(theme.palette.surface_selected)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.palette.text_primary)
+        })
+        .when(!selected, |item| {
+            item.text_color(theme.palette.text_secondary)
+                .hover(|style| style.bg(theme.palette.surface_hover))
+        })
+        .child(section.label())
+        .on_click(
+            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.select_settings_section(section, cx)
+            }),
+        )
 }
