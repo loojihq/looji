@@ -44,10 +44,28 @@ pub struct Usage {
     pub output_tokens: u32,
 }
 
+/// Something an answer drew on, so it can be cited: a file and lines, an issue, or a commit.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Source {
+    /// `code`, `doc`, `issue`, or `commit`.
+    pub kind: String,
+    /// The file path, issue id, or commit id.
+    pub reference: String,
+    /// The symbol, issue title, or commit subject.
+    pub label: String,
+    /// The lines of a file. Zero for issues and commits.
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatEvent {
     /// Text as it arrived. Tokens are not necessarily words.
     Token(String),
+    /// What an agent is doing between pieces of text, in a few words: "Searching for password checks".
+    Step(String),
+    /// Something the agent read, which the answer can cite.
+    Source(Source),
     /// The response is complete. `usage` is `None` when the provider didn't report it.
     Finished { usage: Option<Usage> },
 }

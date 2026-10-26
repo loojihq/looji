@@ -1,14 +1,17 @@
 //! Draws the chat: the model row, each message, and the markdown inside a reply. Code blocks get a copy button, and
 //! links open in the browser. Everything here reads the dialog's state; the actions are on `WorkspaceView`.
 
+use std::path::Path;
+
 use gpui::{prelude::*, *};
-use looji_ai::models::MODELS;
-use looji_domain::{ChatMessage, MessageRole, ReplyState};
+use looji_ai::{Source, models::MODELS};
+use looji_domain::{ChatMessage, CodeSourceRepository, MessageRole, ProjectId, ReplyState};
 
 use super::{
     WorkspaceView,
     chat::ChatDialog,
     markdown::{Block, Inline, parse},
+    store,
     task_dialog::button,
 };
 use crate::theme::Theme;
@@ -132,7 +135,31 @@ pub(super) fn message(
             content.into_any_element()
         }
     };
+    // While an agent works, what it is doing. The latest few steps are enough to see it moving.
+    if message.role == MessageRole::Assistant
+        && let Some(active) = dialog
+            .active
+            .as_ref()
+            .filter(|active| active.position == message.position)
+        && !active.steps.is_empty()
+    {
+        let mut steps = div().flex().flex_col().gap(px(2.));
+        let skipped = active.steps.len().saturating_sub(4);
+        for step in &active.steps[skipped..] {
+            steps = steps.child(caption(&format!("\u{2022} {step}"), theme));
+        }
+        column = column.child(steps);
+    }
     column = column.child(body);
+    if message.role == MessageRole::Assistant {
+        let sources = match dialog.active.as_ref() {
+            Some(active) if active.position == message.position => Some(&active.sources),
+            _ => dialog.sources.get(&message.position),
+        };
+        if let Some(sources) = sources.filter(|sources| !sources.is_empty()) {
+            column = column.child(sources_used(sources, dialog.project, theme, cx));
+        }
+    }
 
     match &state {
         ReplyState::Streaming => {
@@ -171,6 +198,60 @@ pub(super) fn message(
         }
     }
     column.into_any_element()
+}
+
+/// What an answer drew on. Files are shown with their lines, and a click shows the file in the file manager.
+fn sources_used(
+    sources: &[Source],
+    project: ProjectId,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    const SHOWN: usize = 8;
+    let mut list = div()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(caption(&format!("Sources used ({})", sources.len()), theme));
+    for (index, source) in sources.iter().take(SHOWN).enumerate() {
+        let text = match source.kind.as_str() {
+            "code" | "doc" if source.start_line > 0 => format!(
+                "{}:{}-{}",
+                source.reference, source.start_line, source.end_line
+            ),
+            "issue" => format!("Issue: {}", source.label),
+            "commit" => format!(
+                "Commit {}: {}",
+                source.reference.chars().take(7).collect::<String>(),
+                source.label
+            ),
+            _ => source.reference.clone(),
+        };
+        let row = div()
+            .id(("chat-source", index))
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.accent)
+            .child(text);
+        list = list.child(if matches!(source.kind.as_str(), "code" | "doc") {
+            let reference = source.reference.clone();
+            row.cursor_pointer()
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    if let Ok(Some(root)) = store(cx).load_path(project) {
+                        cx.reveal_path(&Path::new(&root).join(&reference));
+                    }
+                }))
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        });
+    }
+    if sources.len() > SHOWN {
+        list = list.child(caption(
+            &format!("and {} more", sources.len() - SHOWN),
+            theme,
+        ));
+    }
+    list.into_any_element()
 }
 
 fn caption(text: &str, theme: &Theme) -> impl IntoElement {

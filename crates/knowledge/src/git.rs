@@ -54,7 +54,7 @@ pub fn branch(root: &Path) -> Option<String> {
 /// Up to `limit` of the newest commits, newest first. With `since`, only the commits after that one. An unknown
 /// `since`, such as one that a rebase removed, gives the newest `limit` instead.
 pub fn recent_commits(root: &Path, limit: usize, since: Option<&str>) -> Result<Vec<CommitDoc>> {
-    let format = format!("--format={RECORD}%H{FIELD}%an{FIELD}%B{FIELD}");
+    let format = format!("--format={RECORD}%H{FIELD}%an{FIELD}%at{FIELD}%B{FIELD}");
     let count = format!("-n{limit}");
     let range = since.map(|sha| format!("{sha}..HEAD"));
     let mut args = vec!["log", &count, "--name-only", &format];
@@ -75,6 +75,7 @@ pub fn parse_log(text: &str) -> Vec<CommitDoc> {
             let mut fields = record.split(FIELD);
             let sha = fields.next()?.trim().to_string();
             let author = fields.next()?.trim().to_string();
+            let date = fields.next()?.trim().parse().unwrap_or(0);
             let message = fields.next()?.trim().to_string();
             let files = fields
                 .next()
@@ -87,6 +88,7 @@ pub fn parse_log(text: &str) -> Vec<CommitDoc> {
             (!sha.is_empty()).then_some(CommitDoc {
                 sha,
                 author,
+                date,
                 message,
                 files,
             })
@@ -138,6 +140,7 @@ mod tests {
         CommitDoc {
             sha: "c1".into(),
             author: "Maya".into(),
+            date: 0,
             message: message.into(),
             files: Vec::new(),
         }
@@ -146,13 +149,14 @@ mod tests {
     #[test]
     fn git_log_output_is_read_into_commits_with_their_files() {
         let log = format!(
-            "{RECORD}aaa{FIELD}Maya{FIELD}Add retry\n\nIt gave up too early.\n{FIELD}\n\nsrc/upload.rs\nsrc/retry.rs\n\
-             {RECORD}bbb{FIELD}Sam{FIELD}Fix typo{FIELD}\n\nREADME.md\n"
+            "{RECORD}aaa{FIELD}Maya{FIELD}1700000000{FIELD}Add retry\n\nIt gave up too early.\n{FIELD}\n\nsrc/upload.rs\nsrc/retry.rs\n\
+             {RECORD}bbb{FIELD}Sam{FIELD}1700000500{FIELD}Fix typo{FIELD}\n\nREADME.md\n"
         );
         let commits = parse_log(&log);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].sha, "aaa");
         assert_eq!(commits[0].author, "Maya");
+        assert_eq!(commits[0].date, 1_700_000_000);
         assert_eq!(commits[0].message, "Add retry\n\nIt gave up too early.");
         assert_eq!(commits[0].files, ["src/upload.rs", "src/retry.rs"]);
         assert_eq!(commits[1].files, ["README.md"]);

@@ -71,3 +71,31 @@ pub fn build_chat_request(
         start,
     )
 }
+
+/// The request for a reply from an agent, which looks the code up itself instead of being handed it. The instructions
+/// say how to investigate and how to cite what it found.
+pub fn build_agent_request(
+    model: &str,
+    brief: TaskBrief<'_>,
+    history: &[ChatMessage],
+    budget_tokens: usize,
+) -> (ChatRequest, usize) {
+    let (mut request, left_out) = build_chat_request(model, brief, history, &[], budget_tokens);
+    let about = if brief.whole_project {
+        "the project and its repository"
+    } else {
+        "one task in the project and its repository"
+    };
+    let mut system = format!(
+        "You answer questions about {about}. You have tools that search and read the project's code, docs, issues and \
+         commits. Look before you answer: search with words from the question and likely names, read the code around \
+         what you find, and follow it until you can answer. Do not guess about code you have not read.\n\n\
+         Write only the answer. Do not narrate what you are about to look up. Name files as `path:line` where you \
+         rely on them, so the reader can check. If you could not find something, say what you looked for and where.\n\n"
+    );
+    if let Some(original) = request.system.take() {
+        system.push_str(&original);
+    }
+    request.system = Some(system);
+    (request, left_out)
+}

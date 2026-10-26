@@ -277,11 +277,13 @@ impl Syncer {
                 &SourceMeta::new(&hash, size as u64, None),
                 &chunks,
             )?;
+            store.put_issue(project, issue)?;
             report.absorb(Outcome::Indexed);
         }
         for reference in store.source_refs(project, SourceKind::Issue)? {
             if !present.contains(reference.as_str()) {
                 store.remove_source(project, SourceKind::Issue, &reference)?;
+                store.remove_issue(project, &reference)?;
                 report.scanned += 1;
                 report.removed += 1;
             }
@@ -314,6 +316,7 @@ impl Syncer {
                 &SourceMeta::new(&commit.sha, size, None),
                 &[chunk],
             )?;
+            store.put_commit(project, commit)?;
             report.absorb(Outcome::Indexed);
         }
         Ok(report)
@@ -654,6 +657,7 @@ mod tests {
         let commit = CommitDoc {
             sha: "abc123".into(),
             author: "Maya".into(),
+            date: 0,
             message: "Add retry to the uploader".into(),
             files: vec!["src/upload.rs".into()],
         };

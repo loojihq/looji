@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-const API_VERSION: &str = "2023-06-01";
+pub(crate) const API_VERSION: &str = "2023-06-01";
 
 #[derive(Serialize)]
 struct WireMessage<'a> {
@@ -150,7 +150,7 @@ pub fn parse_retry_after(value: &str) -> Option<Duration> {
     value.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
-fn network_error(err: reqwest::Error) -> AiError {
+pub(crate) fn network_error(err: reqwest::Error) -> AiError {
     // `without_url` keeps the address out of the message. The key is in a header and never in the URL, but this
     // keeps the message to what failed.
     AiError::Network(err.without_url().to_string())
@@ -304,7 +304,7 @@ mod tests {
             .iter()
             .filter_map(|event| match event {
                 ChatEvent::Token(text) => Some(text.as_str()),
-                ChatEvent::Finished { .. } => None,
+                ChatEvent::Step(_) | ChatEvent::Source(_) | ChatEvent::Finished { .. } => None,
             })
             .collect()
     }

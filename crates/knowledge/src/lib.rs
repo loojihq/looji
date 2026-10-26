@@ -12,14 +12,18 @@
 //! - `watch`: noticing changes in the repository.
 
 pub mod chunk;
+pub mod facts;
 pub mod git;
+pub mod mcp;
 pub mod safety;
 pub mod store;
 pub mod sync;
 pub mod tokens;
+pub mod tools;
 pub mod watch;
 
 pub use chunk::{Chunk, CommitDoc, IssueDoc, SourceKind};
+pub use facts::IssueFilter;
 pub use store::{Health, Hit, KnowledgeStore, SearchQuery, SourceMeta};
 pub use sync::{SyncReport, Syncer};
 

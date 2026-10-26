@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Bumped when the tables change. An older file is emptied and rebuilt.
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// A chunk as it comes back from a search.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,7 +81,7 @@ pub struct Health {
 }
 
 pub struct KnowledgeStore {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 pub(crate) fn now_millis() -> i64 {
@@ -115,7 +115,9 @@ impl KnowledgeStore {
                  DROP TABLE IF EXISTS chunks;
                  DROP TABLE IF EXISTS sources;
                  DROP TABLE IF EXISTS meta;
-                 DROP TABLE IF EXISTS commit_links;",
+                 DROP TABLE IF EXISTS commit_links;
+                 DROP TABLE IF EXISTS issue_facts;
+                 DROP TABLE IF EXISTS commit_facts;",
             )?;
         }
         connection.execute_batch(
@@ -148,6 +150,27 @@ impl KnowledgeStore {
                  key     TEXT NOT NULL,
                  value   TEXT NOT NULL,
                  PRIMARY KEY (project, key)
+             );
+             CREATE TABLE IF NOT EXISTS issue_facts (
+                 project     TEXT NOT NULL,
+                 id          TEXT NOT NULL,
+                 title       TEXT NOT NULL,
+                 status      TEXT NOT NULL,
+                 priority    TEXT,
+                 assignee    TEXT,
+                 tags        TEXT NOT NULL,
+                 description TEXT NOT NULL,
+                 PRIMARY KEY (project, id)
+             );
+             CREATE TABLE IF NOT EXISTS commit_facts (
+                 project TEXT    NOT NULL,
+                 sha     TEXT    NOT NULL,
+                 author  TEXT    NOT NULL,
+                 date    INTEGER NOT NULL,
+                 subject TEXT    NOT NULL,
+                 message TEXT    NOT NULL,
+                 files   TEXT    NOT NULL,
+                 PRIMARY KEY (project, sha)
              );
              CREATE TABLE IF NOT EXISTS commit_links (
                  project TEXT NOT NULL,

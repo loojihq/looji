@@ -82,6 +82,8 @@ pub struct IssueDoc {
 pub struct CommitDoc {
     pub sha: String,
     pub author: String,
+    /// When it was made, in seconds since the epoch. Zero when unknown.
+    pub date: i64,
     pub message: String,
     pub files: Vec<String>,
 }
@@ -606,6 +608,7 @@ mod tests {
         let chunk = chunk_commit(&CommitDoc {
             sha: "abc".into(),
             author: "Maya".into(),
+            date: 0,
             message: "Add retry to the uploader\n\nIt gave up after one failure.".into(),
             files: vec!["src/upload.rs".into(), "src/retry.rs".into()],
         });
