@@ -11,12 +11,12 @@ use looji_domain::{Status, Task, TaskEvent, TaskEventKind, TaskId, TeamMemberId,
 use super::board::status_label;
 use super::card::{civil_from_days, tooltip};
 use super::drag::DropResult;
-use super::fields::{field, member_mark, segment, text_box};
+use super::fields::{field, member_mark, segment};
 use super::members;
 use super::task_editors;
-use super::{WorkspaceView, store, typed_text};
-use crate::components::prop_row;
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::components::{edit_box, prop_row};
+use crate::{text_edit::TextEdit, theme::Theme};
 
 /// The text fields the panel can edit inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub(super) enum DraftField {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Draft {
     pub field: DraftField,
-    pub text: String,
+    pub text: TextEdit,
 }
 
 /// The panel's state. It holds the task's ID, not a copy of the task.
@@ -143,7 +143,10 @@ impl WorkspaceView {
         if !is_gone(&self.board, panel.task) {
             return;
         }
-        let unsaved = panel.draft.as_ref().map(|draft| draft.text.clone());
+        let unsaved = panel
+            .draft
+            .as_ref()
+            .map(|draft| draft.text.as_str().to_string());
         self.panel = None;
         let mut notice = "That task was deleted, so its panel was closed.".to_string();
         if let Some(text) = unsaved.filter(|text| !text.trim().is_empty()) {
@@ -160,8 +163,8 @@ impl WorkspaceView {
             return;
         };
         let text = match field {
-            DraftField::Title => task.title().to_string(),
-            DraftField::Description => task.description().to_string(),
+            DraftField::Title => TextEdit::new(task.title()),
+            DraftField::Description => TextEdit::new(task.description()),
         };
         if let Some(panel) = self.panel.as_mut() {
             panel.draft = Some(Draft { field, text });
@@ -243,7 +246,6 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> bool {
         let key = event.keystroke.key.as_str();
-        let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         let Some(panel) = self.panel.as_mut() else {
             return false;
         };
@@ -251,17 +253,10 @@ impl WorkspaceView {
             match key {
                 "escape" => panel.draft = None,
                 "enter" => return self.commit_draft_consumed(cx),
-                "backspace" => {
-                    draft.text.pop();
-                }
                 _ => {
-                    if modifier {
+                    if !draft.text.handle_key(&event.keystroke) {
                         return false;
                     }
-                    let Some(text) = typed_text(&event.keystroke) else {
-                        return false;
-                    };
-                    draft.text.push_str(text);
                 }
             }
             cx.notify();
@@ -291,7 +286,7 @@ pub(super) fn render(
     let draft = panel.draft.as_ref();
 
     let title_body = match draft.filter(|draft| draft.field == DraftField::Title) {
-        Some(draft) => text_box(&draft.text, "Title", true, theme).into_any_element(),
+        Some(draft) => edit_box(&draft.text, "Title", true, theme).into_any_element(),
         None => div()
             .text_size(theme.typography.title)
             .font_weight(FontWeight::MEDIUM)
@@ -299,7 +294,7 @@ pub(super) fn render(
             .into_any_element(),
     };
     let description_body = match draft.filter(|draft| draft.field == DraftField::Description) {
-        Some(draft) => text_box(&draft.text, "Description", true, theme).into_any_element(),
+        Some(draft) => edit_box(&draft.text, "Description", true, theme).into_any_element(),
         None => div()
             .text_color(theme.palette.text_secondary)
             .child(if task.description().is_empty() {

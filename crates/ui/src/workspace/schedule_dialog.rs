@@ -16,10 +16,10 @@ use looji_domain::{
 };
 use looji_persistence::ScheduleSaveError;
 
-use super::fields::{field, text_box};
+use super::fields::field;
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use crate::{components::edit_box, text_edit::TextEdit, theme::Theme};
 
 const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_IDS: [&str; 7] = [
@@ -73,8 +73,8 @@ pub(super) struct ScheduleDialog {
     pub stored: ScheduleDraft,
     pub draft: ScheduleDraft,
     /// The times as typed. The draft only takes a time that reads, so a partial entry stays here.
-    pub start_text: String,
-    pub end_text: String,
+    pub start_text: TextEdit,
+    pub end_text: TextEdit,
     pub start_unreadable: bool,
     pub end_unreadable: bool,
     /// The moment the preview counts from.
@@ -97,8 +97,8 @@ impl ScheduleDialog {
             project,
             stored: draft,
             draft,
-            start_text: format_time(stored.start()),
-            end_text: format_time(stored.end()),
+            start_text: format_time(stored.start()).into(),
+            end_text: format_time(stored.end()).into(),
             start_unreadable: false,
             end_unreadable: false,
             anchor,
@@ -128,7 +128,9 @@ impl ScheduleDialog {
             }
             None => self.start_unreadable = true,
         }
-        self.start_text = text;
+        if self.start_text.as_str() != text {
+            self.start_text.set(text);
+        }
         self.refresh();
     }
 
@@ -141,7 +143,9 @@ impl ScheduleDialog {
             }
             None => self.end_unreadable = true,
         }
-        self.end_text = text;
+        if self.end_text.as_str() != text {
+            self.end_text.set(text);
+        }
         self.refresh();
     }
 
@@ -301,27 +305,34 @@ impl WorkspaceView {
         let Some(dialog) = self.schedule_dialog.as_mut() else {
             return;
         };
-        let current = match control {
-            Control::Start => dialog.start_text.clone(),
-            Control::End => dialog.end_text.clone(),
+        let field = match control {
+            Control::Start => &mut dialog.start_text,
+            Control::End => &mut dialog.end_text,
             _ => return,
         };
-        let mut next = current;
-        if keystroke.key == "backspace" {
-            next.pop();
-        } else if !modifier
-            && let Some(typed) = typed_text(keystroke)
-            && typed.chars().all(|c| c.is_ascii_digit() || c == ':')
-            && next.chars().count() + typed.chars().count() <= TIME_CHARS
-        {
-            next.push_str(typed);
-        } else {
-            return;
+        match typed_text(keystroke).filter(|_| !modifier) {
+            Some(typed) => {
+                let allowed = typed.chars().all(|c| c.is_ascii_digit() || c == ':')
+                    && field.chars().count() + typed.chars().count() <= TIME_CHARS;
+                if !allowed {
+                    return;
+                }
+                field.insert(typed);
+            }
+            None => {
+                if !field.handle_key(keystroke) {
+                    return;
+                }
+            }
         }
+        // The setters read the text, so the draft and the unreadable flags follow the typing.
+        let text = match control {
+            Control::Start => dialog.start_text.as_str().to_string(),
+            _ => dialog.end_text.as_str().to_string(),
+        };
         match control {
-            Control::Start => dialog.set_start_text(next),
-            Control::End => dialog.set_end_text(next),
-            _ => {}
+            Control::Start => dialog.set_start_text(text),
+            _ => dialog.set_end_text(text),
         }
         cx.notify();
     }
@@ -456,7 +467,7 @@ fn day_pill(
 /// the format message.
 fn time_box(
     control: Control,
-    value: &str,
+    value: &TextEdit,
     unreadable: bool,
     focused: bool,
     handle: &FocusHandle,
@@ -473,7 +484,7 @@ fn time_box(
         div()
             .id(id)
             .track_focus(handle)
-            .child(text_box(value, "HH:MM", focused, theme))
+            .child(edit_box(value, "HH:MM", focused, theme))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.focus_schedule_control(control, window);
                 cx.notify();
@@ -740,8 +751,8 @@ mod tests {
             dialog.draft,
             ScheduleDraft::from_schedule(&WorkingSchedule::default())
         );
-        assert_eq!(dialog.start_text, "09:00");
-        assert_eq!(dialog.end_text, "17:00");
+        assert_eq!(dialog.start_text.as_str(), "09:00");
+        assert_eq!(dialog.end_text.as_str(), "17:00");
         assert!(!dialog.dirty());
         assert!(dialog.can_save());
     }

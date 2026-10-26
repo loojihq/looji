@@ -12,11 +12,11 @@ use std::time::Duration;
 use gpui::{prelude::*, *};
 use looji_domain::Task;
 
+use super::WorkspaceView;
 use super::drag::DropResult;
 use super::keyboard::Hold;
 use super::search;
-use super::{WorkspaceView, typed_text};
-use crate::theme::Theme;
+use crate::{text_edit::TextEdit, theme::Theme};
 
 /// How long the board waits after the last keystroke before it filters.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -57,10 +57,10 @@ impl WorkspaceView {
 
     /// Changes the text in the field. The filter follows after a short pause, and only the last of
     /// several quick changes applies.
-    fn edit_search_draft(&mut self, change: impl FnOnce(&mut String), cx: &mut Context<Self>) {
+    fn edit_search_draft(&mut self, change: impl FnOnce(&mut TextEdit), cx: &mut Context<Self>) {
         change(&mut self.search_draft);
         let number = self.search_debounce.touch();
-        let text = self.search_draft.clone();
+        let text = self.search_draft.as_str().to_string();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SEARCH_DEBOUNCE).await;
             let _ = this.update(cx, |view, cx| {
@@ -120,7 +120,6 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let modifiers = event.keystroke.modifiers;
         match event.keystroke.key.as_str() {
             "escape" => self.clear_search(window, cx),
             "enter" => self.blur_search(cx),
@@ -128,15 +127,11 @@ impl WorkspaceView {
                 self.blur_search(cx);
                 return false;
             }
-            "backspace" => self.edit_search_draft(|draft| _ = draft.pop(), cx),
             _ => {
-                if modifiers.control || modifiers.alt || modifiers.platform {
-                    return false;
-                }
-                let Some(text) = typed_text(&event.keystroke) else {
-                    return false;
-                };
-                self.edit_search_draft(|draft| draft.push_str(text), cx);
+                let keystroke = event.keystroke.clone();
+                let mut handled = false;
+                self.edit_search_draft(|draft| handled = draft.handle_key(&keystroke), cx);
+                return handled;
             }
         }
         true

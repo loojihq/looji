@@ -20,11 +20,10 @@ use looji_domain::{
     RefinedPart, RepoError, TeamMember, Timestamp, display_labels,
 };
 
-use super::fields::text_box;
 use super::plan_wizard::{PlanWizardDialog, SPINNER};
 use super::task_dialog::button;
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components::edit_box, text_edit::TextEdit, theme::Theme};
 
 const TICK: Duration = Duration::from_millis(100);
 const MAX_TOKENS: u32 = 4096;
@@ -56,7 +55,7 @@ impl Drop for RefineRun {
 /// The refinement form for one part. It's open while the user is writing, asking, or waiting.
 pub(super) struct Refine {
     pub target: RefineTarget,
-    pub instruction: String,
+    pub instruction: TextEdit,
     pub phase: Phase,
     /// Whether the replacement may overwrite a part edited by hand. Set once the user has answered.
     pub replace_edited: bool,
@@ -68,7 +67,7 @@ impl Refine {
     pub fn new(target: RefineTarget) -> Self {
         Self {
             target,
-            instruction: String::new(),
+            instruction: TextEdit::default(),
             phase: Phase::Writing,
             replace_edited: false,
             run: None,
@@ -416,7 +415,7 @@ pub(super) fn form(
                 .flex()
                 .flex_col()
                 .gap(theme.spacing.xs)
-                .child(text_box(
+                .child(edit_box(
                     &refine.instruction,
                     "What should change? For example: make the estimates smaller",
                     true,
@@ -522,20 +521,10 @@ pub(super) fn refine_key(
         (_, "escape") => view.cancel_refine(cx),
         (Phase::Writing, "enter") => view.send_refine(cx),
         (Phase::Confirming, "enter") => view.answer_refine_overwrite(false, cx),
-        (Phase::Writing, "backspace") => {
-            if let Some(refine) = view.plan_wizard.as_mut().and_then(|d| d.refine.as_mut()) {
-                refine.instruction.pop();
-                refine.error = None;
-            }
-            cx.notify();
-        }
         (Phase::Writing, _) => {
-            let modifiers = event.keystroke.modifiers;
-            if !(modifiers.control || modifiers.alt || modifiers.platform)
-                && let Some(text) = typed_text(&event.keystroke)
-                && let Some(refine) = view.plan_wizard.as_mut().and_then(|d| d.refine.as_mut())
+            if let Some(refine) = view.plan_wizard.as_mut().and_then(|d| d.refine.as_mut())
+                && refine.instruction.handle_key(&event.keystroke)
             {
-                refine.instruction.push_str(text);
                 refine.error = None;
                 cx.notify();
             }

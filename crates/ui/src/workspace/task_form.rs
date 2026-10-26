@@ -5,10 +5,13 @@
 //!
 //! Required: the title. Everything else is optional. Blank estimate and due date mean none.
 
+use gpui::Keystroke;
 use looji_domain::{
     DueDate, Estimate, Priority, Task, TaskId, TeamMemberId, normalize_tags, parse_due_date,
     parse_estimate_hours, validate_title,
 };
+
+use crate::text_edit::TextEdit;
 
 /// Create a new task, or edit an existing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,19 +66,19 @@ impl Field {
 /// or dates on save.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Values {
-    pub title: String,
-    pub description: String,
+    pub title: TextEdit,
+    pub description: TextEdit,
     pub priority: Option<Priority>,
     /// The member the task is assigned to. `None` is Unassigned.
     pub assignee: Option<TeamMemberId>,
-    pub estimate: String,
+    pub estimate: TextEdit,
     /// The day work starts, typed as YYYY-MM-DD. Blank means none.
-    pub start: String,
-    pub due: String,
+    pub start: TextEdit,
+    pub due: TextEdit,
     /// Committed tags, as chips.
     pub tags: Vec<String>,
     /// Text typed for the next tag, not yet a chip.
-    pub tag_draft: String,
+    pub tag_draft: TextEdit,
 }
 
 impl Values {
@@ -130,21 +133,23 @@ impl TaskForm {
     /// A form for an existing task, prefilled from it.
     pub fn edit(task: &Task) -> Self {
         let values = Values {
-            title: task.title().to_string(),
-            description: task.description().to_string(),
+            title: TextEdit::new(task.title()),
+            description: TextEdit::new(task.description()),
             priority: task.priority(),
             assignee: task.assignee_id(),
-            estimate: task
-                .estimate()
-                .map(|estimate| format_hours(estimate.minutes()))
-                .unwrap_or_default(),
-            start: task
-                .start_on()
-                .map(|start| start.to_string())
-                .unwrap_or_default(),
-            due: task.due_on().map(|due| due.to_string()).unwrap_or_default(),
+            estimate: TextEdit::new(
+                task.estimate()
+                    .map(|estimate| format_hours(estimate.minutes()))
+                    .unwrap_or_default(),
+            ),
+            start: TextEdit::new(
+                task.start_on()
+                    .map(|start| start.to_string())
+                    .unwrap_or_default(),
+            ),
+            due: TextEdit::new(task.due_on().map(|due| due.to_string()).unwrap_or_default()),
             tags: task.tags().to_vec(),
-            tag_draft: String::new(),
+            tag_draft: TextEdit::default(),
         };
         Self::with(Mode::Edit(task.id()), values)
     }
@@ -252,60 +257,79 @@ impl TaskForm {
                 .collect(),
             _ => text.to_string(),
         };
-        match self.active {
-            Field::Title => self.values.title.push_str(&accepted),
-            Field::Description => self.values.description.push_str(&accepted),
-            Field::Estimate => self.values.estimate.push_str(&accepted),
-            Field::Start => self.values.start.push_str(&accepted),
-            Field::Due => self.values.due.push_str(&accepted),
-            Field::Tags => {
-                // A comma ends the tag being typed.
-                // Each comma ends the tag before it. The text after the last comma stays as the draft.
-                let parts: Vec<&str> = accepted.split(',').collect();
-                let last = parts.len() - 1;
-                for (index, part) in parts.into_iter().enumerate() {
-                    self.values.tag_draft.push_str(part);
-                    if index < last {
-                        self.commit_tag();
-                    }
+        if self.active == Field::Tags {
+            // A comma ends the tag being typed. The text after the last comma stays as the draft.
+            let parts: Vec<&str> = accepted.split(',').collect();
+            let last = parts.len() - 1;
+            for (index, part) in parts.into_iter().enumerate() {
+                self.values.tag_draft.insert(part);
+                if index < last {
+                    self.commit_tag();
                 }
-                return;
             }
-            Field::Priority | Field::Assignee => return,
-        }
-        self.errors = Errors::default();
-    }
-
-    /// Removes the last character of the active field. In the tags field, with nothing typed,
-    /// removes the last chip.
-    pub fn backspace(&mut self) {
-        if matches!(self.active, Field::Start | Field::Due) {
             return;
         }
+        if let Some(field) = self.active_text() {
+            field.insert(&accepted);
+            self.errors = Errors::default();
+        }
+    }
+
+    /// The text field the keyboard types into. The dates are chosen on the calendar and the
+    /// priority and assignee are menus, so those have none.
+    fn active_text(&mut self) -> Option<&mut TextEdit> {
         match self.active {
-            Field::Title => {
-                self.values.title.pop();
-            }
-            Field::Description => {
-                self.values.description.pop();
-            }
-            Field::Estimate => {
-                self.values.estimate.pop();
-            }
-            Field::Start => {
-                self.values.start.pop();
-            }
-            Field::Due => {
-                self.values.due.pop();
-            }
-            Field::Tags => {
-                if self.values.tag_draft.is_empty() {
-                    self.values.tags.pop();
-                } else {
-                    self.values.tag_draft.pop();
+            Field::Title => Some(&mut self.values.title),
+            Field::Description => Some(&mut self.values.description),
+            Field::Estimate => Some(&mut self.values.estimate),
+            Field::Tags => Some(&mut self.values.tag_draft),
+            Field::Start | Field::Due | Field::Priority | Field::Assignee => None,
+        }
+    }
+
+    /// Removes the selection, or the character before the caret, in the active field. In the tags
+    /// field, with nothing typed, removes the last chip.
+    pub fn backspace(&mut self) {
+        if self.active == Field::Tags && self.values.tag_draft.is_empty() {
+            self.values.tags.pop();
+            return;
+        }
+        if let Some(field) = self.active_text() {
+            field.backspace();
+        }
+    }
+
+    /// Applies an editing key to the active field: typing (filtered as `type_text` filters it),
+    /// Backspace, the arrows, Home and End, and Ctrl+A. Returns false for keys it doesn't use.
+    pub fn edit_key(&mut self, keystroke: &Keystroke) -> bool {
+        let modifiers = keystroke.modifiers;
+        if self.active_text().is_none() {
+            return false;
+        }
+        if keystroke.key == "backspace" {
+            self.backspace();
+            return true;
+        }
+        if modifiers.control || modifiers.platform || modifiers.alt {
+            return match (keystroke.key.as_str(), self.active_text()) {
+                ("a", Some(field)) => {
+                    field.select_all();
+                    true
                 }
-            }
-            Field::Priority | Field::Assignee => {}
+                _ => false,
+            };
+        }
+        if let Some(text) = keystroke.key_char.as_deref() {
+            self.type_text(text);
+            return true;
+        }
+        if keystroke.key == "space" {
+            self.type_text(" ");
+            return true;
+        }
+        match self.active_text() {
+            Some(field) => field.handle_key(keystroke),
+            None => false,
         }
     }
 
@@ -393,6 +417,7 @@ pub fn format_hours(minutes: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::text_edit::TextEdit;
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
     use looji_domain::{
         DueDate, Estimate, Position, Priority, ProjectId, Status, Task, TeamMemberId,
@@ -402,7 +427,7 @@ mod tests {
 
     fn filled() -> TaskForm {
         let mut form = TaskForm::create();
-        form.values.title = "Write copy".to_string();
+        form.values.title = TextEdit::new("Write copy");
         // The snapshot is what the dialog opened with, so a filled form starts clean.
         form.original = form.values.clone();
         form
@@ -418,7 +443,7 @@ mod tests {
     #[test]
     fn a_title_of_only_spaces_is_blank() {
         let mut form = filled();
-        form.values.title = "   ".to_string();
+        form.values.title = TextEdit::new("   ");
         assert!(form.validate().is_none());
         assert!(form.errors.title.is_some());
     }
@@ -426,7 +451,7 @@ mod tests {
     #[test]
     fn a_complete_form_validates_and_trims_the_title() {
         let mut form = filled();
-        form.values.title = "  Write copy  ".to_string();
+        form.values.title = TextEdit::new("  Write copy  ");
         let valid = form.validate().expect("only the title is required");
         assert_eq!(valid.title, "Write copy");
         assert_eq!(valid.estimate, None);
@@ -436,7 +461,7 @@ mod tests {
     #[test]
     fn negative_estimates_are_rejected_and_only_that_field_is_marked() {
         let mut form = filled();
-        form.values.estimate = "-1".to_string();
+        form.values.estimate = TextEdit::new("-1");
         assert!(form.validate().is_none());
         assert!(form.errors.estimate.is_some());
         assert!(form.errors.title.is_none());
@@ -445,7 +470,7 @@ mod tests {
     #[test]
     fn zero_is_accepted_as_an_estimate() {
         let mut form = filled();
-        form.values.estimate = "0".to_string();
+        form.values.estimate = TextEdit::new("0");
         assert_eq!(
             form.validate().unwrap().estimate.map(|e| e.minutes()),
             Some(0)
@@ -455,7 +480,7 @@ mod tests {
     #[test]
     fn decimal_estimates_are_accepted() {
         let mut form = filled();
-        form.values.estimate = "2.5".to_string();
+        form.values.estimate = TextEdit::new("2.5");
         assert_eq!(
             form.validate().unwrap().estimate.map(|e| e.minutes()),
             Some(150)
@@ -465,7 +490,7 @@ mod tests {
     #[test]
     fn text_is_rejected_as_an_estimate() {
         let mut form = filled();
-        form.values.estimate = "abc".to_string();
+        form.values.estimate = TextEdit::new("abc");
         assert!(form.validate().is_none());
         assert!(form.errors.estimate.is_some());
     }
@@ -473,7 +498,7 @@ mod tests {
     #[test]
     fn an_empty_estimate_means_none() {
         let mut form = filled();
-        form.values.estimate = String::new();
+        form.values.estimate = TextEdit::default();
         assert_eq!(form.validate().unwrap().estimate, None);
     }
 
@@ -482,14 +507,14 @@ mod tests {
         let mut form = filled();
         form.focus(Field::Estimate);
         form.type_text("-2a.5");
-        assert_eq!(form.values.estimate, "2.5");
+        assert_eq!(form.values.estimate.as_str(), "2.5");
     }
 
     #[test]
     fn a_due_date_before_the_start_is_a_warning_and_still_saves() {
         let mut form = filled();
-        form.values.start = "2026-10-18".to_string();
-        form.values.due = "2026-10-16".to_string();
+        form.values.start = TextEdit::new("2026-10-18");
+        form.values.due = TextEdit::new("2026-10-16");
         assert!(form.schedule_warning().is_some());
         let valid = form.validate().expect("the warning does not block saving");
         assert_eq!(valid.start, Some(DueDate::new(2026, 10, 18).unwrap()));
@@ -499,16 +524,16 @@ mod tests {
     #[test]
     fn no_warning_without_both_dates_or_when_the_order_is_right() {
         let mut form = filled();
-        form.values.start = "2026-10-16".to_string();
+        form.values.start = TextEdit::new("2026-10-16");
         assert!(form.schedule_warning().is_none(), "one date is not a range");
-        form.values.due = "2026-10-16".to_string();
+        form.values.due = TextEdit::new("2026-10-16");
         assert!(form.schedule_warning().is_none(), "a one-day task is fine");
     }
 
     #[test]
     fn a_bad_due_date_is_rejected() {
         let mut form = filled();
-        form.values.due = "2026-02-30".to_string();
+        form.values.due = TextEdit::new("2026-02-30");
         assert!(form.validate().is_none());
         assert!(form.errors.due.is_some());
     }
@@ -516,7 +541,7 @@ mod tests {
     #[test]
     fn a_tag_still_being_typed_is_saved_with_the_task() {
         let mut form = filled();
-        form.values.tag_draft = "Web".to_string();
+        form.values.tag_draft = TextEdit::new("Web");
         assert_eq!(form.validate().unwrap().tags, ["web"]);
     }
 
@@ -531,7 +556,7 @@ mod tests {
     #[test]
     fn undoing_an_edit_is_clean_again() {
         let mut form = filled();
-        form.values.title.push('x');
+        form.values.title.insert("x");
         assert!(form.is_dirty());
         form.backspace();
         assert!(!form.is_dirty());
@@ -561,7 +586,7 @@ mod tests {
         task.set_priority(Some(Priority::High));
         let form = TaskForm::edit(&task);
         assert_eq!(form.mode, Mode::Edit(task.id()));
-        assert_eq!(form.values.estimate, "1.5");
+        assert_eq!(form.values.estimate.as_str(), "1.5");
         assert!(!form.is_dirty());
     }
 

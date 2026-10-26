@@ -7,7 +7,7 @@
 use gpui::{prelude::*, *};
 use looji_domain::MemberColour;
 
-use crate::theme::Theme;
+use crate::{text_edit::TextEdit, theme::Theme};
 
 // ───────────────────────────── buttons ─────────────────────────────
 
@@ -149,17 +149,11 @@ pub fn field(label: &str, error: Option<&str>, body: impl IntoElement, theme: &T
     column
 }
 
-/// A single-line text box. The active one has a lighter outline and a caret. An empty one shows
-/// the placeholder.
-pub fn text_box(value: &str, placeholder: &str, active: bool, theme: &Theme) -> Div {
-    let text = if value.is_empty() && !active {
-        div()
-            .text_color(theme.palette.text_secondary)
-            .child(placeholder.to_string())
-    } else {
-        let caret = if active { "|" } else { "" };
-        div().child(format!("{value}{caret}"))
-    };
+/// An editable single-line box. It shows the draft's text, with the caret where it sits and any
+/// selection highlighted. An empty one shows the placeholder while it isn't being edited.
+pub fn edit_box(edit: &TextEdit, placeholder: &str, active: bool, theme: &Theme) -> Div {
+    let body = edit_text(edit, placeholder, active, theme);
+
     div()
         .flex()
         .items_center()
@@ -174,7 +168,126 @@ pub fn text_box(value: &str, placeholder: &str, active: bool, theme: &Theme) -> 
         })
         .bg(theme.palette.surface)
         .text_size(theme.typography.body)
-        .child(text)
+        .child(body)
+}
+
+/// The text of an editable line: the caret where it sits, or the selection, or the placeholder.
+fn edit_text(edit: &TextEdit, placeholder: &str, active: bool, theme: &Theme) -> Div {
+    if edit.is_empty() && !active {
+        div()
+            .text_color(theme.palette.text_secondary)
+            .child(placeholder.to_string())
+    } else {
+        let text = edit.as_str();
+        let line = div().flex().flex_row().items_center().min_w_0().truncate();
+        match edit.selection() {
+            Some(range) => line
+                .child(text[..range.start].to_string())
+                .child(
+                    div()
+                        .bg(theme.palette.accent.opacity(0.35))
+                        .child(text[range.clone()].to_string()),
+                )
+                .child(text[range.end..].to_string()),
+            None => {
+                let caret = edit.caret();
+                let line = line.child(text[..caret].to_string());
+                let line = if active {
+                    line.child(caret_mark(theme))
+                } else {
+                    line
+                };
+                line.child(text[caret..].to_string())
+            }
+        }
+    }
+}
+
+/// An editable box of several lines, such as a plan's goal. The caret and any selection show where
+/// they sit, across the lines.
+pub fn edit_lines(
+    edit: &TextEdit,
+    placeholder: &str,
+    active: bool,
+    min_height: f32,
+    theme: &Theme,
+) -> Div {
+    let body = if edit.is_empty() && !active {
+        div()
+            .text_color(theme.palette.text_secondary)
+            .child(placeholder.to_string())
+    } else {
+        let mut lines = div().flex().flex_col();
+        let mut start = 0;
+        for line in edit.as_str().split('\n') {
+            let end = start + line.len();
+            lines = lines.child(edit_row(edit, start, end, active, theme));
+            start = end + 1;
+        }
+        lines
+    };
+    div()
+        .h_full()
+        .min_h(px(min_height))
+        .w_full()
+        .px(theme.spacing.sm)
+        .py(theme.spacing.sm)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border_control)
+        .bg(theme.palette.surface_raised)
+        .text_size(theme.typography.body)
+        .child(body)
+}
+
+/// One line of a multi-line edit: the bytes from `start` to `end`, split where the caret and the
+/// selection change, so each piece can be drawn as selected or not.
+fn edit_row(edit: &TextEdit, start: usize, end: usize, active: bool, theme: &Theme) -> Div {
+    let text = edit.as_str();
+    let caret = edit.caret();
+    let caret_here = active && (start..=end).contains(&caret);
+    let selection = edit.selection();
+
+    let mut cuts = vec![start, end];
+    if caret_here {
+        cuts.push(caret);
+    }
+    if let Some(range) = &selection {
+        cuts.push(range.start.clamp(start, end));
+        cuts.push(range.end.clamp(start, end));
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .min_h(px(18.))
+        .min_w_0();
+    for pair in cuts.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        if caret_here && caret == from {
+            row = row.child(caret_mark(theme));
+        }
+        let selected = selection
+            .as_ref()
+            .is_some_and(|range| from >= range.start && to <= range.end);
+        let piece = text[from..to].to_string();
+        row = row.child(if selected {
+            div().bg(theme.palette.accent.opacity(0.35)).child(piece)
+        } else {
+            div().child(piece)
+        });
+    }
+    if caret_here && caret == end {
+        row = row.child(caret_mark(theme));
+    }
+    row
+}
+/// The caret: a thin upright bar in the text colour.
+fn caret_mark(theme: &Theme) -> Div {
+    div().w(px(1.)).h(px(16.)).bg(theme.palette.text_primary)
 }
 
 /// A Tabler icon from the set compiled into the app, by name such as "search". It is drawn in the
@@ -228,15 +341,8 @@ pub fn pill(id: impl Into<ElementId>, label: &str, active: bool, theme: &Theme) 
 
 /// A search field: a filled box with a search icon. It shows an accent edge only while it has the
 /// keyboard, so the focus is visible without an outline on every field.
-pub fn search_field(value: &str, placeholder: &str, active: bool, theme: &Theme) -> Div {
-    let text = if value.is_empty() && !active {
-        div()
-            .text_color(theme.palette.text_secondary)
-            .child(placeholder.to_string())
-    } else {
-        let caret = if active { "|" } else { "" };
-        div().child(format!("{value}{caret}"))
-    };
+pub fn search_field(value: &TextEdit, placeholder: &str, active: bool, theme: &Theme) -> Div {
+    let text = edit_text(value, placeholder, active, theme);
     div()
         .flex()
         .flex_row()

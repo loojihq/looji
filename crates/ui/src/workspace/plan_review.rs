@@ -11,12 +11,11 @@ use looji_domain::{
     Status, TeamMember, TeamMemberId, Timestamp, display_labels, parse_estimate_hours,
 };
 
-use super::fields::text_box;
 use super::plan_refine;
 use super::plan_wizard::PlanWizardDialog;
 use super::task_dialog::button;
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components::edit_box, text_edit::TextEdit, theme::Theme};
 
 /// What an open edit changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +38,7 @@ impl Target {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Editor {
     pub target: Target,
-    pub text: String,
+    pub text: TextEdit,
     /// Why the text was refused, when it was.
     pub error: Option<String>,
 }
@@ -88,7 +87,7 @@ fn hours_text(minutes: u32) -> String {
 
 /// The edit an open editor stands for, or the reason its text can't be used.
 fn edit_for(editor: &Editor) -> Result<PlanEdit, String> {
-    let text = editor.text.clone();
+    let text = editor.text.as_str().to_string();
     Ok(match editor.target {
         Target::Spec => PlanEdit::SetSpec(text),
         Target::StoryTitle(index) => PlanEdit::SetStoryTitle { index, title: text },
@@ -160,7 +159,7 @@ impl WorkspaceView {
         let text = current_text(draft, &target);
         dialog.editor = Some(Editor {
             target,
-            text,
+            text: TextEdit::new(text),
             error: None,
         });
         cx.notify();
@@ -417,21 +416,12 @@ impl WorkspaceView {
             "enter" => {
                 self.commit_plan_edit(cx);
             }
-            "backspace" => {
-                if let Some(open) = self.plan_wizard.as_mut().and_then(|d| d.editor.as_mut()) {
-                    open.text.pop();
-                    open.error = None;
-                }
-                cx.notify();
-            }
             _ => {
-                let typed = if modifiers.control || modifiers.alt || modifiers.platform {
-                    None
-                } else {
-                    typed_text(&event.keystroke)
-                };
-                if let Some(text) = typed {
-                    self.append_to_plan_editor(text, cx);
+                if let Some(open) = self.plan_wizard.as_mut().and_then(|d| d.editor.as_mut())
+                    && open.text.handle_key(&event.keystroke)
+                {
+                    open.error = None;
+                    cx.notify();
                 }
             }
         }
@@ -439,7 +429,7 @@ impl WorkspaceView {
 
     fn append_to_plan_editor(&mut self, text: &str, cx: &mut Context<Self>) {
         if let Some(open) = self.plan_wizard.as_mut().and_then(|d| d.editor.as_mut()) {
-            open.text.push_str(text);
+            open.text.insert(text);
             open.error = None;
         }
         cx.notify();
@@ -468,7 +458,7 @@ fn editable(
             }
             lines.child("|").into_any_element()
         } else {
-            text_box(&editor.text, placeholder, true, theme).into_any_element()
+            edit_box(&editor.text, placeholder, true, theme).into_any_element()
         };
         return div()
             .flex()

@@ -14,11 +14,10 @@ use looji_domain::{
 };
 use looji_persistence::{repo_folder::check_repo_folder, wsl::start_distro};
 
-use super::fields::text_box;
 use super::task_dialog::button;
 use super::team_dialog::error_text;
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components::edit_box, text_edit::TextEdit, theme::Theme};
 
 /// What the dialog shows for the project's folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +41,7 @@ pub(super) struct Source {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RepoDialog {
     pub project: ProjectId,
-    pub draft: String,
+    pub draft: TextEdit,
     pub error: Option<String>,
     /// The WSL distribution the last attempt found stopped, so the dialog can offer to start it.
     pub stopped: Option<String>,
@@ -52,7 +51,7 @@ impl RepoDialog {
     fn new(project: ProjectId) -> Self {
         Self {
             project,
-            draft: String::new(),
+            draft: TextEdit::default(),
             error: None,
             stopped: None,
         }
@@ -210,7 +209,7 @@ impl WorkspaceView {
             shown: Shown::Checking,
         });
         if let Some(dialog) = self.repo_dialog.as_mut() {
-            dialog.draft = path.clone();
+            dialog.draft = TextEdit::new(path.clone());
             dialog.error = None;
             dialog.stopped = None;
         }
@@ -356,29 +355,21 @@ impl WorkspaceView {
 
     /// Keys while the dialog is open. Enter connects what's typed, and Escape closes the dialog.
     pub(super) fn repo_dialog_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         match event.keystroke.key.as_str() {
             "escape" => self.close_repo_dialog(cx),
             "enter" => {
-                if let Some(draft) = self.repo_dialog.as_ref().map(|dialog| dialog.draft.clone()) {
+                if let Some(draft) = self
+                    .repo_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.draft.as_str().to_string())
+                {
                     self.connect_folder(draft, cx);
                 }
             }
-            "backspace" => {
-                if let Some(dialog) = self.repo_dialog.as_mut() {
-                    dialog.draft.pop();
-                    dialog.error = None;
-                    cx.notify();
-                }
-            }
             _ => {
-                if modifier {
-                    return;
-                }
-                if let Some(text) = typed_text(&event.keystroke)
-                    && let Some(dialog) = self.repo_dialog.as_mut()
+                if let Some(dialog) = self.repo_dialog.as_mut()
+                    && dialog.draft.handle_key(&event.keystroke)
                 {
-                    dialog.draft.push_str(text);
                     dialog.error = None;
                     cx.notify();
                 }
@@ -475,7 +466,7 @@ pub(super) fn panel(
                         .id("repo-path-field")
                         .flex_1()
                         .min_w_0()
-                        .child(text_box(
+                        .child(edit_box(
                             &dialog.draft,
                             "Folder path, then press Enter",
                             true,
@@ -485,8 +476,10 @@ pub(super) fn panel(
                 .child(
                     button("repo-connect", "Connect", true, theme).on_click(cx.listener(
                         |this, _: &ClickEvent, _, cx| {
-                            if let Some(draft) =
-                                this.repo_dialog.as_ref().map(|dialog| dialog.draft.clone())
+                            if let Some(draft) = this
+                                .repo_dialog
+                                .as_ref()
+                                .map(|dialog| dialog.draft.as_str().to_string())
                             {
                                 this.connect_folder(draft, cx);
                             }

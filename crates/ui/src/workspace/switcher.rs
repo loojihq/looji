@@ -207,16 +207,12 @@ pub(super) fn rename_field(rename: &Rename, theme: &Theme) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(theme.spacing.xs)
-        .child(
-            div()
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.md)
-                .bg(theme.palette.surface_selected)
-                .border_1()
-                .border_color(theme.palette.border)
-                .child(format!("{}|", rename.draft)),
-        )
+        .child(crate::components::edit_box(
+            &rename.draft,
+            "Name",
+            true,
+            theme,
+        ))
         .when_some(rename.error.as_ref(), |row, message| {
             row.child(
                 div()

@@ -10,9 +10,9 @@ use looji_domain::{
 use super::{
     WorkspaceView, board, board_search, filter_bar, list_view,
     project_state::{ProjectList, load_board},
-    roadmap, store, typed_text, workload_view,
+    roadmap, store, workload_view,
 };
-use crate::theme::Theme;
+use crate::{text_edit::TextEdit, theme::Theme};
 
 const NAME_TAKEN_MESSAGE: &str = "A project with that name already exists in this workspace.";
 
@@ -27,14 +27,14 @@ pub(super) enum Field {
 /// The create-project dialog's state. `None` on the view means it's closed.
 #[derive(Debug, Clone, Default)]
 pub(super) struct ProjectDialog {
-    pub name: String,
-    pub description: String,
+    pub name: TextEdit,
+    pub description: TextEdit,
     pub field: Field,
     pub error: Option<String>,
 }
 
 impl ProjectDialog {
-    fn active_text(&mut self) -> &mut String {
+    fn active_text(&mut self) -> &mut TextEdit {
         match self.field {
             Field::Name => &mut self.name,
             Field::Description => &mut self.description,
@@ -176,22 +176,10 @@ impl WorkspaceView {
                 }
                 cx.notify();
             }
-            "backspace" => {
-                if let Some(dialog) = self.project_dialog.as_mut() {
-                    dialog.active_text().pop();
-                    dialog.error = None;
-                }
-                cx.notify();
-            }
             _ => {
-                let modifiers = event.keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform {
-                    return;
-                }
-                if let (Some(dialog), Some(text)) =
-                    (self.project_dialog.as_mut(), typed_text(&event.keystroke))
+                if let Some(dialog) = self.project_dialog.as_mut()
+                    && dialog.active_text().handle_key(&event.keystroke)
                 {
-                    dialog.active_text().push_str(text);
                     dialog.error = None;
                     cx.notify();
                 }
@@ -516,14 +504,13 @@ pub(super) fn dialog(
 
 fn field(
     label: &'static str,
-    text: &str,
+    text: &TextEdit,
     active: bool,
     counter: Option<String>,
     which: Field,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let caret = if active { "|" } else { "" };
     div()
         .flex()
         .flex_col()
@@ -541,17 +528,7 @@ fn field(
         .child(
             div()
                 .id(label)
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.sm)
-                .border_1()
-                .border_color(if active {
-                    theme.palette.text_secondary
-                } else {
-                    theme.palette.border_control
-                })
-                .bg(theme.palette.surface)
-                .child(format!("{text}{caret}"))
+                .child(crate::components::edit_box(text, "", active, theme))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.focus_project_field(which, cx)
                 })),

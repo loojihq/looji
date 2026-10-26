@@ -12,11 +12,11 @@ use looji_domain::{
 };
 
 use super::card::tooltip;
-use super::fields::{chip, field, member_mark, text_box};
+use super::fields::{chip, field, member_mark};
 use super::members;
 use super::task_form::{Field, Mode, TaskForm, Validated};
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components::edit_box, theme::Theme};
 
 /// An open dialog. `status` is the column a new task goes into.
 pub(super) struct TaskDialog {
@@ -129,13 +129,10 @@ impl WorkspaceView {
                 }
                 dialog.assignee_open = false;
             }
-            "backspace" => form.backspace(),
             "left" if form.active == Field::Priority => form.step_priority(false),
             "right" if form.active == Field::Priority => form.step_priority(true),
             _ => {
-                if !modifier && let Some(text) = typed_text(&event.keystroke) {
-                    form.type_text(text);
-                }
+                form.edit_key(&event.keystroke);
             }
         }
         cx.notify();
@@ -336,13 +333,13 @@ pub(super) fn panel(
     // editor's window shows every field, stacked in one column.
     let wide = matches!(form.mode, Mode::Create);
 
-    let title_box = text_box(
+    let title_box = edit_box(
         &values.title,
         "What needs doing?",
         active == Field::Title,
         theme,
     );
-    let estimate_box = text_box(
+    let estimate_box = edit_box(
         &values.estimate,
         "e.g. 2.5",
         active == Field::Estimate,
@@ -483,7 +480,7 @@ pub(super) fn panel(
             )
             .child(notes)
     } else {
-        let description_box = text_box(
+        let description_box = edit_box(
             &values.description,
             "Optional",
             active == Field::Description,
@@ -493,7 +490,7 @@ pub(super) fn panel(
         for tag in &values.tags {
             chips = chips.child(chip(tag, theme));
         }
-        let tag_draft = text_box(
+        let tag_draft = edit_box(
             &values.tag_draft,
             "Type a tag, then comma or Enter",
             active == Field::Tags,

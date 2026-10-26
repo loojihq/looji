@@ -22,8 +22,8 @@ use looji_domain::{
 };
 use looji_persistence::{SqliteStore, repo_index::IndexError};
 
-use super::{WorkspaceView, fields::text_box, store, task_dialog::button, typed_text};
-use crate::{database::AppDatabase, theme::Theme};
+use super::{WorkspaceView, store, task_dialog::button};
+use crate::{components::edit_box, database::AppDatabase, text_edit::TextEdit, theme::Theme};
 
 /// How often the reader checks the stream for new text.
 const TICK: Duration = Duration::from_millis(60);
@@ -50,7 +50,7 @@ pub(super) struct ChatDialog {
     pub status: String,
     pub thread: Option<ChatThreadId>,
     pub messages: Vec<ChatMessage>,
-    pub draft: String,
+    pub draft: TextEdit,
     pub model: String,
     /// Shown when the saved model was removed and the default was used instead.
     pub model_notice: Option<String>,
@@ -122,7 +122,7 @@ impl WorkspaceView {
             status,
             thread,
             messages,
-            draft: String::new(),
+            draft: TextEdit::default(),
             model: choice.model,
             model_notice: choice.notice,
             model_menu: false,
@@ -480,7 +480,6 @@ impl WorkspaceView {
 
     /// Keys while the chat is open. Enter sends, and Escape closes the model menu first, then the chat.
     pub(super) fn chat_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         match event.keystroke.key.as_str() {
             "escape" => {
                 if self
@@ -497,20 +496,10 @@ impl WorkspaceView {
                 }
             }
             "enter" => self.send_chat_message(cx),
-            "backspace" => {
-                if let Some(dialog) = self.chat_dialog.as_mut() {
-                    dialog.draft.pop();
-                    cx.notify();
-                }
-            }
             _ => {
-                if modifier {
-                    return;
-                }
-                if let Some(text) = typed_text(&event.keystroke)
-                    && let Some(dialog) = self.chat_dialog.as_mut()
+                if let Some(dialog) = self.chat_dialog.as_mut()
+                    && dialog.draft.handle_key(&event.keystroke)
                 {
-                    dialog.draft.push_str(text);
                     cx.notify();
                 }
             }
@@ -659,7 +648,7 @@ pub(super) fn panel(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(text_box(&dialog.draft, "Message", true, theme)),
+                .child(edit_box(&dialog.draft, "Message", true, theme)),
         )
         .child(if busy {
             button("chat-stop", "Stop", false, theme)

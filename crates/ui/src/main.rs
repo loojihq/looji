@@ -5,6 +5,7 @@ mod assets;
 mod components;
 mod database;
 mod settings;
+mod text_edit;
 mod theme;
 mod title_bar;
 mod window_move;

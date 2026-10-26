@@ -4,10 +4,10 @@
 use gpui::{prelude::*, *};
 use looji_domain::{ProjectId, TaskId};
 
+use super::WorkspaceView;
 use super::list_view::ViewMode;
 use super::task_form::Mode;
-use super::{WorkspaceView, typed_text};
-use crate::{components, theme::Theme};
+use crate::{components, text_edit::TextEdit, theme::Theme};
 
 /// How many tasks the palette lists at most, so a large board doesn't bury the actions.
 const MAX_TASKS: usize = 8;
@@ -15,7 +15,7 @@ const MAX_TASKS: usize = 8;
 /// What the palette is showing: the query typed so far, and which row the keys are on.
 #[derive(Debug, Clone, Default)]
 pub struct PaletteState {
-    query: String,
+    query: TextEdit,
     selected: usize,
 }
 
@@ -158,21 +158,12 @@ impl WorkspaceView {
                     ..state
                 });
             }
-            "backspace" => {
-                let mut query = state.query;
-                query.pop();
-                self.palette = Some(PaletteState { query, selected: 0 });
-            }
             _ => {
-                let modifiers = event.keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform {
+                let mut query = state.query;
+                if !query.handle_key(&event.keystroke) {
                     return;
                 }
-                if let Some(text) = typed_text(&event.keystroke) {
-                    let mut query = state.query;
-                    query.push_str(text);
-                    self.palette = Some(PaletteState { query, selected: 0 });
-                }
+                self.palette = Some(PaletteState { query, selected: 0 });
             }
         }
         cx.notify();
@@ -249,13 +240,12 @@ pub(super) fn overlay(
         );
     }
 
-    let query_text = if state.query.is_empty() {
-        div()
-            .text_color(theme.palette.text_secondary)
-            .child("Search tasks, projects, and actions")
-    } else {
-        div().child(format!("{}|", state.query))
-    };
+    let query_text = crate::components::edit_box(
+        &state.query,
+        "Search tasks, projects, and actions",
+        true,
+        theme,
+    );
     let input = div()
         .flex()
         .flex_row()

@@ -70,6 +70,7 @@ pub use state::WorkspaceList;
 use crate::{
     APP_NAME,
     database::AppDatabase,
+    text_edit::TextEdit,
     theme::{ActiveTheme, Theme},
     title_bar::{SidebarHead, TitleBar},
 };
@@ -83,7 +84,7 @@ const NAME_TAKEN_MESSAGE: &str = "That name is already taken.";
 #[derive(Debug, Clone)]
 struct Rename {
     id: WorkspaceId,
-    draft: String,
+    draft: TextEdit,
     error: Option<String>,
 }
 
@@ -142,7 +143,7 @@ pub struct WorkspaceView {
     card_editing: Option<TaskId>,
     /// The board search: what is typed, the query the board filters by, and whether the field has
     /// the keyboard.
-    search_draft: String,
+    search_draft: TextEdit,
     search_query: String,
     search_focused: bool,
     search_debounce: search::Debounce,
@@ -228,7 +229,7 @@ impl WorkspaceView {
                     panel: None,
                     tag_edit: None,
                     card_editing: None,
-                    search_draft: String::new(),
+                    search_draft: TextEdit::default(),
                     search_query: String::new(),
                     search_focused: false,
                     search_debounce: search::Debounce::default(),
@@ -331,7 +332,7 @@ impl WorkspaceView {
         };
         self.rename = Some(Rename {
             id,
-            draft: workspace.name().to_string(),
+            draft: TextEdit::new(workspace.name()),
             error: None,
         });
         self.focus_handle.focus(window);
@@ -546,18 +547,8 @@ impl WorkspaceView {
         match keystroke.key.as_str() {
             "enter" => self.commit_rename(cx),
             "escape" => self.cancel_rename(cx),
-            "backspace" => {
-                rename.draft.pop();
-                rename.error = None;
-                cx.notify();
-            }
             _ => {
-                let modifiers = keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform {
-                    return;
-                }
-                if let Some(text) = typed_text(keystroke) {
-                    rename.draft.push_str(text);
+                if rename.draft.handle_key(keystroke) {
                     rename.error = None;
                     cx.notify();
                 }
