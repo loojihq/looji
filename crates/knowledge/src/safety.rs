@@ -198,9 +198,7 @@ pub fn redact(text: &str) -> Option<(String, bool)> {
 
 /// A line without its comment marker, so a key pasted into a comment is still seen as one.
 fn without_comment(line: &str) -> &str {
-    line.trim()
-        .trim_start_matches(['/', '#', '*', ';'])
-        .trim()
+    line.trim().trim_start_matches(['/', '#', '*', ';']).trim()
 }
 
 /// Whether the text holds a private key: a `BEGIN ... PRIVATE KEY` line followed by the key's own base64 body. Source
