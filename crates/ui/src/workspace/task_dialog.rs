@@ -87,7 +87,7 @@ impl WorkspaceView {
                 super::dialog_window::open(cx, main, super::dialog_window::Kind::Task)
             });
         }
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -112,6 +112,10 @@ impl WorkspaceView {
             "escape" if dialog.assignee_open => dialog.assignee_open = false,
             "escape" => return self.request_task_dialog_close(cx),
             "enter" if modifier => return self.save_task_dialog(cx),
+            // Enter in a one-line field saves, so a task is quick to add: type the title and press Enter.
+            "enter" if matches!(form.active, Field::Title | Field::Estimate) => {
+                return self.save_task_dialog(cx);
+            }
             "enter" => {
                 if form.active == Field::Tags {
                     form.commit_tag();

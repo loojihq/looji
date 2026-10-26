@@ -70,7 +70,7 @@ impl WorkspaceView {
             super::dialog_window::open(cx, main, super::dialog_window::Kind::Repository)
         });
         self.refresh_code_source(cx);
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

@@ -183,7 +183,7 @@ impl WorkspaceView {
         });
         let main = cx.entity();
         cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Plan));
-        self.plan_focus[0].focus(window);
+        self.plan_focus[0].focus(window, cx);
         cx.notify();
     }
 
@@ -191,7 +191,7 @@ impl WorkspaceView {
     fn close_plan_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_plan_generation(cx);
         self.plan_wizard = None;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -528,9 +528,9 @@ impl WorkspaceView {
         }
     }
 
-    fn focus_plan_control(&self, control: Control, window: &mut Window) {
+    fn focus_plan_control(&self, control: Control, window: &mut Window, cx: &mut App) {
         if let Some(index) = CONTROLS.iter().position(|candidate| *candidate == control) {
-            self.plan_focus[index].focus(window);
+            self.plan_focus[index].focus(window, cx);
         }
     }
 
@@ -576,7 +576,7 @@ impl WorkspaceView {
                 } else {
                     (current + 1) % count
                 };
-                self.plan_focus[next].focus(window);
+                self.plan_focus[next].focus(window, cx);
                 return cx.notify();
             }
             _ => {}
@@ -716,7 +716,7 @@ pub(super) fn panel(
         .h_full()
         .track_focus(&focus[0])
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-            this.focus_plan_control(Control::Goal, window);
+            this.focus_plan_control(Control::Goal, window, cx);
             cx.notify();
         }))
         .child(components::edit_lines(

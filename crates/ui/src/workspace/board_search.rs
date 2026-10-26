@@ -25,7 +25,7 @@ impl WorkspaceView {
     /// Puts the keyboard in the search field. Keys go to the field until it loses focus.
     pub(super) fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_focused = true;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -44,7 +44,7 @@ impl WorkspaceView {
         self.search_debounce.touch();
         self.set_search_query(String::new(), cx);
         self.search_focused = false;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

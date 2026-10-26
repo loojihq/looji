@@ -84,6 +84,12 @@ impl WorkspaceView {
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.save_project_view(cx);
+        self.enter_project(id, cx);
+    }
+
+    /// Opens a project's board: its filter, list settings, and view load, and the workspace screen closes.
+    /// The view of the project being left is saved before this is called.
+    fn enter_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.reset_search();
         self.reset_list_position();
         // Choosing a project leaves any workspace screen for its board.
@@ -110,7 +116,7 @@ impl WorkspaceView {
         self.cancel_rename(cx);
         self.project_dialog = Some(ProjectDialog::default());
         self.open_screen(super::screen::Screen::Workspace, cx);
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -147,9 +153,12 @@ impl WorkspaceView {
 
         match ProjectRepository::save(store(cx), &project) {
             Ok(()) => {
+                // The project being left keeps its view, then the new project's board opens.
+                self.save_project_view(cx);
+                let id = project.id();
                 self.projects.add_and_select(project);
                 self.project_dialog = None;
-                self.reload_board(cx);
+                self.enter_project(id, cx);
             }
             Err(RepoError::NameTaken) => self.reject_project(NAME_TAKEN_MESSAGE.into(), cx),
             Err(err) => self.reject_project(format!("Could not create the project: {err}"), cx),

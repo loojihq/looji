@@ -16,6 +16,7 @@ looji-domain.workspace = true
 looji-persistence.workspace = true
 looji-ai.workspace = true
 gpui.workspace = true
+gpui_platform.workspace = true
 unicode-segmentation = "1.13.3"
 uuid = "1.28.0"
 pulldown-cmark = "0.13.4"
@@ -23,7 +24,6 @@ looji-report = { version = "0.0.1", path = "../report" }
 looji-updates = { version = "0.0.1", path = "../updates" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-raw-window-handle = "0.6"
 windows = { version = "0.61.3", features = [
     "Wdk_System_SystemServices",
     "Win32_System_SystemInformation",

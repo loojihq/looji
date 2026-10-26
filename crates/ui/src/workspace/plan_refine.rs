@@ -171,7 +171,7 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         let Some(dialog) = self.plan_wizard.as_mut() else {
             return;
         };

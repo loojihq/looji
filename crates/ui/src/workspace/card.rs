@@ -382,7 +382,7 @@ impl Element for TitleText {
                 );
                 window.paint_quad(fill(area, self.highlight));
             }
-            let _ = line.paint(origin, *line_height, window, cx);
+            let _ = line.paint(origin, *line_height, TextAlign::Left, None, window, cx);
         }
     }
 }

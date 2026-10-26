@@ -135,7 +135,7 @@ pub struct WorkspaceView {
     /// The planning drafts of the selected project, while their list is open.
     plan_drafts: Option<plan_drafts::PlanDraftsDialog>,
     plan_focus: Vec<FocusHandle>,
-    /// The task detail panel beside the board, while a task is open in it.
+    /// The task open in its own window, while there is one.
     panel: Option<panel::PanelState>,
     /// The tag being typed for a task, while the tag input has the keyboard.
     tag_edit: Option<task_edit::TagEdit>,
@@ -270,7 +270,7 @@ impl WorkspaceView {
             });
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
             let focus = view.read(cx).focus_handle.clone();
-            focus.focus(window);
+            focus.focus(window, cx);
             // The active project's view is saved when the app quits, after the last window has gone.
             let weak = view.downgrade();
             let quit = cx.on_app_quit(move |cx| {
@@ -337,7 +337,7 @@ impl WorkspaceView {
             draft: TextEdit::new(workspace.name()),
             error: None,
         });
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -404,9 +404,7 @@ impl WorkspaceView {
             let Some(source) = paths.into_iter().next() else {
                 return;
             };
-            let Ok(icons_dir) = cx.update(|cx| cx.global::<AppDatabase>().icons_dir.clone()) else {
-                return;
-            };
+            let icons_dir = cx.update(|cx| cx.global::<AppDatabase>().icons_dir.clone());
             let imported = cx
                 .background_executor()
                 .spawn(async move { import_icon(&source, &icons_dir, id) })
@@ -525,9 +523,9 @@ impl WorkspaceView {
         }
         if event.keystroke.key == "tab" && !modal {
             if event.keystroke.modifiers.shift {
-                window.focus_prev();
+                window.focus_prev(cx);
             } else {
-                window.focus_next();
+                window.focus_next(cx);
             }
             cx.notify();
             return;
@@ -656,7 +654,7 @@ impl Render for WorkspaceView {
                             .child(SidebarHead::new(APP_NAME, sidebar::SIDEBAR_WIDTH))
                             .child(sidebar::render(self, cx)),
                     )
-                    .child(main_pane(header, body, panel::render(self, &theme, cx))),
+                    .child(main_pane(header, body)),
             )
             .children(palette::overlay(self, &theme, cx))
             .children(updates::notice(self, &theme, cx))
@@ -749,10 +747,14 @@ fn project_header(
                                 .mt(px(2.))
                                 .text_size(theme.typography.body)
                                 .text_color(theme.palette.text_secondary)
-                                .child(format!(
-                                    "{total} {} · {open} open",
-                                    if total == 1 { "task" } else { "tasks" }
-                                )),
+                                .child(if total > 0 && open == 0 {
+                                    format!("All {total} done · project complete")
+                                } else {
+                                    format!(
+                                        "{total} {} · {open} open",
+                                        if total == 1 { "task" } else { "tasks" }
+                                    )
+                                }),
                         ),
                 )
                 .child(
@@ -845,7 +847,7 @@ fn progress(done: usize, total: usize, theme: &Theme) -> impl IntoElement {
         )
 }
 
-fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> impl IntoElement {
+fn main_pane(header: AnyElement, body: AnyElement) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -863,23 +865,17 @@ fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> 
                 .child(header),
         )
         .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_1()
-                .min_h_0()
-                .child(
-                    // A flex column, so the board inside it fills the height and its columns scroll. Without it the board
-                    // takes the height of all its cards and runs off the bottom of the window.
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .child(body),
-                )
-                .children(side),
+            div().flex().flex_row().flex_1().min_h_0().child(
+                // A flex column, so the board inside it fills the height and its columns scroll. Without it the board
+                // takes the height of all its cards and runs off the bottom of the window.
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(body),
+            ),
         )
 }
 

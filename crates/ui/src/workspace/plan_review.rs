@@ -132,7 +132,7 @@ impl WorkspaceView {
     ) {
         // The text box is drawn in this dialog, so the keyboard goes to the workspace rather than to a control
         // that may no longer be on screen.
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         if self.reject_if_published(cx) {
             return;
         }

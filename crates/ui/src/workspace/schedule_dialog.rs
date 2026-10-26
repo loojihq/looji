@@ -218,14 +218,14 @@ impl WorkspaceView {
         ));
         // The form shows under Working hours on the Preferences screen.
         self.open_preferences(cx);
-        self.schedule_focus[0].focus(window);
+        self.schedule_focus[0].focus(window, cx);
         cx.notify();
     }
 
     /// Closes the dialog and gives the keyboard back to the workspace. Discards the draft.
     fn close_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.schedule_dialog = None;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -258,9 +258,9 @@ impl WorkspaceView {
             .map(|(control, _)| *control)
     }
 
-    fn focus_schedule_control(&self, control: Control, window: &mut Window) {
+    fn focus_schedule_control(&self, control: Control, window: &mut Window, cx: &mut App) {
         if let Some(index) = CONTROLS.iter().position(|candidate| *candidate == control) {
-            self.schedule_focus[index].focus(window);
+            self.schedule_focus[index].focus(window, cx);
         }
     }
 
@@ -282,7 +282,7 @@ impl WorkspaceView {
         } else {
             (current + 1) % count
         };
-        self.schedule_focus[next].focus(window);
+        self.schedule_focus[next].focus(window, cx);
         cx.notify();
     }
 
@@ -290,7 +290,7 @@ impl WorkspaceView {
         if let Some(dialog) = self.schedule_dialog.as_mut() {
             dialog.toggle_day(day);
         }
-        self.focus_schedule_control(Control::Day(day), window);
+        self.focus_schedule_control(Control::Day(day), window, cx);
         cx.notify();
     }
 
@@ -486,7 +486,7 @@ fn time_box(
             .track_focus(handle)
             .child(edit_box(value, "HH:MM", focused, theme))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.focus_schedule_control(control, window);
+                this.focus_schedule_control(control, window, cx);
                 cx.notify();
             })),
         theme,

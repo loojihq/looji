@@ -387,7 +387,7 @@ impl WorkspaceView {
     /// so it has nothing to scroll.
     fn edge_velocity_for(&self, status: Status, pointer: DragPoint) -> f32 {
         let handle = self.drag.scroll_handle(status);
-        if f32::from(handle.max_offset().height) <= 0.0 {
+        if f32::from(handle.max_offset().y) <= 0.0 {
             return 0.0;
         }
         let body = handle.bounds();
@@ -403,7 +403,7 @@ impl WorkspaceView {
     /// once, and the landing is worked out again from the moved positions.
     fn scroll_column(&mut self, status: Status, delta: f32, cx: &mut Context<Self>) {
         let handle = self.drag.scroll_handle(status);
-        let max = f32::from(handle.max_offset().height);
+        let max = f32::from(handle.max_offset().y);
         let scroll = -f32::from(handle.offset().y);
         let next = advance(scroll, max, delta);
         let applied = next - scroll;

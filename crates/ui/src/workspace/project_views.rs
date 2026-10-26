@@ -123,8 +123,8 @@ impl WorkspaceView {
                 // The maximum is only known once the content has been laid out, which is why this waits for
                 // the next frame. Clamping keeps a position from pointing past content that has shrunk.
                 let max = handle.max_offset();
-                let x = saved.x.min(f32::from(max.width)).max(0.);
-                let y = saved.y.min(f32::from(max.height)).max(0.);
+                let x = saved.x.min(f32::from(max.x)).max(0.);
+                let y = saved.y.min(f32::from(max.y)).max(0.);
                 handle.set_offset(point(px(-x), px(-y)));
             }
         });

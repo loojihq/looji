@@ -108,6 +108,7 @@ impl Theme {
                     offset: point(px(0.), px(tokens::shadow::OFFSET_Y)),
                     blur_radius: px(tokens::shadow::BLUR),
                     spread_radius: px(0.),
+                    inset: false,
                 }],
             },
         }

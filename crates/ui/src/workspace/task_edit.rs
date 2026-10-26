@@ -138,7 +138,7 @@ impl WorkspaceView {
         }
         self.blur_tag_editor(cx);
         self.tag_edit = Some(TagEdit::new(task));
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

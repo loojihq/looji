@@ -117,6 +117,7 @@ impl WorkspaceView {
                 Vec::new()
             }
         };
+        let already_open = self.panel.is_some();
         self.panel = Some(PanelState {
             task,
             history,
@@ -124,14 +125,19 @@ impl WorkspaceView {
             error: None,
             notice: None,
         });
+        // The task opens in its own window. One that is already open follows the new task.
+        if !already_open {
+            let main = cx.entity();
+            cx.defer(move |cx| {
+                super::dialog_window::open(cx, main, super::dialog_window::Kind::TaskDetail)
+            });
+        }
         cx.notify();
     }
 
-    /// Closes the panel and puts focus back on the task's card, so the keyboard lands where it was.
-    pub(super) fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.panel.take() {
-            self.drag.focus_handle(panel.task, cx).focus(window);
-        }
+    /// Closes the task window. It closes itself once the panel is gone, and the board keeps its focus.
+    pub(super) fn close_panel(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = None;
         cx.notify();
     }
 
@@ -173,7 +179,7 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn panel_task(&self) -> Option<&Task> {
+    pub(super) fn panel_task(&self) -> Option<&Task> {
         let panel = self.panel.as_ref()?;
         self.board.iter().find(|task| task.id() == panel.task)
     }
@@ -371,32 +377,9 @@ pub(super) fn render(
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
-        .w(px(300.))
-        .flex_shrink_0()
-        .h_full()
-        .min_h_0()
+        .w_full()
         .px(theme.spacing.lg)
         .py(theme.spacing.md)
-        .border_l_1()
-        .border_color(theme.palette.border)
-        .bg(theme.palette.surface_raised)
-        .overflow_y_scroll()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .justify_between()
-                .items_center()
-                .text_color(theme.palette.text_secondary)
-                .child(div().text_size(theme.typography.caption).child("Task"))
-                .child(
-                    crate::components::icon_button("panel-close", "x", theme).on_click(
-                        cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.close_panel(window, cx)
-                        }),
-                    ),
-                ),
-        )
         .child(field(
             "Title",
             panel.error.as_deref(),

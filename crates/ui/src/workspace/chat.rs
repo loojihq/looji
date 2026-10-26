@@ -140,7 +140,7 @@ impl WorkspaceView {
         self.chat_scroll.scroll_to_bottom();
         let main = cx.entity();
         cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Chat));
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

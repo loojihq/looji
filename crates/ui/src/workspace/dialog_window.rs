@@ -21,6 +21,7 @@ pub(super) enum Kind {
     Repository,
     Drafts,
     Task,
+    TaskDetail,
     Chat,
     Plan,
     Preferences,
@@ -36,6 +37,10 @@ impl Kind {
                 Some(Mode::Edit(_)) => "Edit task".to_string(),
                 _ => "New task".to_string(),
             },
+            Kind::TaskDetail => view
+                .panel_task()
+                .map(|task| task.title().to_string())
+                .unwrap_or_else(|| "Task".to_string()),
             Kind::Preferences => "Preferences".to_string(),
             Kind::Plan => "Generate with AI".to_string(),
             Kind::Chat => match view.chat_dialog.as_ref() {
@@ -52,6 +57,7 @@ impl Kind {
             Kind::Repository => size(px(492.), px(420.)),
             Kind::Drafts => size(px(560.), px(460.)),
             Kind::Task => size(px(552.), px(520.)),
+            Kind::TaskDetail => size(px(560.), px(720.)),
             Kind::Chat => size(px(680.), px(640.)),
             Kind::Preferences => size(px(720.), px(680.)),
             Kind::Plan => size(px(1040.), px(800.)),
@@ -69,6 +75,7 @@ impl Kind {
             Kind::Repository => view.repo_dialog.is_some(),
             Kind::Drafts => view.plan_drafts.is_some(),
             Kind::Task => view.task_dialog.is_some(),
+            Kind::TaskDetail => view.panel.is_some(),
             Kind::Chat => view.chat_dialog.is_some(),
             Kind::Preferences => view.preferences_open,
             Kind::Plan => view.plan_wizard.is_some(),
@@ -81,6 +88,7 @@ impl Kind {
             Kind::Repository => view.repo_dialog = None,
             Kind::Drafts => view.plan_drafts = None,
             Kind::Task => view.task_dialog = None,
+            Kind::TaskDetail => view.panel = None,
             Kind::Chat => view.chat_dialog = None,
             Kind::Preferences => view.preferences_open = false,
             Kind::Plan => view.plan_wizard = None,
@@ -98,6 +106,11 @@ impl Kind {
             Kind::Repository => view.close_repo_dialog(cx),
             Kind::Drafts => view.close_plan_drafts(cx),
             Kind::Task => view.request_task_dialog_close(cx),
+            Kind::TaskDetail => {
+                // The window closes itself once the panel is gone, so the card's focus stays put.
+                view.panel = None;
+                cx.notify();
+            }
             Kind::Chat => view.close_chat(cx),
             Kind::Preferences => view.close_preferences(cx),
             Kind::Plan => view.request_plan_close(window, cx),
@@ -116,6 +129,7 @@ impl Kind {
             Kind::Repository => repo_dialog::panel(view, theme, cx),
             Kind::Drafts => plan_drafts::panel(view, theme, cx),
             Kind::Task => task_dialog::panel(view, theme, cx),
+            Kind::TaskDetail => super::panel::render(view, theme, cx),
             Kind::Chat => chat::panel(view, theme, window, cx),
             Kind::Plan => plan_wizard::panel(view, theme, window, cx),
             Kind::Preferences => Some(preferences_panel::render(view, theme, window, cx)),
@@ -134,12 +148,25 @@ pub(super) struct DialogWindow {
 /// deferred from the main window's update, so the new window doesn't read the main window while it is busy.
 pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
     let title = kind.title(main.read(cx));
+    // A dialog sits centred over the window that opened it, and that window waits until it closes.
+    let size = kind.size();
+    let bounds = match cx
+        .active_window()
+        .and_then(|parent| parent.update(cx, |_, window, _| window.bounds()).ok())
+    {
+        Some(parent) => Bounds {
+            origin: point(
+                parent.origin.x + (parent.size.width - size.width) / 2.,
+                parent.origin.y + (parent.size.height - size.height) / 2.,
+            ),
+            size,
+        },
+        None => Bounds::centered(None, size, cx),
+    };
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            kind.size(),
-            cx,
-        ))),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        kind: WindowKind::Dialog,
+        is_minimizable: false,
         titlebar: Some(TitlebarOptions {
             title: Some(title.clone().into()),
             // Hides the system's title bar. The window draws its own header.
@@ -170,6 +197,13 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
                 });
             })
             .detach();
+            // A dialog that had another dialog open over it takes the keyboard back when that one closes.
+            cx.observe_window_activation(window, |this: &mut DialogWindow, window, cx| {
+                if window.is_window_active() {
+                    window.focus(&this.focus, cx);
+                }
+            })
+            .detach();
             DialogWindow {
                 main,
                 kind,
@@ -177,7 +211,7 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
             }
         });
         let focus = view.read(cx).focus.clone();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         view
     });
     if opened.is_err() {

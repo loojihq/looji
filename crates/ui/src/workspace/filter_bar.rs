@@ -197,7 +197,7 @@ impl WorkspaceView {
             }
             "escape" => {
                 self.filter_menu = None;
-                self.filter_focus[menu.facet.index()].focus(window);
+                self.filter_focus[menu.facet.index()].focus(window, cx);
             }
             "tab" => {
                 self.filter_menu = None;

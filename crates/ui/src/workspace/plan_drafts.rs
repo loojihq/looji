@@ -130,7 +130,7 @@ impl WorkspaceView {
             return;
         };
         if state == DraftState::Ready {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
             dialog.wizard = looji_domain::PlanWizard::finished(looji_domain::DueDate::today_utc());
             dialog.draft = Some(draft);
             cx.notify();

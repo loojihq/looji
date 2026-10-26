@@ -11,7 +11,7 @@ mod title_bar;
 mod window_move;
 mod workspace;
 
-use gpui::{App, Application};
+use gpui::App;
 use looji_persistence::{self as persistence, SqliteStore};
 
 use database::AppDatabase;
@@ -63,7 +63,7 @@ fn main() {
         )),
     };
 
-    Application::new()
+    gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             theme::init(cx, preferences.theme.into());
@@ -103,7 +103,7 @@ fn wait_for_previous_version() {
 
 /// Windows already exits when the last window closes; macOS and Linux don't.
 fn quit_when_last_window_closes(cx: &mut App) {
-    cx.on_window_closed(|cx| {
+    cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
             cx.quit();
         }
