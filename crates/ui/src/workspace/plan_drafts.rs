@@ -227,7 +227,13 @@ fn row(
         DraftState::Interrupted | DraftState::Failed => Some(("Resume", true)),
         DraftState::Generating => None,
     };
-    let mut actions = div().flex().flex_row().gap(theme.spacing.sm).justify_end();
+    // The actions wrap, so Delete stays inside the window when a narrow one can't fit the row.
+    let mut actions = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(theme.spacing.sm)
+        .justify_end();
     if let Some((label, _)) = primary {
         actions = actions.child(
             button(
@@ -358,7 +364,7 @@ pub(super) fn panel(
             .flex()
             .flex_col()
             .gap(theme.spacing.md)
-            .w(px(640.))
+            .w_full()
             .p(theme.spacing.lg)
             .rounded(theme.radius.lg)
             .bg(theme.palette.surface_raised)
