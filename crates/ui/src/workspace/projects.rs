@@ -88,6 +88,8 @@ impl WorkspaceView {
         self.reset_list_position();
         // Choosing a project leaves any workspace screen for its board.
         self.screen = None;
+        // The open task belongs to the board being left, so its panel closes without a notice.
+        self.panel = None;
         self.projects.select(id);
         self.load_project_filter(cx);
         self.load_list_settings(cx);

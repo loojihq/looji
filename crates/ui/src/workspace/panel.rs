@@ -305,7 +305,7 @@ pub(super) fn render(
             .into_any_element(),
     };
 
-    let mut statuses = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
+    let mut statuses = div().flex().flex_row().flex_wrap().gap(px(4.));
     let visible = view
         .projects
         .active()
@@ -314,6 +314,7 @@ pub(super) fn render(
     for status in visible {
         statuses = statuses.child(
             segment(task.status() == status, theme)
+                .px(theme.spacing.xs)
                 .id(("panel-status", status as u64))
                 .child(status_label(status))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -428,7 +429,20 @@ pub(super) fn render(
         ))
         .child(prop_row(
             "Assignee",
-            assignee_row(task.assignee_id(), &members::entries(&view.members), theme),
+            // The assignee is chosen in the edit dialog, so the row opens it.
+            div()
+                .id("panel-assignee-edit")
+                .cursor_pointer()
+                .child(assignee_row(
+                    task.assignee_id(),
+                    &members::entries(&view.members),
+                    theme,
+                ))
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    if let Some(id) = this.panel.as_ref().map(|panel| panel.task) {
+                        this.open_task_dialog(super::task_form::Mode::Edit(id), window, cx);
+                    }
+                })),
             theme,
         ))
         .child(prop_row("Estimate", div().child(estimate), theme))

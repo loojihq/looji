@@ -296,6 +296,8 @@ impl WorkspaceView {
                 self.list.set_active(id);
                 // A screen belongs to the workspace it was opened in.
                 self.screen = None;
+                // The open task belongs to the workspace being left, so its panel closes without a notice.
+                self.panel = None;
                 // The previous workspace's project must not stay selected.
                 self.reload_projects(cx);
             }
