@@ -546,7 +546,7 @@ fn field(
                 .rounded(theme.radius.sm)
                 .border_1()
                 .border_color(if active {
-                    theme.palette.accent
+                    theme.palette.text_secondary
                 } else {
                     theme.palette.border_control
                 })

@@ -149,7 +149,7 @@ pub fn field(label: &str, error: Option<&str>, body: impl IntoElement, theme: &T
     column
 }
 
-/// A single-line text box. The active one has an accent outline and a caret. An empty one shows
+/// A single-line text box. The active one has a lighter outline and a caret. An empty one shows
 /// the placeholder.
 pub fn text_box(value: &str, placeholder: &str, active: bool, theme: &Theme) -> Div {
     let text = if value.is_empty() && !active {
@@ -168,7 +168,7 @@ pub fn text_box(value: &str, placeholder: &str, active: bool, theme: &Theme) -> 
         .rounded(theme.radius.md)
         .border_1()
         .border_color(if active {
-            theme.palette.accent
+            theme.palette.text_secondary
         } else {
             theme.palette.border_control
         })
