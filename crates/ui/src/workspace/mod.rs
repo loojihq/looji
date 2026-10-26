@@ -32,6 +32,7 @@ mod plan_review;
 mod plan_wizard;
 mod preferences_panel;
 mod profile;
+mod project_settings;
 mod project_state;
 mod project_views;
 mod projects;
@@ -132,6 +133,8 @@ pub struct WorkspaceView {
     schedule_focus: Vec<FocusHandle>,
     /// The planning wizard, while it's open, and one focus handle for each of its controls.
     plan_wizard: Option<plan_wizard::PlanWizardDialog>,
+    /// Whether the project settings dialog is open.
+    project_settings_open: bool,
     /// Whether the unfinished plan on the project page is asking to be discarded.
     plan_discard: bool,
     plan_focus: Vec<FocusHandle>,
@@ -220,6 +223,7 @@ impl WorkspaceView {
                     schedule_dialog: None,
                     plan_wizard: None,
                     plan_discard: false,
+                    project_settings_open: false,
                     plan_focus: (0..plan_wizard::CONTROLS.len())
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
@@ -500,6 +504,9 @@ impl WorkspaceView {
         if self.chat_dialog.is_some() {
             return self.chat_key(event, cx);
         }
+        if self.project_settings_open && event.keystroke.key == "escape" {
+            return self.request_project_settings_close(window, cx);
+        }
         if self.plan_discard && event.keystroke.key == "escape" {
             self.plan_discard = false;
             return cx.notify();
@@ -616,7 +623,7 @@ impl Render for WorkspaceView {
             self.schedule_scroll_restore(window);
         }
         let theme = cx.theme().clone();
-        let header = project_header(self, &theme, window, cx);
+        let header = project_header(self, &theme, cx);
         let body = match self.screen {
             Some(screen) => screen::render(self, screen, &theme, cx),
             None => projects::content(self, &theme, cx),
@@ -689,7 +696,6 @@ impl Render for WorkspaceView {
 fn project_header(
     view: &WorkspaceView,
     theme: &Theme,
-    window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     // A workspace screen has its own title, and no project tabs or actions.
@@ -821,15 +827,13 @@ fn project_header(
                 .flex_row()
                 .items_center()
                 .gap(theme.spacing.sm)
-                .child(schedule_dialog::open_button(theme, cx))
-                .child(repo_dialog::open_button(theme, cx)),
+                .child(project_settings::button(theme, cx)),
         );
 
-    // Drafts, the repository, and working hours open here under the views, not in windows.
+    // The unfinished plan opens here under the views.
     let inline: Vec<AnyElement> = [
         plan_drafts::card(view, theme, cx),
         repo_dialog::panel(view, theme, cx),
-        schedule_dialog::panel(view, theme, window, cx),
     ]
     .into_iter()
     .flatten()

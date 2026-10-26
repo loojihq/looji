@@ -11,7 +11,7 @@
 use gpui::{prelude::*, *};
 use looji_domain::{
     DraftIssue, DueDate, LocalMoment, PREVIEW_COUNT, ProjectId, SAMPLE_ESTIMATE_HOURS,
-    ScheduleDraft, TIME_FORMAT_MESSAGE, Timestamp, WorkingSchedule, format_time, parse_time,
+    ScheduleDraft, TIME_FORMAT_MESSAGE, WorkingSchedule, format_time, parse_time,
     preview_due_dates, weekday,
 };
 use looji_persistence::ScheduleSaveError;
@@ -191,36 +191,7 @@ impl ScheduleDialog {
     }
 }
 
-/// The text the Hours button shows.
-pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button_icon(
-        "schedule-open",
-        "clock",
-        "Hours",
-        crate::components::Variant::Secondary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_schedule_dialog(window, cx)))
-}
-
 impl WorkspaceView {
-    /// Opens the dialog for the selected project, with its stored hours in the draft. Nothing opens when no
-    /// project is selected.
-    pub(super) fn open_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active() else {
-            return;
-        };
-        let anchor = LocalMoment::from_timestamp_utc(Timestamp::now());
-        self.schedule_dialog = Some(ScheduleDialog::open(
-            project.id(),
-            project.working_schedule(),
-            anchor,
-        ));
-        // The form opens inline in the project header.
-        self.schedule_focus[0].focus(window, cx);
-        cx.notify();
-    }
-
     /// Closes the dialog and gives the keyboard back to the workspace. Discards the draft.
     fn close_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.schedule_dialog = None;

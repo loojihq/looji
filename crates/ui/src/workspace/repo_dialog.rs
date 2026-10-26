@@ -48,7 +48,7 @@ pub(super) struct RepoDialog {
 }
 
 impl RepoDialog {
-    fn new(project: ProjectId) -> Self {
+    pub(super) fn new(project: ProjectId) -> Self {
         Self {
             project,
             draft: TextEdit::default(),
@@ -59,17 +59,6 @@ impl RepoDialog {
 }
 
 impl WorkspaceView {
-    /// Opens the dialog for the selected project and checks its folder again, so the badge reflects the disk now.
-    pub(super) fn open_repo_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active_id() else {
-            return;
-        };
-        self.repo_dialog = Some(RepoDialog::new(project));
-        self.refresh_code_source(cx);
-        self.focus_handle.focus(window, cx);
-        cx.notify();
-    }
-
     pub(super) fn close_repo_dialog(&mut self, cx: &mut Context<Self>) {
         self.repo_dialog = None;
         cx.notify();
@@ -372,18 +361,6 @@ impl WorkspaceView {
             }
         }
     }
-}
-
-/// The repository button in the header. It's drawn only while a project is selected.
-pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button_icon(
-        "repo-open",
-        "git-branch",
-        "Repository",
-        crate::components::Variant::Secondary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_repo_dialog(window, cx)))
 }
 
 /// The repository dialog, drawn over the window. Nothing is drawn when it isn't open.

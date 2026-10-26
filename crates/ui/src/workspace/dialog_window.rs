@@ -20,6 +20,7 @@ pub(super) enum Kind {
     TaskDetail,
     Chat,
     Plan,
+    ProjectSettings,
     Preferences,
 }
 
@@ -36,6 +37,10 @@ impl Kind {
                 .map(|task| task.title().to_string())
                 .unwrap_or_else(|| "Task".to_string()),
             Kind::Preferences => "Preferences".to_string(),
+            Kind::ProjectSettings => match view.projects.active() {
+                Some(project) => format!("{} settings", project.name()),
+                None => "Project settings".to_string(),
+            },
             Kind::Plan => "Generate with AI".to_string(),
             Kind::Chat => match view.chat_dialog.as_ref() {
                 Some(dialog) => format!("Chat: {}", dialog.title),
@@ -52,6 +57,7 @@ impl Kind {
             Kind::TaskDetail => size(px(560.), px(720.)),
             Kind::Chat => size(px(680.), px(640.)),
             Kind::Preferences => size(px(720.), px(680.)),
+            Kind::ProjectSettings => size(px(680.), px(720.)),
             Kind::Plan => size(px(1040.), px(800.)),
         }
     }
@@ -68,6 +74,7 @@ impl Kind {
             Kind::TaskDetail => view.panel.is_some(),
             Kind::Chat => view.chat_dialog.is_some(),
             Kind::Preferences => view.preferences_open,
+            Kind::ProjectSettings => view.project_settings_open,
             Kind::Plan => view.plan_wizard.is_some(),
         }
     }
@@ -79,6 +86,11 @@ impl Kind {
             Kind::TaskDetail => view.panel = None,
             Kind::Chat => view.chat_dialog = None,
             Kind::Preferences => view.preferences_open = false,
+            Kind::ProjectSettings => {
+                view.project_settings_open = false;
+                view.schedule_dialog = None;
+                view.repo_dialog = None;
+            }
             Kind::Plan => view.plan_wizard = None,
         }
     }
@@ -99,6 +111,7 @@ impl Kind {
             }
             Kind::Chat => view.close_chat(cx),
             Kind::Preferences => view.close_preferences(cx),
+            Kind::ProjectSettings => view.request_project_settings_close(window, cx),
             Kind::Plan => view.request_plan_close(window, cx),
         }
     }
@@ -117,6 +130,7 @@ impl Kind {
             Kind::Chat => chat::panel(view, theme, window, cx),
             Kind::Plan => plan_wizard::panel(view, theme, window, cx),
             Kind::Preferences => Some(preferences_panel::render(view, theme, window, cx)),
+            Kind::ProjectSettings => super::project_settings::panel(view, theme, window, cx),
         }
     }
 }
