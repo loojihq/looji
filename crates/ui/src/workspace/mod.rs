@@ -1,5 +1,6 @@
 //! The main window: a title bar over a sidebar of workspaces and projects, and the main pane.
 
+mod ai_settings;
 mod autoscroll;
 mod avatar;
 mod board;
@@ -22,6 +23,7 @@ mod layout;
 mod list_view;
 mod markdown;
 mod markdown_view;
+mod media;
 mod members;
 mod moves;
 mod palette;
@@ -32,6 +34,7 @@ mod plan_review;
 mod plan_wizard;
 mod preferences_panel;
 mod profile;
+mod project_settings;
 mod project_state;
 mod project_views;
 mod projects;
@@ -41,6 +44,7 @@ mod roadmap_layout;
 mod schedule_dialog;
 mod screen;
 mod search;
+mod setting_menu;
 mod sidebar;
 mod state;
 mod switcher;
@@ -49,6 +53,7 @@ mod task_edit;
 mod task_editors;
 mod task_form;
 mod team_dialog;
+mod time_settings;
 mod tour;
 mod updates;
 mod workload_view;
@@ -70,6 +75,7 @@ pub use state::WorkspaceList;
 use crate::{
     APP_NAME,
     database::AppDatabase,
+    text_edit::TextEdit,
     theme::{ActiveTheme, Theme},
     title_bar::{SidebarHead, TitleBar},
 };
@@ -83,7 +89,7 @@ const NAME_TAKEN_MESSAGE: &str = "That name is already taken.";
 #[derive(Debug, Clone)]
 struct Rename {
     id: WorkspaceId,
-    draft: String,
+    draft: TextEdit,
     error: Option<String>,
 }
 
@@ -131,18 +137,23 @@ pub struct WorkspaceView {
     schedule_focus: Vec<FocusHandle>,
     /// The planning wizard, while it's open, and one focus handle for each of its controls.
     plan_wizard: Option<plan_wizard::PlanWizardDialog>,
-    /// The planning drafts of the selected project, while their list is open.
-    plan_drafts: Option<plan_drafts::PlanDraftsDialog>,
+    /// Whether the project settings dialog is open, and which of its sections is showing.
+    project_settings_open: bool,
+    settings_section: project_settings::Section,
+    /// Whether the unfinished plan on the project page is asking to be discarded.
+    plan_discard: bool,
     plan_focus: Vec<FocusHandle>,
-    /// The task detail panel beside the board, while a task is open in it.
+    /// The task open in its own window, while there is one.
     panel: Option<panel::PanelState>,
     /// The tag being typed for a task, while the tag input has the keyboard.
     tag_edit: Option<task_edit::TagEdit>,
     /// The card whose priority and tag editor is open.
-    card_editing: Option<TaskId>,
+    /// The card whose details are open, if one is. Its media is loaded alongside it.
+    expanded_card: Option<TaskId>,
+    expanded_media: Vec<looji_domain::Attachment>,
     /// The board search: what is typed, the query the board filters by, and whether the field has
     /// the keyboard.
-    search_draft: String,
+    search_draft: TextEdit,
     search_query: String,
     search_focused: bool,
     search_debounce: search::Debounce,
@@ -172,6 +183,10 @@ pub struct WorkspaceView {
     /// The board filter of the selected project, and the facet menu that is open, if any.
     filter: TaskFilter,
     filter_menu: Option<filter_bar::FilterMenu>,
+    /// The AI or time dropdown that is open in Preferences or project settings, if one is.
+    setting_menu: Option<setting_menu::OpenMenu>,
+    /// Where the task dialog's description area is scrolled to.
+    description_scroll: gpui::ScrollHandle,
     /// Whether the Columns menu is open on the project header.
     board_columns_open: bool,
     /// The calendar open under a date field, in the task form or the planning window.
@@ -191,7 +206,7 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn open_window(cx: &mut App, list: WorkspaceList) -> Result<WindowHandle<Self>> {
-        cx.open_window(window_options(cx), |window, cx| {
+        let opened = cx.open_window(window_options(cx), |window, cx| {
             let view = cx.new(|cx| {
                 let mut view = Self {
                     focus_handle: cx.focus_handle(),
@@ -218,7 +233,9 @@ impl WorkspaceView {
                     code_check_seq: 0,
                     schedule_dialog: None,
                     plan_wizard: None,
-                    plan_drafts: None,
+                    plan_discard: false,
+                    project_settings_open: false,
+                    settings_section: project_settings::Section::default(),
                     plan_focus: (0..plan_wizard::CONTROLS.len())
                         .map(|_| cx.focus_handle().tab_stop(true))
                         .collect(),
@@ -227,8 +244,9 @@ impl WorkspaceView {
                         .collect(),
                     panel: None,
                     tag_edit: None,
-                    card_editing: None,
-                    search_draft: String::new(),
+                    expanded_card: None,
+                    expanded_media: Vec::new(),
+                    search_draft: TextEdit::default(),
                     search_query: String::new(),
                     search_focused: false,
                     search_debounce: search::Debounce::default(),
@@ -250,6 +268,8 @@ impl WorkspaceView {
                     quit_subscription: None,
                     filter: TaskFilter::default(),
                     filter_menu: None,
+                    setting_menu: None,
+                    description_scroll: gpui::ScrollHandle::new(),
                     board_columns_open: false,
                     open_calendar: None,
                     preferences_open: false,
@@ -267,9 +287,17 @@ impl WorkspaceView {
                 view.start_tour_if_new(cx);
                 view
             });
+            // The app follows the system's light or dark setting, and changes when it does.
+            let mode = crate::theme::mode_for(window.appearance());
+            crate::theme::set_mode(mode, cx);
+            window
+                .observe_window_appearance(|window, cx| {
+                    crate::theme::set_mode(crate::theme::mode_for(window.appearance()), cx)
+                })
+                .detach();
             // Focus starts on the workspace, so keys reach it, including Tab for the board.
             let focus = view.read(cx).focus_handle.clone();
-            focus.focus(window);
+            focus.focus(window, cx);
             // The active project's view is saved when the app quits, after the last window has gone.
             let weak = view.downgrade();
             let quit = cx.on_app_quit(move |cx| {
@@ -278,7 +306,12 @@ impl WorkspaceView {
             });
             view.update(cx, |view, _| view.quit_subscription = Some(quit));
             view
-        })
+        });
+        // The window has drawn once by now. Showing it puts the finished frame on screen.
+        if let Ok(handle) = &opened {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+        opened
     }
 
     /// Clicking a workspace ends any rename in progress, so it acts as the "blur" for the editor.
@@ -295,6 +328,8 @@ impl WorkspaceView {
                 self.list.set_active(id);
                 // A screen belongs to the workspace it was opened in.
                 self.screen = None;
+                // The open task belongs to the workspace being left, so its panel closes without a notice.
+                self.panel = None;
                 // The previous workspace's project must not stay selected.
                 self.reload_projects(cx);
             }
@@ -331,10 +366,15 @@ impl WorkspaceView {
         };
         self.rename = Some(Rename {
             id,
-            draft: workspace.name().to_string(),
+            draft: {
+                // The whole name is selected, so typing replaces it.
+                let mut draft = TextEdit::new(workspace.name());
+                draft.select_all();
+                draft
+            },
             error: None,
         });
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -401,9 +441,7 @@ impl WorkspaceView {
             let Some(source) = paths.into_iter().next() else {
                 return;
             };
-            let Ok(icons_dir) = cx.update(|cx| cx.global::<AppDatabase>().icons_dir.clone()) else {
-                return;
-            };
+            let icons_dir = cx.update(|cx| cx.global::<AppDatabase>().icons_dir.clone());
             let imported = cx
                 .background_executor()
                 .spawn(async move { import_icon(&source, &icons_dir, id) })
@@ -442,17 +480,6 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Switches between light and dark mode. Every window re-renders with the new palette.
-    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        let next = cx.theme().mode.toggled();
-        // Save first, so the screen never shows a theme that wasn't stored.
-        match crate::settings::update(cx, looji_domain::Preference::Theme(next.into())) {
-            Ok(()) => crate::theme::set_mode(next, cx),
-            Err(err) => self.status = Some(format!("Could not save the theme: {err}")),
-        }
-        cx.notify();
-    }
-
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // The tour is on top of everything, so it takes the keys first.
         if self.tour.is_some() {
@@ -460,6 +487,10 @@ impl WorkspaceView {
         }
         if self.workspace_menu && event.keystroke.key == "escape" {
             return self.close_workspace_menu(cx);
+        }
+        // A workspace name being typed takes the keys first, so no other focus can swallow them.
+        if self.rename.is_some() {
+            return self.rename_key(event, cx);
         }
         // The palette takes every key while it's open, so typing doesn't reach the board.
         if self.palette.is_some() {
@@ -488,8 +519,15 @@ impl WorkspaceView {
         if self.chat_dialog.is_some() {
             return self.chat_key(event, cx);
         }
-        if self.plan_drafts.is_some() && event.keystroke.key == "escape" {
-            return self.close_plan_drafts(cx);
+        if self.project_settings_open && event.keystroke.key == "escape" {
+            return self.request_project_settings_close(window, cx);
+        }
+        if self.plan_discard && event.keystroke.key == "escape" {
+            self.plan_discard = false;
+            return cx.notify();
+        }
+        if self.preferences_open && event.keystroke.key == "escape" {
+            return self.close_preferences(cx);
         }
         if self.plan_wizard.is_some() {
             return self.plan_wizard_key(event, window, cx);
@@ -522,9 +560,9 @@ impl WorkspaceView {
         }
         if event.keystroke.key == "tab" && !modal {
             if event.keystroke.modifiers.shift {
-                window.focus_prev();
+                window.focus_prev(cx);
             } else {
-                window.focus_next();
+                window.focus_next(cx);
             }
             cx.notify();
             return;
@@ -537,27 +575,19 @@ impl WorkspaceView {
             if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
                 self.cancel_delete(cx);
             }
-            return;
         }
+    }
+
+    /// Keys while a workspace name is being edited. Enter saves and Escape cancels; the rest edit the name.
+    fn rename_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let Some(rename) = self.rename.as_mut() else {
             return;
         };
-        let keystroke = &event.keystroke;
-        match keystroke.key.as_str() {
+        match event.keystroke.key.as_str() {
             "enter" => self.commit_rename(cx),
             "escape" => self.cancel_rename(cx),
-            "backspace" => {
-                rename.draft.pop();
-                rename.error = None;
-                cx.notify();
-            }
             _ => {
-                let modifiers = keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform {
-                    return;
-                }
-                if let Some(text) = typed_text(keystroke) {
-                    rename.draft.push_str(text);
+                if rename.draft.handle_key(&event.keystroke) {
                     rename.error = None;
                     cx.notify();
                 }
@@ -595,6 +625,8 @@ fn window_options(cx: &App) -> WindowOptions {
         }),
         app_id: Some(APP_NAME.to_lowercase()),
         window_min_size: Some(MIN_WINDOW_SIZE),
+        // Created hidden and shown once its first frame is drawn, so the frame and borders never appear empty.
+        show: false,
         ..Default::default()
     }
 }
@@ -663,7 +695,7 @@ impl Render for WorkspaceView {
                             .child(SidebarHead::new(APP_NAME, sidebar::SIDEBAR_WIDTH))
                             .child(sidebar::render(self, cx)),
                     )
-                    .child(main_pane(header, body, panel::render(self, &theme, cx))),
+                    .child(main_pane(header, body)),
             )
             .children(palette::overlay(self, &theme, cx))
             .children(updates::notice(self, &theme, cx))
@@ -722,6 +754,16 @@ fn project_header(
         .count();
     let open = total - done;
 
+    // Once the columns have scrolled, the header folds into one row, so the cards get the height. The inline
+    // new-task form lives in the full header, so the full header stays while it's open.
+    if view.drag.columns_scrolled()
+        && view.task_dialog.is_none()
+        && view.repo_dialog.is_none()
+        && view.schedule_dialog.is_none()
+    {
+        return compact_header(view, project.name(), total, open, theme, cx);
+    }
+
     // The card: the project's name and counts, the actions, and how far through its tasks it is.
     let card = div()
         .flex()
@@ -756,10 +798,14 @@ fn project_header(
                                 .mt(px(2.))
                                 .text_size(theme.typography.body)
                                 .text_color(theme.palette.text_secondary)
-                                .child(format!(
-                                    "{total} {} · {open} open",
-                                    if total == 1 { "task" } else { "tasks" }
-                                )),
+                                .child(if total > 0 && open == 0 {
+                                    format!("All {total} done · project complete")
+                                } else {
+                                    format!(
+                                        "{total} {} · {open} open",
+                                        if total == 1 { "task" } else { "tasks" }
+                                    )
+                                }),
                         ),
                 )
                 .child(
@@ -796,10 +842,16 @@ fn project_header(
                 .flex_row()
                 .items_center()
                 .gap(theme.spacing.sm)
-                .child(plan_drafts::open_button(theme, cx))
-                .child(schedule_dialog::open_button(theme, cx))
-                .child(repo_dialog::open_button(theme, cx)),
+                .child(chat::codebase_button(theme, cx))
+                .child(project_settings::button(theme, cx)),
         );
+
+    // The unfinished plan opens here under the views.
+    let inline: Vec<AnyElement> = [plan_drafts::card(view, theme, cx)]
+        .into_iter()
+        .flatten()
+        .map(|panel| inline_section(panel, theme).into_any_element())
+        .collect();
 
     div()
         .flex()
@@ -811,9 +863,61 @@ fn project_header(
         .child(crumb)
         .child(card)
         .child(views)
+        .children(inline)
         .into_any_element()
 }
 
+/// The project header folded into one row: its name and open count, the views, and New task.
+fn compact_header(
+    view: &WorkspaceView,
+    name: &str,
+    total: usize,
+    open: usize,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.md)
+        .flex_shrink_0()
+        .px(theme.spacing.lg)
+        .py(theme.spacing.sm)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .min_w_0()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .truncate()
+                        .child(name.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(format!("{open} open · {total} total")),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .flex_shrink_0()
+                .child(list_view::switch(view, theme, cx))
+                .child(board::new_task_button(view, theme, cx)),
+        )
+        .into_any_element()
+}
 /// How far through the project's tasks it is: a bar filled to the share of done tasks, with the count.
 fn progress(done: usize, total: usize, theme: &Theme) -> impl IntoElement {
     let fraction = if total == 0 {
@@ -852,7 +956,7 @@ fn progress(done: usize, total: usize, theme: &Theme) -> impl IntoElement {
         )
 }
 
-fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> impl IntoElement {
+fn main_pane(header: AnyElement, body: AnyElement) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -870,23 +974,17 @@ fn main_pane(header: AnyElement, body: AnyElement, side: Option<AnyElement>) -> 
                 .child(header),
         )
         .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_1()
-                .min_h_0()
-                .child(
-                    // A flex column, so the board inside it fills the height and its columns scroll. Without it the board
-                    // takes the height of all its cards and runs off the bottom of the window.
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .child(body),
-                )
-                .children(side),
+            div().flex().flex_row().flex_1().min_h_0().child(
+                // A flex column, so the board inside it fills the height and its columns scroll. Without it the board
+                // takes the height of all its cards and runs off the bottom of the window.
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(body),
+            ),
         )
 }
 

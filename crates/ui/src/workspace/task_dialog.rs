@@ -7,16 +7,16 @@
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DomainError, Position, Priority, RepoError, Status, Task, TaskEventKind, TaskRepository,
-    TeamMember, TeamMemberId, after, changed_fields,
+    Attachment, AttachmentRepository, DomainError, Position, Priority, RepoError, Status, Task,
+    TaskEventKind, TaskRepository, TeamMember, TeamMemberId, after, changed_fields,
 };
 
 use super::card::tooltip;
-use super::fields::{chip, field, member_mark, text_box};
+use super::fields::{chip, field, member_mark};
 use super::members;
 use super::task_form::{Field, Mode, TaskForm, Validated};
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components::edit_box, theme::Theme};
 
 /// An open dialog. `status` is the column a new task goes into.
 pub(super) struct TaskDialog {
@@ -28,6 +28,8 @@ pub(super) struct TaskDialog {
     /// The priority menu is open under its select.
     pub priority_open: bool,
     pub status: Status,
+    /// The media of the task being edited. It changes as files are added and removed.
+    pub media: Vec<Attachment>,
 }
 
 impl WorkspaceView {
@@ -74,12 +76,17 @@ impl WorkspaceView {
         let status = self.new_task_status();
         // Refresh the members on open, so the list is current even if the team changed since.
         self.reload_members(cx);
+        let media = match mode {
+            Mode::Edit(id) => store(cx).list_for_task(id).unwrap_or_default(),
+            Mode::Create => Vec::new(),
+        };
         self.task_dialog = Some(TaskDialog {
             form,
             confirming: false,
             assignee_open: false,
             priority_open: false,
             status,
+            media,
         });
         if !creating {
             let main = cx.entity();
@@ -87,7 +94,7 @@ impl WorkspaceView {
                 super::dialog_window::open(cx, main, super::dialog_window::Kind::Task)
             });
         }
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -107,11 +114,32 @@ impl WorkspaceView {
             return cx.notify();
         }
         let form = &mut dialog.form;
+        // Paste, copy and cut work in whichever text field has the keyboard.
+        if modifier && matches!(key, "v" | "c" | "x") {
+            if key == "v" {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    form.type_text(&text);
+                }
+            } else if let Some(text) = form.selected_text() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                if key == "x" {
+                    form.backspace();
+                }
+            }
+            self.follow_description_caret();
+            return cx.notify();
+        }
         match key {
             // Escape closes the assignee list first, so it doesn't take the whole dialog with it.
             "escape" if dialog.assignee_open => dialog.assignee_open = false,
             "escape" => return self.request_task_dialog_close(cx),
             "enter" if modifier => return self.save_task_dialog(cx),
+            // Enter in a one-line field saves, so a task is quick to add: type the title and press Enter.
+            "enter" if matches!(form.active, Field::Title | Field::Estimate) => {
+                return self.save_task_dialog(cx);
+            }
+            // Enter in the description starts a new line.
+            "enter" if form.active == Field::Description => form.type_text("\n"),
             "enter" => {
                 if form.active == Field::Tags {
                     form.commit_tag();
@@ -129,16 +157,25 @@ impl WorkspaceView {
                 }
                 dialog.assignee_open = false;
             }
-            "backspace" => form.backspace(),
             "left" if form.active == Field::Priority => form.step_priority(false),
             "right" if form.active == Field::Priority => form.step_priority(true),
             _ => {
-                if !modifier && let Some(text) = typed_text(&event.keystroke) {
-                    form.type_text(text);
-                }
+                form.edit_key(&event.keystroke);
             }
         }
+        self.follow_description_caret();
         cx.notify();
+    }
+
+    /// Scrolls the description area so the caret stays in view while typing, pasting, or moving through the text.
+    fn follow_description_caret(&self) {
+        if let Some(dialog) = self.task_dialog.as_ref()
+            && dialog.form.active == Field::Description
+        {
+            let edit = &dialog.form.values.description;
+            self.description_scroll
+                .scroll_to_item(crate::edit_area::caret_chunk(edit.as_str(), edit.caret()));
+        }
     }
 
     /// Closes the dialog, or asks first when there are edits that would be lost.
@@ -336,13 +373,13 @@ pub(super) fn panel(
     // editor's window shows every field, stacked in one column.
     let wide = matches!(form.mode, Mode::Create);
 
-    let title_box = text_box(
+    let title_box = edit_box(
         &values.title,
         "What needs doing?",
         active == Field::Title,
         theme,
     );
-    let estimate_box = text_box(
+    let estimate_box = edit_box(
         &values.estimate,
         "e.g. 2.5",
         active == Field::Estimate,
@@ -483,17 +520,19 @@ pub(super) fn panel(
             )
             .child(notes)
     } else {
-        let description_box = text_box(
+        let description_box = crate::edit_area::edit_area(
             &values.description,
             "Optional",
             active == Field::Description,
+            110.,
+            &view.description_scroll,
             theme,
         );
         let mut chips = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
         for tag in &values.tags {
             chips = chips.child(chip(tag, theme));
         }
-        let tag_draft = text_box(
+        let tag_draft = edit_box(
             &values.tag_draft,
             "Type a tag, then comma or Enter",
             active == Field::Tags,
@@ -505,12 +544,34 @@ pub(super) fn panel(
             .gap(theme.spacing.xs)
             .child(chips)
             .child(tag_draft);
-        let description = field(
-            "Description",
-            None,
-            focusable("field-description", Field::Description, description_box, cx),
-            theme,
-        );
+        let task_id = match form.mode {
+            Mode::Edit(id) => Some(id),
+            Mode::Create => None,
+        };
+        // The description, with its paperclip beside the label and its media right under the text.
+        let description = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .gap(theme.spacing.xs)
+            .child(match task_id {
+                Some(id) => super::media::description_label(id, theme, cx),
+                None => div()
+                    .text_size(theme.typography.caption)
+                    .text_color(theme.palette.text_secondary)
+                    .child("Description"),
+            })
+            .child(
+                focusable("field-description", Field::Description, description_box, cx)
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col(),
+            )
+            .children(
+                task_id.and_then(|id| super::media::tiles(id, &dialog.media, true, theme, cx)),
+            );
         let tags = field(
             "Tags",
             errors.tags.as_deref(),
@@ -520,6 +581,7 @@ pub(super) fn panel(
         div()
             .flex()
             .flex_col()
+            .h_full()
             .gap(theme.spacing.sm)
             .child(title)
             .child(
@@ -542,6 +604,7 @@ pub(super) fn panel(
             .child(description)
             .child(tags)
             .child(notes)
+            // The description takes the room that is left, so the buttons sit at the bottom of the window.
             .child(div().flex().flex_row().justify_end().child(footer))
     };
 
@@ -550,6 +613,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w_full()
+        .h_full()
         .p(theme.spacing.md)
         // A press on the form closes any open menu or calendar. Presses on a menu stay with it.
         .on_mouse_down(

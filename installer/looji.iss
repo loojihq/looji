@@ -28,6 +28,7 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+SetupIconFile=..\assets\branding\app-icon.ico
 UninstallDisplayIcon={app}\looji.exe
 
 [Tasks]

@@ -4,13 +4,15 @@
 mod assets;
 mod components;
 mod database;
+mod edit_area;
 mod settings;
+mod text_edit;
 mod theme;
 mod title_bar;
 mod window_move;
 mod workspace;
 
-use gpui::{App, Application};
+use gpui::App;
 use looji_persistence::{self as persistence, SqliteStore};
 
 use database::AppDatabase;
@@ -35,6 +37,7 @@ fn main() {
     };
     let database_path = persistence::database_path(&data_dir);
     let icons_dir = persistence::icons::icons_dir(&data_dir);
+    let attachments_dir = persistence::attachments::attachments_dir(&data_dir);
 
     // Opening creates the folder and an empty database on first run.
     let store = match SqliteStore::open(&database_path) {
@@ -62,15 +65,17 @@ fn main() {
         )),
     };
 
-    Application::new()
+    gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            theme::init(cx, preferences.theme.into());
+            // The window sets the mode from the system when it opens, so this only sets the starting value.
+            theme::init(cx, theme::Mode::Light);
             cx.set_global(settings::AppPreferences(preferences));
             cx.set_global(AppDatabase {
                 store,
                 database_path: database_path.clone(),
                 icons_dir: icons_dir.clone(),
+                attachments_dir: attachments_dir.clone(),
             });
             quit_when_last_window_closes(cx);
 
@@ -102,7 +107,7 @@ fn wait_for_previous_version() {
 
 /// Windows already exits when the last window closes; macOS and Linux don't.
 fn quit_when_last_window_closes(cx: &mut App) {
-    cx.on_window_closed(|cx| {
+    cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
             cx.quit();
         }

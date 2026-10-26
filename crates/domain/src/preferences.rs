@@ -6,7 +6,7 @@
 //! Only explicit choices are written. Defaults are never saved, so a changed default reaches
 //! everyone who hasn't chosen a value.
 
-use crate::{RepoResult, SettingsRepository};
+use crate::{Clock, RepoResult, SettingsRepository, UtcOffset};
 
 /// Stored keys.
 pub mod keys {
@@ -16,6 +16,8 @@ pub mod keys {
     pub const UPDATE_CHANNEL: &str = "update_channel";
     pub const NOTIFY_DUE_TODAY: &str = "notify_due_today";
     pub const NOTIFY_OVERDUE: &str = "notify_overdue";
+    pub const CLOCK: &str = "clock";
+    pub const UTC_OFFSET: &str = "utc_offset";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -111,6 +113,10 @@ pub struct Preferences {
     pub notify_due_today: bool,
     /// Whether the sidebar's Today entry counts tasks that are overdue.
     pub notify_overdue: bool,
+    /// How times are shown and typed.
+    pub clock: Clock,
+    /// The offset from UTC that times are shown in.
+    pub utc_offset: UtcOffset,
 }
 
 impl Default for Preferences {
@@ -123,6 +129,8 @@ impl Default for Preferences {
             // Both reminders start on, so a new install shows what's due without a setting.
             notify_due_today: true,
             notify_overdue: true,
+            clock: Clock::default(),
+            utc_offset: UtcOffset::UTC,
         }
     }
 }
@@ -146,6 +154,8 @@ pub enum Preference {
     SelectedModel(Option<String>),
     NotifyDueToday(bool),
     NotifyOverdue(bool),
+    Clock(Clock),
+    UtcOffset(UtcOffset),
 }
 
 impl Preferences {
@@ -158,6 +168,8 @@ impl Preferences {
             Preference::SelectedModel(model) => self.selected_model = model.clone(),
             Preference::NotifyDueToday(on) => self.notify_due_today = *on,
             Preference::NotifyOverdue(on) => self.notify_overdue = *on,
+            Preference::Clock(clock) => self.clock = *clock,
+            Preference::UtcOffset(offset) => self.utc_offset = *offset,
         }
     }
 }
@@ -171,6 +183,8 @@ pub fn load<S: SettingsRepository>(settings: &S) -> RepoResult<Preferences> {
     let model = settings.get_setting(keys::SELECTED_MODEL)?;
     let due_today = settings.get_setting(keys::NOTIFY_DUE_TODAY)?;
     let overdue = settings.get_setting(keys::NOTIFY_OVERDUE)?;
+    let clock = settings.get_setting(keys::CLOCK)?;
+    let offset = settings.get_setting(keys::UTC_OFFSET)?;
 
     Ok(Preferences {
         theme: theme.as_deref().and_then(Theme::parse).unwrap_or_default(),
@@ -187,6 +201,14 @@ pub fn load<S: SettingsRepository>(settings: &S) -> RepoResult<Preferences> {
             .filter(|id| !id.is_empty()),
         notify_due_today: parse_flag(due_today.as_deref()),
         notify_overdue: parse_flag(overdue.as_deref()),
+        clock: clock
+            .as_deref()
+            .and_then(Clock::from_stored)
+            .unwrap_or_default(),
+        utc_offset: offset
+            .as_deref()
+            .and_then(UtcOffset::from_stored)
+            .unwrap_or(UtcOffset::UTC),
     })
 }
 
@@ -204,6 +226,8 @@ pub fn save<S: SettingsRepository>(settings: &S, preference: &Preference) -> Rep
             settings.set_setting(keys::NOTIFY_DUE_TODAY, flag_text(*on))
         }
         Preference::NotifyOverdue(on) => settings.set_setting(keys::NOTIFY_OVERDUE, flag_text(*on)),
+        Preference::Clock(clock) => settings.set_setting(keys::CLOCK, clock.stored()),
+        Preference::UtcOffset(offset) => settings.set_setting(keys::UTC_OFFSET, &offset.stored()),
     }
 }
 

@@ -45,7 +45,7 @@ impl WorkspaceView {
                 });
                 // The confirmation shows in the workspace screen's delete card, so that screen opens.
                 self.open_screen(super::screen::Screen::Workspace, cx);
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
             Err(err) => self.status = Some(format!("Could not open the delete dialog: {err}")),
         }

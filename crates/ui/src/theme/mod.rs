@@ -15,7 +15,7 @@ mod guard;
 
 pub use palette::{AvatarColors, Palette};
 
-use gpui::{App, BoxShadow, Global, Pixels, point, px};
+use gpui::{App, BoxShadow, Global, Pixels, WindowAppearance, point, px};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -72,7 +72,6 @@ pub struct Elevation {
 
 #[derive(Debug, Clone)]
 pub struct Theme {
-    pub mode: Mode,
     pub palette: Palette,
     pub typography: Typography,
     pub spacing: Spacing,
@@ -83,7 +82,6 @@ pub struct Theme {
 impl Theme {
     pub fn for_mode(mode: Mode) -> Self {
         Self {
-            mode,
             palette: Palette::for_mode(mode),
             typography: Typography {
                 caption: px(tokens::typography::CAPTION),
@@ -108,6 +106,7 @@ impl Theme {
                     offset: point(px(0.), px(tokens::shadow::OFFSET_Y)),
                     blur_radius: px(tokens::shadow::BLUR),
                     spread_radius: px(0.),
+                    inset: false,
                 }],
             },
         }
@@ -118,6 +117,14 @@ impl Global for Theme {}
 
 pub fn init(cx: &mut App, mode: Mode) {
     cx.set_global(Theme::for_mode(mode));
+}
+
+/// The mode the operating system's appearance asks for. The app follows it, so there is no setting for it.
+pub fn mode_for(appearance: WindowAppearance) -> Mode {
+    match appearance {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => Mode::Dark,
+        WindowAppearance::Light | WindowAppearance::VibrantLight => Mode::Light,
+    }
 }
 
 /// Switches mode and re-renders every window, so nothing keeps the old palette.

@@ -27,7 +27,7 @@ use super::fields::{field, member_mark};
 use super::plan_review;
 use super::task_dialog::button;
 use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use crate::{components, text_edit::TextEdit, theme::Theme};
 
 /// How often the UI reads what the stream has sent. Several reads a second is enough for a counter, and it
 /// keeps a burst of tokens from repainting the panel once per token.
@@ -74,6 +74,8 @@ impl Drop for Run {
 pub(super) struct PlanWizardDialog {
     pub project: ProjectId,
     pub wizard: PlanWizard,
+    /// The caret and selection of the goal or date being typed. See `edit_text`.
+    pub input: TextEdit,
     /// The draft for the current attempt. Its text is written as it arrives.
     pub draft: Option<PlanDraft>,
     pub run: Option<Run>,
@@ -127,7 +129,16 @@ fn now() -> Timestamp {
 impl WorkspaceView {
     /// Opens the wizard for the selected project. Nothing opens when no project is selected. An interrupted draft
     /// from an earlier session is offered for resume.
+    /// Generate with AI. An unfinished plan opens instead, so there is only ever one.
     pub(super) fn open_plan_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.unfinished_plan(cx).is_some() {
+            return self.open_unfinished_plan(window, cx);
+        }
+        self.start_plan_wizard(window, cx);
+    }
+
+    /// Opens the planning window with a new plan.
+    pub(super) fn start_plan_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active_id() else {
             return;
         };
@@ -165,6 +176,7 @@ impl WorkspaceView {
         self.plan_wizard = Some(PlanWizardDialog {
             project,
             wizard: default_plan_wizard(),
+            input: TextEdit::default(),
             draft: None,
             run: None,
             interrupted,
@@ -180,7 +192,7 @@ impl WorkspaceView {
         });
         let main = cx.entity();
         cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Plan));
-        self.plan_focus[0].focus(window);
+        self.plan_focus[0].focus(window, cx);
         cx.notify();
     }
 
@@ -188,7 +200,7 @@ impl WorkspaceView {
     fn close_plan_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_plan_generation(cx);
         self.plan_wizard = None;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -274,7 +286,7 @@ impl WorkspaceView {
         let brief = format!("{}{target}", generation.goal);
         let prompt = build_prompt(&brief, &dialog.members);
         let request = ChatRequest {
-            model: super::preferences_panel::plan_model(cx),
+            model: super::ai_settings::model_for(cx, self.projects.active_id()),
             system: None,
             messages: vec![ChatMessage::user(prompt)],
             max_tokens: MAX_TOKENS,
@@ -284,7 +296,7 @@ impl WorkspaceView {
         let queue = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&queue);
         let request_future = run_request(
-            super::preferences_panel::ai_provider(cx),
+            super::ai_settings::provider_for(cx, self.projects.active_id()),
             request,
             cancel.clone(),
             move |update| {
@@ -525,9 +537,9 @@ impl WorkspaceView {
         }
     }
 
-    fn focus_plan_control(&self, control: Control, window: &mut Window) {
+    fn focus_plan_control(&self, control: Control, window: &mut Window, cx: &mut App) {
         if let Some(index) = CONTROLS.iter().position(|candidate| *candidate == control) {
-            self.plan_focus[index].focus(window);
+            self.plan_focus[index].focus(window, cx);
         }
     }
 
@@ -573,7 +585,7 @@ impl WorkspaceView {
                 } else {
                     (current + 1) % count
                 };
-                self.plan_focus[next].focus(window);
+                self.plan_focus[next].focus(window, cx);
                 return cx.notify();
             }
             _ => {}
@@ -615,26 +627,31 @@ impl WorkspaceView {
         if !dialog.inputs_editable() {
             return;
         }
-        let mut text = match control {
+        let current = match control {
             Control::Goal => dialog.wizard.goal().to_string(),
             Control::Date => dialog.wizard.target_text().to_string(),
             _ => return,
         };
-        if keystroke.key == "backspace" {
-            text.pop();
-        } else if keystroke.key == "enter" && control == Control::Goal {
-            text.push('\n');
-        } else if !modifier
+        // The wizard keeps the text itself. The caret and selection live here, and start over when the
+        // text was changed from outside, such as by switching fields.
+        if dialog.input.as_str() != current {
+            dialog.input = TextEdit::new(current);
+        }
+        if keystroke.key == "enter" && control == Control::Goal {
+            dialog.input.insert("\n");
+        } else if keystroke.key == "enter" || keystroke.key == "escape" {
+            return;
+        } else if control == Control::Date
+            && !modifier
             && let Some(typed) = typed_text(keystroke)
-            && (control == Control::Goal || {
-                typed.chars().all(|c| c.is_ascii_digit() || c == '-')
-                    && text.chars().count() + typed.chars().count() <= DATE_CHARS
-            })
+            && (!typed.chars().all(|c| c.is_ascii_digit() || c == '-')
+                || dialog.input.chars().count() + typed.chars().count() > DATE_CHARS)
         {
-            text.push_str(typed);
-        } else {
+            return;
+        } else if !dialog.input.handle_key(keystroke) {
             return;
         }
+        let text = dialog.input.as_str().to_string();
         match control {
             Control::Goal => dialog.wizard.set_goal(&text),
             Control::Date => dialog.wizard.set_target_text(&text),
@@ -697,16 +714,22 @@ pub(super) fn panel(
         Ok(_) => None,
     };
 
+    // The caret belongs to the text it was typed in. When the wizard holds other text, show it plainly.
+    let goal_text = if dialog.input.as_str() == dialog.wizard.goal() {
+        dialog.input.clone()
+    } else {
+        TextEdit::new(dialog.wizard.goal())
+    };
     let goal = div()
         .id("plan-goal")
         .h_full()
         .track_focus(&focus[0])
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-            this.focus_plan_control(Control::Goal, window);
+            this.focus_plan_control(Control::Goal, window, cx);
             cx.notify();
         }))
-        .child(plan_box(
-            dialog.wizard.goal(),
+        .child(components::edit_lines(
+            &goal_text,
             "For example: launch the beta to the first group of users",
             focused(Control::Goal),
             240.,
@@ -993,42 +1016,6 @@ fn discard_prompt(theme: &Theme, cx: &mut Context<WorkspaceView>) -> AnyElement 
                 ),
         )
         .into_any_element()
-}
-
-/// A box for typing, with a muted outline and no focus colour. The goal and the target date use it.
-fn plan_box(value: &str, placeholder: &str, active: bool, min_height: f32, theme: &Theme) -> Div {
-    let text = if value.is_empty() && !active {
-        div()
-            .text_color(theme.palette.text_secondary)
-            .child(placeholder.to_string())
-    } else {
-        let caret = if active { "|" } else { "" };
-        let mut lines = div().flex().flex_col();
-        let mut text_lines: Vec<String> = value.split('\n').map(str::to_string).collect();
-        if let Some(last) = text_lines.last_mut() {
-            last.push_str(caret);
-        }
-        for line in text_lines {
-            lines = lines.child(div().min_h(px(18.)).child(if line.is_empty() {
-                " ".to_string()
-            } else {
-                line
-            }));
-        }
-        lines
-    };
-    div()
-        .h_full()
-        .min_h(px(min_height))
-        .w_full()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.sm)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(theme.palette.border_control)
-        .bg(theme.palette.surface_raised)
-        .text_size(theme.typography.body)
-        .child(text)
 }
 
 /// One choice in the team box: a chip, filled when it's the chosen one.

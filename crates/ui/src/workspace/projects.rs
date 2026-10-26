@@ -10,9 +10,9 @@ use looji_domain::{
 use super::{
     WorkspaceView, board, board_search, filter_bar, list_view,
     project_state::{ProjectList, load_board},
-    roadmap, store, typed_text, workload_view,
+    roadmap, store, workload_view,
 };
-use crate::theme::Theme;
+use crate::{text_edit::TextEdit, theme::Theme};
 
 const NAME_TAKEN_MESSAGE: &str = "A project with that name already exists in this workspace.";
 
@@ -27,14 +27,14 @@ pub(super) enum Field {
 /// The create-project dialog's state. `None` on the view means it's closed.
 #[derive(Debug, Clone, Default)]
 pub(super) struct ProjectDialog {
-    pub name: String,
-    pub description: String,
+    pub name: TextEdit,
+    pub description: TextEdit,
     pub field: Field,
     pub error: Option<String>,
 }
 
 impl ProjectDialog {
-    fn active_text(&mut self) -> &mut String {
+    fn active_text(&mut self) -> &mut TextEdit {
         match self.field {
             Field::Name => &mut self.name,
             Field::Description => &mut self.description,
@@ -75,7 +75,6 @@ impl WorkspaceView {
         };
         self.cancel_keyboard_if_gone(cx);
         self.close_panel_if_gone(cx);
-        self.close_plan_drafts_if_gone();
         self.close_tag_editors_if_gone();
         self.prune_project_filter(cx);
         self.refresh_list(cx);
@@ -84,10 +83,18 @@ impl WorkspaceView {
 
     pub(super) fn select_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.save_project_view(cx);
+        self.enter_project(id, cx);
+    }
+
+    /// Opens a project's board: its filter, list settings, and view load, and the workspace screen closes.
+    /// The view of the project being left is saved before this is called.
+    fn enter_project(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         self.reset_search();
         self.reset_list_position();
         // Choosing a project leaves any workspace screen for its board.
         self.screen = None;
+        // The open task belongs to the board being left, so its panel closes without a notice.
+        self.panel = None;
         self.projects.select(id);
         self.load_project_filter(cx);
         self.load_list_settings(cx);
@@ -108,7 +115,7 @@ impl WorkspaceView {
         self.cancel_rename(cx);
         self.project_dialog = Some(ProjectDialog::default());
         self.open_screen(super::screen::Screen::Workspace, cx);
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -145,9 +152,12 @@ impl WorkspaceView {
 
         match ProjectRepository::save(store(cx), &project) {
             Ok(()) => {
+                // The project being left keeps its view, then the new project's board opens.
+                self.save_project_view(cx);
+                let id = project.id();
                 self.projects.add_and_select(project);
                 self.project_dialog = None;
-                self.reload_board(cx);
+                self.enter_project(id, cx);
             }
             Err(RepoError::NameTaken) => self.reject_project(NAME_TAKEN_MESSAGE.into(), cx),
             Err(err) => self.reject_project(format!("Could not create the project: {err}"), cx),
@@ -176,22 +186,10 @@ impl WorkspaceView {
                 }
                 cx.notify();
             }
-            "backspace" => {
-                if let Some(dialog) = self.project_dialog.as_mut() {
-                    dialog.active_text().pop();
-                    dialog.error = None;
-                }
-                cx.notify();
-            }
             _ => {
-                let modifiers = event.keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform {
-                    return;
-                }
-                if let (Some(dialog), Some(text)) =
-                    (self.project_dialog.as_mut(), typed_text(&event.keystroke))
+                if let Some(dialog) = self.project_dialog.as_mut()
+                    && dialog.active_text().handle_key(&event.keystroke)
                 {
-                    dialog.active_text().push_str(text);
                     dialog.error = None;
                     cx.notify();
                 }
@@ -315,10 +313,6 @@ pub(super) fn content(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    #[cfg(debug_assertions)]
-    if std::env::var_os("LOOJI_CARD_GALLERY").is_some() {
-        return super::card::gallery(theme).into_any_element();
-    }
     match view.projects.active() {
         None => empty_workspace(theme, cx).into_any_element(),
         Some(project) => {
@@ -516,14 +510,13 @@ pub(super) fn dialog(
 
 fn field(
     label: &'static str,
-    text: &str,
+    text: &TextEdit,
     active: bool,
     counter: Option<String>,
     which: Field,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let caret = if active { "|" } else { "" };
     div()
         .flex()
         .flex_col()
@@ -541,17 +534,7 @@ fn field(
         .child(
             div()
                 .id(label)
-                .px(theme.spacing.sm)
-                .py(theme.spacing.xs)
-                .rounded(theme.radius.sm)
-                .border_1()
-                .border_color(if active {
-                    theme.palette.accent
-                } else {
-                    theme.palette.border_control
-                })
-                .bg(theme.palette.surface)
-                .child(format!("{text}{caret}"))
+                .child(crate::components::edit_box(text, "", active, theme))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.focus_project_field(which, cx)
                 })),

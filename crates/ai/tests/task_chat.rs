@@ -13,6 +13,7 @@ fn brief() -> TaskBrief<'static> {
         title: "Fix password verification in login",
         description: "Empty passwords must be refused.",
         status: "In progress",
+        whole_project: false,
     }
 }
 
@@ -113,4 +114,23 @@ fn a_long_conversation_drops_the_oldest_messages_and_keeps_the_newest() {
         kept_cost <= 350,
         "{kept_cost} tokens kept over a budget of 350"
     );
+}
+
+#[test]
+fn a_chat_about_the_whole_project_is_not_framed_as_one_task() {
+    let brief = TaskBrief {
+        title: "Website redesign",
+        description: "The marketing site and docs.",
+        status: "",
+        whole_project: true,
+    };
+    let history = [ChatMessage::user("Where is the login handled?")];
+    let (request, left_out) = build_chat_request("model", brief, &history, &[login_hunk()], 10_000);
+
+    let system = request.system.expect("a system prompt");
+    assert_eq!(left_out, 0);
+    assert!(system.contains("whole project"));
+    assert!(system.contains("Project: Website redesign"));
+    assert!(!system.contains("Status:"));
+    assert!(system.contains("src/auth/login.rs"));
 }

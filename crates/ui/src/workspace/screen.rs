@@ -102,18 +102,13 @@ impl WorkspaceView {
         self.screen_entries = entries;
     }
 
-    /// How many open tasks need attention: due today, and overdue, each counted only when its
-    /// notification setting is on.
-    pub(super) fn attention_count(&self, prefs: &looji_domain::Preferences) -> usize {
+    /// How many open tasks need attention: due today, and overdue. Always counted.
+    pub(super) fn attention_count(&self) -> usize {
         let today = DueDate::today_utc().day_number();
         self.screen_entries
             .iter()
             .filter(|entry| entry.task.status() != looji_domain::Status::Done)
-            .filter(|entry| match due_day(entry) {
-                Some(day) if day == today => prefs.notify_due_today,
-                Some(day) if day < today => prefs.notify_overdue,
-                _ => false,
-            })
+            .filter(|entry| due_day(entry).is_some_and(|day| day <= today))
             .count()
     }
 

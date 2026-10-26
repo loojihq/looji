@@ -1,0 +1,2 @@
+// The executable's icon. The same .ico the installer uses.
+1 ICON "../../assets/branding/app-icon.ico"

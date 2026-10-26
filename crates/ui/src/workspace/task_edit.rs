@@ -12,7 +12,8 @@ use looji_domain::{
     normalize_tag,
 };
 
-use super::{WorkspaceView, store, typed_text};
+use super::{WorkspaceView, store};
+use crate::text_edit::TextEdit;
 
 /// How many suggestions are offered at most.
 pub(super) const MAX_SUGGESTIONS: usize = 8;
@@ -22,7 +23,7 @@ pub(super) const MAX_SUGGESTIONS: usize = 8;
 pub(super) struct TagEdit {
     pub task: TaskId,
     /// Text typed but not yet a tag.
-    pub draft: String,
+    pub draft: TextEdit,
     /// Tags in use in the project that match the draft and that the task doesn't have.
     pub suggestions: Vec<String>,
     /// The suggestion Enter would choose, if one is highlighted.
@@ -35,7 +36,7 @@ impl TagEdit {
     fn new(task: TaskId) -> Self {
         Self {
             task,
-            draft: String::new(),
+            draft: TextEdit::default(),
             suggestions: Vec::new(),
             highlight: None,
             error: None,
@@ -137,7 +138,7 @@ impl WorkspaceView {
         }
         self.blur_tag_editor(cx);
         self.tag_edit = Some(TagEdit::new(task));
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -155,30 +156,12 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Opens a card for tag and priority editing, and puts the keyboard on its tag input.
-    pub(super) fn open_card_editor(
-        &mut self,
-        task: TaskId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.card_editing = Some(task);
-        self.focus_tag_input(task, window, cx);
-    }
-
-    /// Closes a card's editor. Typed text is added first, as for any blur.
-    pub(super) fn close_card_editor(&mut self, cx: &mut Context<Self>) {
-        self.blur_tag_editor(cx);
-        self.card_editing = None;
-        cx.notify();
-    }
-
     /// Types text into the tag input. A comma ends the tag before it, as in the dialog.
     pub(super) fn type_tag_text(&mut self, text: &str, cx: &mut Context<Self>) {
         let mut parts = text.split(',').peekable();
         while let Some(part) = parts.next() {
             if let Some(edit) = self.tag_edit.as_mut() {
-                edit.draft.push_str(part);
+                edit.draft.insert(part);
                 edit.highlight = None;
                 edit.error = None;
             }
@@ -200,7 +183,7 @@ impl WorkspaceView {
         let tag = edit
             .highlight
             .and_then(|index| edit.suggestions.get(index).cloned())
-            .unwrap_or_else(|| edit.draft.clone());
+            .unwrap_or_else(|| edit.draft.as_str().to_string());
         if tag.trim().is_empty() {
             return cx.notify();
         }
@@ -260,7 +243,7 @@ impl WorkspaceView {
             }
             "escape" => {
                 self.blur_tag_editor(cx);
-                self.card_editing = None;
+                self.expanded_card = None;
             }
             "enter" => self.commit_tag(cx),
             "down" if showing => self.step_highlight(true),
@@ -277,19 +260,27 @@ impl WorkspaceView {
                         self.remove_task_tag(task, tag, cx);
                     }
                 } else if let Some(edit) = self.tag_edit.as_mut() {
-                    edit.draft.pop();
+                    edit.draft.backspace();
                     edit.error = None;
                     self.refresh_suggestions(cx);
                 }
             }
             _ => {
-                if modifiers.control || modifiers.alt || modifiers.platform {
+                if let Some(text) = event.keystroke.key_char.clone()
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && !modifiers.platform
+                {
+                    self.type_tag_text(&text, cx);
+                } else if let Some(edit) = self.tag_edit.as_mut() {
+                    if !edit.draft.handle_key(&event.keystroke) {
+                        return false;
+                    }
+                    edit.error = None;
+                    self.refresh_suggestions(cx);
+                } else {
                     return false;
                 }
-                let Some(text) = typed_text(&event.keystroke) else {
-                    return false;
-                };
-                self.type_tag_text(text, cx);
             }
         }
         cx.notify();
@@ -357,8 +348,8 @@ impl WorkspaceView {
     /// Clears the editors when their task is gone from the board.
     pub(super) fn close_tag_editors_if_gone(&mut self) {
         let on_board = |task: TaskId| self.board.iter().any(|other| other.id() == task);
-        if self.card_editing.is_some_and(|task| !on_board(task)) {
-            self.card_editing = None;
+        if self.expanded_card.is_some_and(|task| !on_board(task)) {
+            self.expanded_card = None;
         }
         if self
             .tag_edit

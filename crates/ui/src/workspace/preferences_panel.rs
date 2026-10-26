@@ -1,64 +1,48 @@
-//! The Preferences screen: appearance, updates, the board, the assistant, this workspace, and help.
-//! Each toggle and select saves through `settings::update`, so the choice is kept after a restart.
+//! The Preferences window. It holds the app-wide AI settings and the clock and time zone. A project can set its own
+//! of each in its settings, and everything else per project lives in the project page.
 
 use gpui::{prelude::*, *};
-use looji_domain::{DefaultView, Preference, SettingsRepository, Status, UpdateChannel};
+use looji_ai::Provider;
 
-use super::{WorkspaceView, schedule_dialog};
-use crate::{
-    components, settings,
-    theme::{Mode, Theme},
-};
+use super::setting_menu::{self, Field, Scope};
+use super::{WorkspaceView, ai_settings};
+use crate::{components, theme::Theme};
 
-/// The body of the Preferences screen, under its header.
+/// The body of the Preferences window: the AI provider and model for the whole app, the key the provider needs,
+/// and the clock and time zone. Each choice is a dropdown.
 pub(super) fn render(
     view: &WorkspaceView,
     theme: &Theme,
-    window: &Window,
+    _window: &Window,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let prefs = settings::current(cx);
-    // Copied out first, so each control's click handler owns its own value.
-    let default_view = prefs.default_view;
-    let model = prefs.selected_model.clone();
-    let dark = theme.mode == Mode::Dark;
-    let due_today_on = prefs.notify_due_today;
-    let overdue_on = prefs.notify_overdue;
-    let beta = prefs.update_channel == UpdateChannel::Beta;
-    let workspace_id = view.list.active_workspace_id();
-    let workspace_name = view.list.active().name().to_string();
-    let in_review = view
-        .projects
-        .active()
-        .map(|project| project.is_status_visible(Status::InReview));
+    let provider = ai_settings::app_provider(cx);
 
-    let board_row: AnyElement = match in_review {
-        Some(shown) => components::settings_row(
-            "In review column",
-            Some("Show the In review column on this project's board."),
-            components::toggle(shown, theme),
+    let mut section = div()
+        .w(px(640.))
+        .flex()
+        .flex_col()
+        .child(components::section_label("AI", theme))
+        .child(components::settings_row(
+            "Provider",
+            Some(provider_note(provider)),
+            setting_menu::setting_select(view, Field::Provider, Scope::App, theme, cx),
             theme,
-        )
-        .id("pref-in-review")
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            this.request_column_visibility(Status::InReview, !shown, cx);
-        }))
-        .into_any_element(),
-        None => components::settings_row(
-            "In review column",
-            Some("Open a project to change its board."),
-            div()
-                .text_color(theme.palette.text_disabled)
-                .child("No project"),
+        ))
+        .child(components::settings_row(
+            "Model",
+            Some("Used for planning and task chat. Default is the newest model."),
+            setting_menu::setting_select(view, Field::Model, Scope::App, theme, cx),
             theme,
-        )
-        .into_any_element(),
-    };
+        ));
 
-    // The hours form opens under its setting, and closes the same way.
-    let hours = schedule_dialog::panel(view, theme, window, cx);
+    // Only a provider that needs a key shows the key, so a provider that signs in itself has nothing to set.
+    if provider.needs_key() {
+        section = section.child(api_key_row(theme, cx));
+    }
+    section = section.child(time_rows(theme, view, cx));
 
-    let body = div()
+    div()
         .id("preferences-body")
         .flex()
         .flex_col()
@@ -67,210 +51,82 @@ pub(super) fn render(
         .overflow_y_scroll()
         .px(theme.spacing.lg)
         .pb(theme.spacing.lg)
-        .child(
-            div()
-                .w(px(640.))
-                .flex()
-                .flex_col()
-                .child(components::section_label("Appearance", theme))
-                .child(
-                    components::settings_row(
-                        "Dark mode",
-                        Some("Use dark surfaces across the app."),
-                        components::toggle(dark, theme),
-                        theme,
-                    )
-                    .id("pref-dark-mode")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_theme(cx))),
-                )
-                .child(components::section_label("Updates", theme))
-                .child(
-                    components::settings_row(
-                        "Beta updates",
-                        Some("Get preview releases before they are stable."),
-                        components::toggle(beta, theme),
-                        theme,
-                    )
-                    .id("pref-beta")
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            let next = if beta {
-                                UpdateChannel::Stable
-                            } else {
-                                UpdateChannel::Beta
-                            };
-                            this.save_preference(Preference::UpdateChannel(next), cx);
-                        },
-                    )),
-                )
-                .child(components::section_label("Notifications", theme))
-                .child(
-                    components::settings_row(
-                        "Due today",
-                        Some("Count tasks due today next to Today in the sidebar."),
-                        components::toggle(due_today_on, theme),
-                        theme,
-                    )
-                    .id("pref-notify-due-today")
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            this.save_preference(Preference::NotifyDueToday(!due_today_on), cx);
-                        },
-                    )),
-                )
-                .child(
-                    components::settings_row(
-                        "Overdue tasks",
-                        Some("Count overdue tasks next to Today in the sidebar."),
-                        components::toggle(overdue_on, theme),
-                        theme,
-                    )
-                    .id("pref-notify-overdue")
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            this.save_preference(Preference::NotifyOverdue(!overdue_on), cx);
-                        },
-                    )),
-                )
-                .child(components::section_label("Board", theme))
-                .child(
-                    components::settings_row(
-                        "Default view",
-                        Some("The view a project opens in when it has no saved view."),
-                        components::select(
-                            "pref-default-view-select",
-                            default_view_label(default_view),
-                            false,
-                            theme,
-                        ),
-                        theme,
-                    )
-                    .id("pref-default-view")
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            let next = next_view(default_view);
-                            this.save_preference(Preference::DefaultView(next), cx);
-                        },
-                    )),
-                )
-                .child(board_row)
-                .children(hours)
-                .child(components::section_label("AI", theme))
-                .child(ai_rows(theme, cx))
-                .child(
-                    components::settings_row(
-                        "Model",
-                        Some("The model that plans projects and answers task chat."),
-                        components::select(
-                            "pref-model-select",
-                            model.as_deref().unwrap_or("Default"),
-                            false,
-                            theme,
-                        ),
-                        theme,
-                    )
-                    .id("pref-model")
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            let next = settings::next_model(model.as_deref());
-                            this.save_preference(Preference::SelectedModel(next), cx);
-                        },
-                    )),
-                )
-                .child(components::section_label("This workspace", theme))
-                .child(components::settings_row(
-                    workspace_name.as_str(),
-                    Some("Its icon, its name, and whether it can be deleted."),
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(theme.spacing.sm)
-                        .child(
-                            components::button(
-                                "pref-workspace-icon",
-                                "Icon",
-                                components::Variant::Secondary,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    this.choose_icon(workspace_id, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            components::button(
-                                "pref-workspace-rename",
-                                "Rename",
-                                components::Variant::Secondary,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, window, cx| {
-                                    this.begin_rename(workspace_id, window, cx);
-                                    this.open_screen(super::screen::Screen::Workspace, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            components::button(
-                                "pref-workspace-delete",
-                                "Delete",
-                                components::Variant::Danger,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, window, cx| {
-                                    this.begin_delete(workspace_id, window, cx);
-                                },
-                            )),
-                        ),
-                    theme,
-                ))
-                .child(components::section_label("Help", theme))
-                .child(components::settings_row(
-                    "Welcome tour",
-                    Some("Walk through the main parts of the app again."),
-                    components::button(
-                        "pref-tour",
-                        "Show again",
-                        components::Variant::Secondary,
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.replay_tour(cx))),
-                    theme,
-                )),
-        );
-
-    body.into_any_element()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_setting_menu(cx)),
+        )
+        .child(section)
+        .into_any_element()
 }
 
-fn default_view_label(view: DefaultView) -> &'static str {
-    match view {
-        DefaultView::Board => "Board",
-        DefaultView::List => "List",
-        DefaultView::Roadmap => "Roadmap",
-        DefaultView::Workload => "Workload",
-    }
+/// The app's clock and time zone offset. A project can set its own in its settings.
+fn time_rows(
+    theme: &Theme,
+    view: &WorkspaceView,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .child(components::section_label("Time", theme))
+        .child(components::settings_row(
+            "Clock",
+            Some("How times are shown and typed. A project can use its own in its settings."),
+            setting_menu::setting_select(view, Field::Clock, Scope::App, theme, cx),
+            theme,
+        ))
+        .child(components::settings_row(
+            "Time zone",
+            Some("A fixed offset from UTC. It doesn't follow daylight saving."),
+            setting_menu::setting_select(view, Field::Offset, Scope::App, theme, cx),
+            theme,
+        ))
 }
 
-fn next_view(view: DefaultView) -> DefaultView {
-    match view {
-        DefaultView::Board => DefaultView::List,
-        DefaultView::List => DefaultView::Roadmap,
-        DefaultView::Roadmap => DefaultView::Workload,
-        DefaultView::Workload => DefaultView::Board,
-    }
-}
-
-impl WorkspaceView {
-    /// Saves one preference and says so if the save fails. The screen re-renders with the new value.
-    pub(super) fn save_preference(&mut self, change: Preference, cx: &mut Context<Self>) {
-        if let Err(err) = settings::update(cx, change) {
-            self.status = Some(format!("Could not save the setting: {err}"));
+/// What the provider needs, and whether it's ready, in one line.
+fn provider_note(provider: Provider) -> &'static str {
+    match provider {
+        Provider::ClaudeCode if looji_ai::claude_code::installed() => {
+            "Uses the Claude Code installed on this computer, with your own sign-in."
         }
-        cx.notify();
+        Provider::ClaudeCode => "Claude Code isn't installed here. Install it and sign in.",
+        Provider::Anthropic => "Uses an API key saved on this computer.",
     }
+}
+
+/// The API key row: whether one is saved, and the buttons to save or remove it.
+fn api_key_row(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+    let saved = looji_ai::key_store::load().ok().flatten().is_some();
+    let mut buttons = div().flex().flex_row().gap(theme.spacing.sm).child(
+        components::button(
+            "pref-key-paste",
+            "Paste key",
+            components::Variant::Secondary,
+            theme,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.paste_api_key(cx))),
+    );
+    if saved {
+        buttons = buttons.child(
+            components::button(
+                "pref-key-remove",
+                "Remove",
+                components::Variant::Ghost,
+                theme,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.remove_api_key(cx))),
+        );
+    }
+    components::settings_row(
+        "API key",
+        Some(if saved {
+            "Saved in the system's key store."
+        } else {
+            "Not set. Copy a key, then paste it here."
+        }),
+        buttons,
+        theme,
+    )
 }
 
 impl WorkspaceView {
@@ -280,6 +136,7 @@ impl WorkspaceView {
             return;
         }
         self.preferences_open = true;
+        self.setting_menu = None;
         let main = cx.entity();
         cx.defer(move |cx| {
             super::dialog_window::open(cx, main, super::dialog_window::Kind::Preferences)
@@ -293,44 +150,6 @@ impl WorkspaceView {
             self.preferences_open = false;
             cx.notify();
         }
-    }
-}
-
-/// The setting that holds the AI provider's name.
-const AI_PROVIDER_KEY: &str = "ai_provider";
-
-/// The AI provider the settings choose. Claude Code when nothing has been chosen.
-pub(super) fn ai_provider(cx: &gpui::App) -> looji_ai::Provider {
-    super::store(cx)
-        .get_setting(AI_PROVIDER_KEY)
-        .ok()
-        .flatten()
-        .as_deref()
-        .and_then(looji_ai::Provider::from_stored)
-        .unwrap_or(looji_ai::Provider::ClaudeCode)
-}
-
-/// The model for a plan: the one the settings choose, or the default.
-pub(super) fn plan_model(cx: &gpui::App) -> String {
-    settings::current(cx)
-        .selected_model
-        .unwrap_or_else(|| looji_ai::models::DEFAULT_MODEL.to_string())
-}
-
-impl WorkspaceView {
-    /// Moves the AI provider to the next choice and saves it.
-    pub(super) fn cycle_ai_provider(&mut self, cx: &mut gpui::Context<Self>) {
-        let current = ai_provider(cx);
-        let index = looji_ai::Provider::ALL
-            .iter()
-            .position(|provider| *provider == current)
-            .unwrap_or(0);
-        let next = looji_ai::Provider::ALL[(index + 1) % looji_ai::Provider::ALL.len()];
-        match super::store(cx).set_setting(AI_PROVIDER_KEY, next.stored()) {
-            Ok(()) => self.status = None,
-            Err(err) => self.status = Some(format!("Could not save the AI provider: {err}")),
-        }
-        cx.notify();
     }
 
     /// Saves the API key on the clipboard in the system's key store.
@@ -358,83 +177,4 @@ impl WorkspaceView {
         });
         cx.notify();
     }
-}
-
-/// The AI settings: which provider answers, whether Claude Code is installed, and the saved API key.
-fn ai_rows(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    let provider = ai_provider(cx);
-    let claude_found = looji_ai::claude_code::installed();
-    let key_saved = looji_ai::key_store::load().ok().flatten().is_some();
-
-    let mut key_buttons = div().flex().flex_row().gap(theme.spacing.sm).child(
-        components::button(
-            "pref-key-paste",
-            "Paste key",
-            components::Variant::Secondary,
-            theme,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.paste_api_key(cx))),
-    );
-    if key_saved {
-        key_buttons = key_buttons.child(
-            components::button(
-                "pref-key-remove",
-                "Remove",
-                components::Variant::Ghost,
-                theme,
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.remove_api_key(cx))),
-        );
-    }
-
-    let (claude_note, claude_state, claude_colour) = if claude_found {
-        (
-            "Installed on this computer. It uses your own sign-in.",
-            "Ready",
-            theme.palette.text_primary,
-        )
-    } else {
-        (
-            "Not installed. Install Claude Code and sign in, then choose it above.",
-            "Missing",
-            theme.palette.danger,
-        )
-    };
-
-    div()
-        .flex()
-        .flex_col()
-        .child(
-            components::settings_row(
-                "AI provider",
-                Some("Claude Code uses your own sign-in. The API key option uses the key saved below."),
-                components::select(
-                    "pref-ai-provider-select",
-                    provider.label(),
-                    false,
-                    theme,
-                ),
-                theme,
-            )
-            .id("pref-ai-provider")
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cycle_ai_provider(cx))),
-        )
-        .child(components::settings_row(
-            "Claude Code",
-            Some(claude_note),
-            div()
-                .text_color(claude_colour)
-                .child(claude_state),
-            theme,
-        ))
-        .child(components::settings_row(
-            "Anthropic API key",
-            Some(if key_saved {
-                "A key is saved in the system's key store."
-            } else {
-                "No key is saved. Copy a key, then paste it here."
-            }),
-            key_buttons,
-            theme,
-        ))
 }

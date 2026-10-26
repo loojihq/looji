@@ -10,19 +10,17 @@
 use gpui::{prelude::*, *};
 
 use super::WorkspaceView;
-use super::{
-    chat, plan_drafts, plan_wizard, preferences_panel, repo_dialog, task_dialog, task_form::Mode,
-};
+use super::{chat, plan_wizard, preferences_panel, task_dialog, task_form::Mode};
 use crate::{components, theme::ActiveTheme, title_bar::TITLE_BAR_HEIGHT, window_move};
 
 /// Which dialog a window shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
-    Repository,
-    Drafts,
     Task,
+    TaskDetail,
     Chat,
     Plan,
+    ProjectSettings,
     Preferences,
 }
 
@@ -30,17 +28,24 @@ impl Kind {
     /// The header's title. The task and chat dialogs name the task they are about.
     fn title(self, view: &WorkspaceView) -> String {
         match self {
-            Kind::Repository => "Repository".to_string(),
-            Kind::Drafts => "Planning drafts".to_string(),
             Kind::Task => match view.task_dialog.as_ref().map(|dialog| &dialog.form.mode) {
                 Some(Mode::Edit(_)) => "Edit task".to_string(),
                 _ => "New task".to_string(),
             },
+            Kind::TaskDetail => view
+                .panel_task()
+                .map(|task| task.title().to_string())
+                .unwrap_or_else(|| "Task".to_string()),
             Kind::Preferences => "Preferences".to_string(),
+            Kind::ProjectSettings => match view.projects.active() {
+                Some(project) => format!("{} settings", project.name()),
+                None => "Project settings".to_string(),
+            },
             Kind::Plan => "Generate with AI".to_string(),
             Kind::Chat => match view.chat_dialog.as_ref() {
-                Some(dialog) => format!("Chat: {}", dialog.title),
-                None => "Chat".to_string(),
+                Some(dialog) if dialog.whole_project => format!("Ask AI about {}", dialog.title),
+                Some(dialog) => format!("Ask AI: {}", dialog.title),
+                None => "Ask AI".to_string(),
             },
         }
     }
@@ -49,11 +54,11 @@ impl Kind {
     /// space around it.
     fn size(self) -> Size<Pixels> {
         match self {
-            Kind::Repository => size(px(492.), px(420.)),
-            Kind::Drafts => size(px(560.), px(460.)),
-            Kind::Task => size(px(552.), px(520.)),
+            Kind::Task => size(px(552.), px(660.)),
+            Kind::TaskDetail => size(px(560.), px(720.)),
             Kind::Chat => size(px(680.), px(640.)),
             Kind::Preferences => size(px(720.), px(680.)),
+            Kind::ProjectSettings => size(px(680.), px(720.)),
             Kind::Plan => size(px(1040.), px(800.)),
         }
     }
@@ -66,11 +71,11 @@ impl Kind {
     /// Whether this dialog is open in the main window's state.
     fn is_open(self, view: &WorkspaceView) -> bool {
         match self {
-            Kind::Repository => view.repo_dialog.is_some(),
-            Kind::Drafts => view.plan_drafts.is_some(),
             Kind::Task => view.task_dialog.is_some(),
+            Kind::TaskDetail => view.panel.is_some(),
             Kind::Chat => view.chat_dialog.is_some(),
             Kind::Preferences => view.preferences_open,
+            Kind::ProjectSettings => view.project_settings_open,
             Kind::Plan => view.plan_wizard.is_some(),
         }
     }
@@ -78,11 +83,15 @@ impl Kind {
     /// Clears this dialog's state in the main window, for when its window closes by its own button.
     fn clear(self, view: &mut WorkspaceView) {
         match self {
-            Kind::Repository => view.repo_dialog = None,
-            Kind::Drafts => view.plan_drafts = None,
             Kind::Task => view.task_dialog = None,
+            Kind::TaskDetail => view.panel = None,
             Kind::Chat => view.chat_dialog = None,
             Kind::Preferences => view.preferences_open = false,
+            Kind::ProjectSettings => {
+                view.project_settings_open = false;
+                view.schedule_dialog = None;
+                view.repo_dialog = None;
+            }
             Kind::Plan => view.plan_wizard = None,
         }
     }
@@ -95,11 +104,15 @@ impl Kind {
         cx: &mut Context<WorkspaceView>,
     ) {
         match self {
-            Kind::Repository => view.close_repo_dialog(cx),
-            Kind::Drafts => view.close_plan_drafts(cx),
             Kind::Task => view.request_task_dialog_close(cx),
+            Kind::TaskDetail => {
+                // The window closes itself once the panel is gone, so the card's focus stays put.
+                view.panel = None;
+                cx.notify();
+            }
             Kind::Chat => view.close_chat(cx),
             Kind::Preferences => view.close_preferences(cx),
+            Kind::ProjectSettings => view.request_project_settings_close(window, cx),
             Kind::Plan => view.request_plan_close(window, cx),
         }
     }
@@ -113,12 +126,12 @@ impl Kind {
         cx: &mut Context<WorkspaceView>,
     ) -> Option<AnyElement> {
         match self {
-            Kind::Repository => repo_dialog::panel(view, theme, cx),
-            Kind::Drafts => plan_drafts::panel(view, theme, cx),
             Kind::Task => task_dialog::panel(view, theme, cx),
+            Kind::TaskDetail => super::panel::render(view, theme, cx),
             Kind::Chat => chat::panel(view, theme, window, cx),
             Kind::Plan => plan_wizard::panel(view, theme, window, cx),
             Kind::Preferences => Some(preferences_panel::render(view, theme, window, cx)),
+            Kind::ProjectSettings => super::project_settings::panel(view, theme, window, cx),
         }
     }
 }
@@ -134,12 +147,27 @@ pub(super) struct DialogWindow {
 /// deferred from the main window's update, so the new window doesn't read the main window while it is busy.
 pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
     let title = kind.title(main.read(cx));
+    // A dialog sits centred over the window that opened it, and that window waits until it closes.
+    let size = kind.size();
+    let bounds = match cx
+        .active_window()
+        .and_then(|parent| parent.update(cx, |_, window, _| window.bounds()).ok())
+    {
+        Some(parent) => Bounds {
+            origin: point(
+                parent.origin.x + (parent.size.width - size.width) / 2.,
+                parent.origin.y + (parent.size.height - size.height) / 2.,
+            ),
+            size,
+        },
+        None => Bounds::centered(None, size, cx),
+    };
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            kind.size(),
-            cx,
-        ))),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        kind: WindowKind::Dialog,
+        is_minimizable: false,
+        // Created hidden and shown once its first frame is drawn, so the frame and borders never appear empty.
+        show: false,
         titlebar: Some(TitlebarOptions {
             title: Some(title.clone().into()),
             // Hides the system's title bar. The window draws its own header.
@@ -170,6 +198,13 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
                 });
             })
             .detach();
+            // A dialog that had another dialog open over it takes the keyboard back when that one closes.
+            cx.observe_window_activation(window, |this: &mut DialogWindow, window, cx| {
+                if window.is_window_active() {
+                    window.focus(&this.focus, cx);
+                }
+            })
+            .detach();
             DialogWindow {
                 main,
                 kind,
@@ -177,11 +212,15 @@ pub(super) fn open(cx: &mut App, main: Entity<WorkspaceView>, kind: Kind) {
             }
         });
         let focus = view.read(cx).focus.clone();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         view
     });
-    if opened.is_err() {
-        eprintln!("could not open the {title} window");
+    match opened {
+        // The window has drawn once by now. Showing it puts the finished frame on screen.
+        Ok(handle) => {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+        Err(_) => eprintln!("could not open the {title} window"),
     }
 }
 
@@ -206,17 +245,26 @@ impl Render for DialogWindow {
             .pl(theme.spacing.md)
             .pr(px(6.))
             .bg(theme.palette.surface_raised)
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |event, window, _| {
-                window_move::drag_from(event, window)
-            })
+            // The title is the drag area. The close button is outside it, so a press on it is never taken for a drag.
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(theme.typography.body)
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |event, window, _| {
+                        window_move::drag_from(event, window)
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(theme.typography.body)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    ),
             )
             .child(
                 components::icon_button("dialog-close", "x", &theme)

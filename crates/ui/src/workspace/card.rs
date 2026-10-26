@@ -14,14 +14,6 @@ use super::search::Hits;
 
 use crate::theme::{ActiveTheme, Theme};
 
-/// Compact is the board default, with many cards per screen. Detailed gives each field more room.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(debug_assertions), allow(dead_code))] // Detailed is used by the debug gallery until boards choose density.
-pub enum CardDensity {
-    Compact,
-    Detailed,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(debug_assertions), allow(dead_code))] // Set by the priority field, which isn't stored yet.
 pub enum Priority {
@@ -40,7 +32,7 @@ impl Priority {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Priority::High => "High priority",
             Priority::Medium => "Medium priority",
@@ -142,26 +134,21 @@ pub struct AssigneeMark {
 /// editor. Nothing is drawn there otherwise.
 pub fn task_card(
     view: CardView<'_>,
-    density: CardDensity,
     today: CalendarDate,
     theme: &Theme,
     extra: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
-    card_layout(&view, density, today, theme, extra)
+    card_layout(&view, today, theme, extra)
 }
 
-/// The one layout both densities share. Density changes spacing and line count, nothing else.
+/// The card's layout: the title, tags, a snippet, and the footer.
 fn card_layout(
     view: &CardView<'_>,
-    density: CardDensity,
     today: CalendarDate,
     theme: &Theme,
     extra: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
-    let (padding, gap, avatar) = match density {
-        CardDensity::Compact => (theme.spacing.xs, theme.spacing.xs, px(20.)),
-        CardDensity::Detailed => (theme.spacing.sm, theme.spacing.sm, px(24.)),
-    };
+    let (padding, gap, avatar) = (theme.spacing.xs, theme.spacing.xs, px(20.));
 
     div()
         .id(view.id.as_uuid())
@@ -178,7 +165,7 @@ fn card_layout(
         .border_1()
         .border_color(theme.palette.border)
         .text_size(theme.typography.body)
-        .child(title_row(view, density, theme))
+        .child(title_row(view, theme))
         .children(snippet_row(view.search.as_ref(), theme))
         .children(tag_row(&view.tags, view.search.as_ref(), theme))
         .children(hint_row(view.hint, theme))
@@ -210,7 +197,7 @@ fn snippet_row(hits: Option<&Hits>, theme: &Theme) -> Option<Div> {
     )
 }
 
-fn tag_row(tags: &[String], hits: Option<&Hits>, theme: &Theme) -> Option<Div> {
+pub(super) fn tag_row(tags: &[String], hits: Option<&Hits>, theme: &Theme) -> Option<Div> {
     if tags.is_empty() {
         return None;
     }
@@ -243,22 +230,32 @@ fn tag_row(tags: &[String], hits: Option<&Hits>, theme: &Theme) -> Option<Div> {
     Some(row)
 }
 
-fn title_row(view: &CardView<'_>, density: CardDensity, theme: &Theme) -> impl IntoElement + use<> {
-    // Both densities clamp the same element. Compact allows one line and detailed allows two.
-    let lines = match density {
-        CardDensity::Compact => 1,
-        CardDensity::Detailed => 2,
-    };
-    let title = div().flex_1().min_w_0().overflow_hidden().child(TitleText {
-        text: view.title.to_string().into(),
-        lines,
-        highlights: view
-            .search
-            .as_ref()
-            .map(|hits| hits.title.clone())
-            .unwrap_or_default(),
-        highlight: theme.palette.accent.opacity(0.35),
-    });
+/// The name that ties a card to the styles that change while the pointer is over it.
+pub(super) fn card_group(id: TaskId) -> String {
+    format!("card-{}", id.as_uuid())
+}
+
+fn title_row(view: &CardView<'_>, theme: &Theme) -> impl IntoElement + use<> {
+    // Two lines, so most names show whole. A longer one ends in an ellipsis.
+    let lines = 2;
+    // The title shows whole. While the pointer is on the card, its right edge stays clear for the edit pencil, so
+    // the title never runs under it.
+    let title = div()
+        .id(("card-title", view.id.as_uuid().as_u128() as u64))
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .group_hover(card_group(view.id), |style| style.pr(px(24.)))
+        .child(TitleText {
+            text: view.title.to_string().into(),
+            lines,
+            highlights: view
+                .search
+                .as_ref()
+                .map(|hits| hits.title.clone())
+                .unwrap_or_default(),
+            highlight: theme.palette.accent.opacity(0.35),
+        });
     // The marker sits beside the title in a flex row, which gives the title a definite width.
     div()
         .flex()
@@ -313,11 +310,33 @@ impl Element for TitleText {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Pixels) {
-        let line_height = window.text_style().line_height_in_pixels(window.rem_size());
+        let text_style = window.text_style();
+        let line_height = text_style.line_height_in_pixels(window.rem_size());
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let text = self.text.clone();
+        let max_lines = self.lines;
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = (line_height * self.lines as f32).into();
-        (window.request_layout(style, [], cx), line_height)
+        // The height follows the lines the title needs at the width it is given, up to the most lines allowed, so a short
+        // title takes one line and a long one takes two.
+        let layout = window.request_measured_layout(style, move |known, available, window, _cx| {
+            let width = known.width.unwrap_or(match available.width {
+                AvailableSpace::Definite(width) => width,
+                _ => px(100_000.),
+            });
+            let measure = |piece: &str| {
+                window
+                    .text_system()
+                    .layout_line(piece, font_size, &[text_style.to_run(piece.len())], None)
+                    .width
+            };
+            let used = cut_spans(&text, width, max_lines, measure)
+                .len()
+                .clamp(1, max_lines.max(1));
+            size(width, line_height * used as f32)
+        });
+        let _ = cx;
+        (layout, line_height)
     }
 
     fn prepaint(
@@ -382,7 +401,7 @@ impl Element for TitleText {
                 );
                 window.paint_quad(fill(area, self.highlight));
             }
-            let _ = line.paint(origin, *line_height, window, cx);
+            let _ = line.paint(origin, *line_height, TextAlign::Left, None, window, cx);
         }
     }
 }
@@ -618,103 +637,6 @@ pub fn format_due(date: CalendarDate, today: CalendarDate) -> String {
     } else {
         format!("{month} {}, {}", date.day, date.year)
     }
-}
-
-#[cfg(debug_assertions)]
-pub(super) fn gallery(theme: &Theme) -> impl IntoElement + use<> {
-    // Fixtures for the visual check. Compiled only in debug builds.
-    let today = CalendarDate::new(2026, 10, 13).expect("valid fixture date");
-    let long_no_spaces = "x".repeat(200);
-    type Case<'a> = (
-        &'a str,
-        Option<Priority>,
-        Option<&'a str>,
-        Option<u32>,
-        Option<CalendarDate>,
-    );
-    let cases: Vec<Case<'_>> = vec![
-        (
-            &long_no_spaces,
-            Some(Priority::High),
-            Some("Dana Kim"),
-            Some(6),
-            CalendarDate::new(2026, 10, 13),
-        ),
-        (
-            "Write the onboarding guide for the first week of every new workspace member",
-            Some(Priority::Medium),
-            Some("Ana María López"),
-            Some(90),
-            CalendarDate::new(2026, 10, 20),
-        ),
-        (
-            "田中太郎さんとのミーティング資料を準備する",
-            Some(Priority::Low),
-            Some("田中太郎"),
-            Some(45),
-            CalendarDate::new(2027, 1, 5),
-        ),
-        ("Fix login bug", None, None, None, None),
-        (
-            "Unassigned task with every field",
-            Some(Priority::High),
-            None,
-            Some(120),
-            CalendarDate::new(2026, 10, 13),
-        ),
-        (
-            "🚀 Ship the release",
-            Some(Priority::Low),
-            Some("Mo"),
-            Some(30),
-            None,
-        ),
-    ];
-
-    let column = |density: CardDensity| {
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .gap(theme.spacing.sm)
-            .p(theme.spacing.sm)
-            .children(cases.iter().enumerate().map(
-                |(index, (title, priority, assignee, estimate, due))| {
-                    task_card(
-                        CardView {
-                            id: TaskId::from_uuid(uuid::Uuid::from_u128(index as u128 + 1)),
-                            title,
-                            priority: *priority,
-                            assignee: assignee.map(|name| AssigneeMark {
-                                initials: looji_domain::initials(name),
-                                label: name.to_string(),
-                                colour: MemberColour::for_new_member(index),
-                            }),
-                            estimate_minutes: *estimate,
-                            due: *due,
-                            tags: Vec::new(),
-                            search: None,
-                            hint: false,
-                        },
-                        density,
-                        today,
-                        theme,
-                        None,
-                    )
-                },
-            ))
-    };
-
-    div()
-        .flex()
-        .flex_row()
-        .flex_1()
-        .min_h_0()
-        .gap(theme.spacing.md)
-        .p(theme.spacing.lg)
-        .child(column(CardDensity::Compact))
-        .child(column(CardDensity::Detailed))
 }
 
 /// The line that says why a task in progress has no date. Small and quiet: it doesn't block anything.

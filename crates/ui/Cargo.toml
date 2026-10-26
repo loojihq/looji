@@ -16,14 +16,17 @@ looji-domain.workspace = true
 looji-persistence.workspace = true
 looji-ai.workspace = true
 gpui.workspace = true
+gpui_platform.workspace = true
 unicode-segmentation = "1.13.3"
 uuid = "1.28.0"
 pulldown-cmark = "0.13.4"
 looji-report = { version = "0.0.1", path = "../report" }
 looji-updates = { version = "0.0.1", path = "../updates" }
 
+[build-dependencies]
+embed-resource = "3.0.12"
+
 [target.'cfg(target_os = "windows")'.dependencies]
-raw-window-handle = "0.6"
 windows = { version = "0.61.3", features = [
     "Wdk_System_SystemServices",
     "Win32_System_SystemInformation",
@@ -42,6 +45,7 @@ depends = "$auto"
 assets = [
     ["target/release/looji", "usr/bin/", "755"],
     ["../../packaging/linux/looji.desktop", "usr/share/applications/", "644"],
+    ["../../assets/branding/app-icon-512.png", "usr/share/icons/hicolor/512x512/apps/looji.png", "644"],
     ["../../README.md", "usr/share/doc/looji/", "644"],
 ]
 
@@ -49,5 +53,6 @@ assets = [
 assets = [
     { source = "target/release/looji", dest = "/usr/bin/looji", mode = "755" },
     { source = "../../packaging/linux/looji.desktop", dest = "/usr/share/applications/looji.desktop", mode = "644" },
+    { source = "../../assets/branding/app-icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/looji.png", mode = "644" },
     { source = "../../README.md", dest = "/usr/share/doc/looji/README.md", mode = "644", doc = true },
 ]

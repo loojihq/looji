@@ -1,25 +1,26 @@
-//! The working hours dialog: a project's workdays and daily hours, with the next five due dates for a
-//! sample five-hour task. It opens from the Hours button in the header and owns the keyboard while open.
+//! The working hours dialog: a project's workdays and daily hours, with a preview of when a sample task would be
+//! due. Start and end are picked from a list of times, in half hours, on the clock the project shows.
 //!
 //! Edits go to a draft. Nothing is stored until Save, and Save runs the same checks the store runs. Cancel,
 //! Escape, and a click outside the dialog discard the draft, after a prompt when there are unsaved changes.
-//! The dialog is modal, so the project can't change while it's open.
 //!
 //! Existing due dates don't change when the hours do. The dialog says so, because a date set under the old
 //! hours stays put.
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    DraftIssue, DueDate, LocalMoment, PREVIEW_COUNT, ProjectId, SAMPLE_ESTIMATE_HOURS,
-    ScheduleDraft, TIME_FORMAT_MESSAGE, Timestamp, WorkingSchedule, format_time, parse_time,
-    preview_due_dates, weekday,
+    Clock, DraftIssue, DueDate, LocalMoment, PREVIEW_COUNT, ProjectId, SAMPLE_ESTIMATE_HOURS,
+    ScheduleDraft, WorkingSchedule, format_clock_time, preview_due_dates, weekday,
 };
 use looji_persistence::ScheduleSaveError;
 
-use super::fields::{field, text_box};
+use super::fields::field;
 use super::task_dialog::button;
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components, theme::Theme};
+
+/// Times are offered in steps of this many minutes.
+const TIME_STEP: u16 = 30;
 
 const DAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_IDS: [&str; 7] = [
@@ -34,9 +35,7 @@ const DAY_IDS: [&str; 7] = [
 const MONTH_NAMES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-/// A time is at most `HH:MM` with the hour `24`, so five characters.
-const TIME_CHARS: usize = 5;
-const COPY: &str = "Existing due dates don't change. The new hours apply to tasks that move into progress from now on.";
+pub(super) const COPY: &str = "Existing due dates don't change. The new hours apply to tasks that move into progress from now on.";
 
 /// The controls the keyboard reaches, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,13 +71,12 @@ pub(super) struct ScheduleDialog {
     pub project: ProjectId,
     pub stored: ScheduleDraft,
     pub draft: ScheduleDraft,
-    /// The times as typed. The draft only takes a time that reads, so a partial entry stays here.
-    pub start_text: String,
-    pub end_text: String,
-    pub start_unreadable: bool,
-    pub end_unreadable: bool,
     /// The moment the preview counts from.
     pub anchor: LocalMoment,
+    /// The clock the times are shown on.
+    pub clock: Clock,
+    /// The time box whose list of times is open, if one is.
+    pub picker: Option<Control>,
     /// The rules the draft breaks, read from the draft on every change.
     pub issues: Vec<DraftIssue>,
     /// The next due dates for the sample task. Empty while the draft breaks a rule.
@@ -90,18 +88,22 @@ pub(super) struct ScheduleDialog {
 }
 
 impl ScheduleDialog {
-    /// Opens a draft copied from the stored schedule. `anchor` is passed in, so tests can fix it.
-    pub fn open(project: ProjectId, stored: WorkingSchedule, anchor: LocalMoment) -> Self {
+    /// Opens a draft copied from the stored schedule. `anchor` is passed in, so tests can fix it, and `clock` is how
+    /// the times are shown.
+    pub fn open(
+        project: ProjectId,
+        stored: WorkingSchedule,
+        anchor: LocalMoment,
+        clock: Clock,
+    ) -> Self {
         let draft = ScheduleDraft::from_schedule(&stored);
         let mut dialog = Self {
             project,
             stored: draft,
             draft,
-            start_text: format_time(stored.start()),
-            end_text: format_time(stored.end()),
-            start_unreadable: false,
-            end_unreadable: false,
             anchor,
+            clock,
+            picker: None,
             issues: Vec::new(),
             preview: Vec::new(),
             error: None,
@@ -119,53 +121,36 @@ impl ScheduleDialog {
         }
     }
 
-    /// Takes a start time only if it reads. Anything else leaves the last valid time in the draft.
-    pub fn set_start_text(&mut self, text: String) {
-        match parse_time(&text) {
-            Some(minutes) => {
-                self.draft.start = i64::from(minutes);
-                self.start_unreadable = false;
-            }
-            None => self.start_unreadable = true,
-        }
-        self.start_text = text;
+    /// Sets the start to a time from the list, and closes the list.
+    pub fn set_start(&mut self, minutes: u16) {
+        self.draft.start = i64::from(minutes);
+        self.picker = None;
         self.refresh();
     }
 
-    /// Takes an end time only if it reads. See `set_start_text`.
-    pub fn set_end_text(&mut self, text: String) {
-        match parse_time(&text) {
-            Some(minutes) => {
-                self.draft.end = i64::from(minutes);
-                self.end_unreadable = false;
-            }
-            None => self.end_unreadable = true,
-        }
-        self.end_text = text;
+    /// Sets the end to a time from the list, and closes the list.
+    pub fn set_end(&mut self, minutes: u16) {
+        self.draft.end = i64::from(minutes);
+        self.picker = None;
         self.refresh();
     }
 
-    /// Whether the draft differs from what's stored, including a time that's typed but doesn't read.
+    /// Whether the draft differs from what's stored.
     pub fn dirty(&self) -> bool {
-        self.draft != self.stored || self.start_unreadable || self.end_unreadable
+        self.draft != self.stored
     }
 
-    /// Whether Save can be used: the draft breaks no rule and both times read.
+    /// Whether Save can be used: the draft breaks no rule.
     pub fn can_save(&self) -> bool {
-        self.issues.is_empty() && !self.start_unreadable && !self.end_unreadable
+        self.issues.is_empty()
     }
 
     /// The messages to show, in order. Empty when the hours can be saved.
     pub fn problems(&self) -> Vec<String> {
-        let mut problems = Vec::new();
-        if self.start_unreadable {
-            problems.push(format!("Start time: {TIME_FORMAT_MESSAGE}"));
-        }
-        if self.end_unreadable {
-            problems.push(format!("End time: {TIME_FORMAT_MESSAGE}"));
-        }
-        problems.extend(self.issues.iter().map(|issue| issue.message().to_string()));
-        problems
+        self.issues
+            .iter()
+            .map(|issue| issue.message().to_string())
+            .collect()
     }
 
     /// Reads the draft again: the rules it breaks, and the preview if it has none. This is the only place the
@@ -187,41 +172,11 @@ impl ScheduleDialog {
     }
 }
 
-/// The text the Hours button shows.
-pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button_icon(
-        "schedule-open",
-        "clock",
-        "Hours",
-        crate::components::Variant::Secondary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_schedule_dialog(window, cx)))
-}
-
 impl WorkspaceView {
-    /// Opens the dialog for the selected project, with its stored hours in the draft. Nothing opens when no
-    /// project is selected.
-    pub(super) fn open_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active() else {
-            return;
-        };
-        let anchor = LocalMoment::from_timestamp_utc(Timestamp::now());
-        self.schedule_dialog = Some(ScheduleDialog::open(
-            project.id(),
-            project.working_schedule(),
-            anchor,
-        ));
-        // The form shows under Working hours on the Preferences screen.
-        self.open_preferences(cx);
-        self.schedule_focus[0].focus(window);
-        cx.notify();
-    }
-
     /// Closes the dialog and gives the keyboard back to the workspace. Discards the draft.
     fn close_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.schedule_dialog = None;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -254,9 +209,9 @@ impl WorkspaceView {
             .map(|(control, _)| *control)
     }
 
-    fn focus_schedule_control(&self, control: Control, window: &mut Window) {
+    fn focus_schedule_control(&self, control: Control, window: &mut Window, cx: &mut App) {
         if let Some(index) = CONTROLS.iter().position(|candidate| *candidate == control) {
-            self.schedule_focus[index].focus(window);
+            self.schedule_focus[index].focus(window, cx);
         }
     }
 
@@ -278,7 +233,7 @@ impl WorkspaceView {
         } else {
             (current + 1) % count
         };
-        self.schedule_focus[next].focus(window);
+        self.schedule_focus[next].focus(window, cx);
         cx.notify();
     }
 
@@ -286,42 +241,44 @@ impl WorkspaceView {
         if let Some(dialog) = self.schedule_dialog.as_mut() {
             dialog.toggle_day(day);
         }
-        self.focus_schedule_control(Control::Day(day), window);
+        self.focus_schedule_control(Control::Day(day), window, cx);
         cx.notify();
     }
 
-    /// Types into a time. Only digits and a colon are taken, and the text is kept to the length of a time.
-    fn edit_schedule_time(
+    /// Opens the list of times for one time box, or closes it when it's already open.
+    fn toggle_time_picker(
         &mut self,
         control: Control,
-        keystroke: &Keystroke,
-        modifier: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(dialog) = self.schedule_dialog.as_mut() else {
-            return;
-        };
-        let current = match control {
-            Control::Start => dialog.start_text.clone(),
-            Control::End => dialog.end_text.clone(),
-            _ => return,
-        };
-        let mut next = current;
-        if keystroke.key == "backspace" {
-            next.pop();
-        } else if !modifier
-            && let Some(typed) = typed_text(keystroke)
-            && typed.chars().all(|c| c.is_ascii_digit() || c == ':')
-            && next.chars().count() + typed.chars().count() <= TIME_CHARS
-        {
-            next.push_str(typed);
-        } else {
-            return;
+        self.focus_schedule_control(control, window, cx);
+        if let Some(dialog) = self.schedule_dialog.as_mut() {
+            dialog.picker = if dialog.picker == Some(control) {
+                None
+            } else {
+                Some(control)
+            };
         }
-        match control {
-            Control::Start => dialog.set_start_text(next),
-            Control::End => dialog.set_end_text(next),
-            _ => {}
+        cx.notify();
+    }
+
+    /// Closes the list of times, if one is open.
+    pub(super) fn close_time_picker(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.schedule_dialog.as_mut()
+            && dialog.picker.take().is_some()
+        {
+            cx.notify();
+        }
+    }
+
+    /// Picks a time from the list for one time box.
+    fn choose_schedule_time(&mut self, control: Control, minutes: u16, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.schedule_dialog.as_mut() {
+            match control {
+                Control::Start => dialog.set_start(minutes),
+                _ => dialog.set_end(minutes),
+            }
         }
         cx.notify();
     }
@@ -371,8 +328,8 @@ impl WorkspaceView {
         }
     }
 
-    /// Keys while the dialog is open. Escape closes, Tab moves between controls, Space or Enter toggles a
-    /// day, and typing edits a time.
+    /// Keys while the dialog is open. Escape closes the list of times first and then the dialog, Tab moves between
+    /// controls, and Space or Enter opens a time's list or toggles a day.
     pub(super) fn schedule_dialog_key(
         &mut self,
         event: &KeyDownEvent,
@@ -390,27 +347,29 @@ impl WorkspaceView {
             }
             return;
         }
-        let modifiers = event.keystroke.modifiers;
+        let picking = dialog.picker.is_some();
+        let shift = event.keystroke.modifiers.shift;
         match key {
+            "escape" if picking => return self.close_time_picker(cx),
             "escape" => return self.request_schedule_close(window, cx),
-            "tab" => return self.move_schedule_focus(modifiers.shift, window, cx),
+            "tab" => return self.move_schedule_focus(shift, window, cx),
             _ => {}
         }
-        let modifier = modifiers.control || modifiers.alt || modifiers.platform;
         match self.focused_schedule_control(window) {
-            Some(Control::Start | Control::End) if key == "enter" => {
-                self.save_schedule_dialog(window, cx)
+            Some(control @ (Control::Start | Control::End)) if matches!(key, "enter" | "space") => {
+                self.toggle_time_picker(control, window, cx)
             }
-            Some(control @ (Control::Start | Control::End)) => {
-                self.edit_schedule_time(control, &event.keystroke, modifier, cx)
+            Some(Control::Day(day)) if matches!(key, "enter" | "space") => {
+                self.toggle_schedule_day(day, window, cx)
             }
+            Some(Control::Save) if key == "enter" => self.save_schedule_dialog(window, cx),
             _ => {}
         }
     }
 }
 
-/// A day of the week as a pill. The tick and the label say whether it's a workday; the fill and the focus ring
-/// repeat that, so colour isn't the only sign.
+/// A day of the week as a square: filled when it's a workday, outlined when it isn't. There's no tick, so the
+/// state is the fill alone.
 fn day_pill(
     day: usize,
     selected: bool,
@@ -419,67 +378,101 @@ fn day_pill(
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let label = if selected {
-        format!("✓ {}", DAY_NAMES[day])
-    } else {
-        DAY_NAMES[day].to_string()
-    };
     div()
         .id(DAY_IDS[day])
         .track_focus(handle)
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(48.))
+        .h(px(36.))
         .rounded(theme.radius.md)
         .border_1()
         .border_color(if focused {
             theme.palette.accent
         } else {
-            theme.palette.border_control
+            theme.palette.border
         })
         .text_size(theme.typography.caption)
+        .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .when(selected, |pill| {
-            pill.bg(theme.palette.surface_selected)
-                .text_color(theme.palette.text_primary)
+            pill.bg(theme.palette.accent)
+                .text_color(theme.palette.on_accent)
         })
         .when(!selected, |pill| {
-            pill.text_color(theme.palette.text_secondary)
+            pill.bg(theme.palette.surface)
+                .text_color(theme.palette.text_secondary)
                 .hover(|style| style.bg(theme.palette.surface_hover))
         })
-        .child(label)
+        .child(DAY_NAMES[day])
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.toggle_schedule_day(day, window, cx)
         }))
 }
 
-/// A time box for the start or the end. Clicking it gives it the keyboard, and a time that doesn't read shows
-/// the format message.
+/// The times a time box offers, in order. A start can be any step before midnight, and an end any step after
+/// the start of the day, up to 24:00.
+pub(super) fn time_choices(control: Control) -> Vec<u16> {
+    match control {
+        Control::End => (TIME_STEP..=24 * 60)
+            .step_by(usize::from(TIME_STEP))
+            .collect(),
+        _ => (0..24 * 60).step_by(usize::from(TIME_STEP)).collect(),
+    }
+}
+
+/// A time box for the start or the end. It shows the time, and a click opens the list of times to pick from.
 fn time_box(
     control: Control,
-    value: &str,
-    unreadable: bool,
-    focused: bool,
+    dialog: &ScheduleDialog,
     handle: &FocusHandle,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let (label, id) = match control {
-        Control::Start => ("Start", "schedule-start"),
-        _ => ("End", "schedule-end"),
+    let (label, id, value) = match control {
+        Control::Start => ("Start", "schedule-start", dialog.draft.start),
+        _ => ("End", "schedule-end", dialog.draft.end),
     };
-    field(
-        label,
-        unreadable.then_some(TIME_FORMAT_MESSAGE),
-        div()
-            .id(id)
-            .track_focus(handle)
-            .child(text_box(value, "HH:MM", focused, theme))
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.focus_schedule_control(control, window);
-                cx.notify();
-            })),
-        theme,
-    )
+    let minutes = u16::try_from(value).unwrap_or(0);
+    let open = dialog.picker == Some(control);
+
+    let trigger = components::select(id, &format_clock_time(minutes, dialog.clock), open, theme)
+        .w_full()
+        .track_focus(handle)
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.toggle_time_picker(control, window, cx)
+        }));
+    let mut wrapper = div()
+        .relative()
+        .w(px(150.))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(trigger);
+    if open {
+        let rows: Vec<AnyElement> = time_choices(control)
+            .into_iter()
+            .enumerate()
+            .map(|(index, choice)| {
+                components::dropdown_row(
+                    format!("{id}-time-{index}"),
+                    &format_clock_time(choice, dialog.clock),
+                    choice == minutes,
+                    false,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.choose_schedule_time(control, choice, cx)
+                }))
+                .into_any_element()
+            })
+            .collect();
+        wrapper = wrapper.child(deferred(components::dropdown_menu(
+            format!("{id}-menu"),
+            rows,
+            theme,
+        )));
+    }
+    field(label, None, wrapper, theme)
 }
 
 /// The handle of one control, found by its place in `CONTROLS`.
@@ -517,11 +510,6 @@ pub(super) fn panel(
             .position(|candidate| *candidate == control)
             .is_some_and(|index| focus[index].is_focused(window))
     };
-    let project = view
-        .projects
-        .find_by_id(dialog.project)
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
 
     let mut pills = div().flex().flex_row().flex_wrap().gap(theme.spacing.xs);
     for (day, handle) in focus.iter().enumerate().take(DAY_NAMES.len()) {
@@ -542,48 +530,30 @@ pub(super) fn panel(
         .gap(theme.spacing.md)
         .child(time_box(
             Control::Start,
-            &dialog.start_text,
-            dialog.start_unreadable,
-            focused(Control::Start),
+            dialog,
             handle_for(focus, Control::Start),
             theme,
             cx,
         ))
         .child(time_box(
             Control::End,
-            &dialog.end_text,
-            dialog.end_unreadable,
-            focused(Control::End),
+            dialog,
             handle_for(focus, Control::End),
             theme,
             cx,
         ));
 
-    // Read from the view state, which the dialog wrote when the draft last changed. Nothing is calculated here.
-    let preview = (!dialog.preview.is_empty()).then(|| {
-        let mut list = div().flex().flex_col().gap(theme.spacing.xs);
-        for day in &dialog.preview {
-            list = list.child(
-                div()
-                    .text_size(theme.typography.body)
-                    .child(describe_day(*day)),
-            );
-        }
+    // One sentence, from the view state the dialog wrote when the draft last changed. The list of dates is gone:
+    // the first one is enough to show what the hours do.
+    let preview = dialog.preview.first().map(|day| {
         div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.xs)
-            .child(
-                div()
-                    .text_size(theme.typography.caption)
-                    .text_color(theme.palette.text_secondary)
-                    .child(format!(
-                        "Next {PREVIEW_COUNT} due dates for a {SAMPLE_ESTIMATE_HOURS:.0}-hour task"
-                    )),
-            )
-            .child(list)
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child(format!(
+                "A {SAMPLE_ESTIMATE_HOURS:.0}-hour task that starts today is due {}.",
+                describe_day(*day)
+            ))
     });
-
     let problems = dialog.problems();
     let blocked = !dialog.can_save();
     let save_focus = handle_for(focus, Control::Save);
@@ -602,19 +572,14 @@ pub(super) fn panel(
         .flex_col()
         .gap(theme.spacing.md)
         .w_full()
+        .h_full()
         .p(theme.spacing.lg)
         .bg(theme.palette.surface_raised)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .text_size(theme.typography.title)
-                .child("Working hours"),
-        )
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(format!("{project}. {COPY}")),
+        // A press outside the time boxes closes an open list of times.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_time_picker(cx)),
         )
         .child(field("Workdays", None, days, theme))
         .child(times)
@@ -641,6 +606,8 @@ pub(super) fn panel(
                     .child(message),
             )
         })
+        // The buttons sit at the bottom of the section, wherever the hours end.
+        .child(div().flex_1())
         .child(
             div()
                 .flex()
@@ -648,17 +615,21 @@ pub(super) fn panel(
                 .justify_end()
                 .gap(theme.spacing.sm)
                 .child(
-                    button("schedule-cancel", "Cancel", false, theme)
-                        .track_focus(handle_for(focus, Control::Cancel))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.request_schedule_close(window, cx)
-                        })),
+                    button("schedule-discard", "Discard changes", false, theme)
+                        .when(!dialog.dirty(), |button| {
+                            button.opacity(0.5).cursor_default()
+                        })
+                        .when(dialog.dirty(), |button| {
+                            button.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.reset_working_hours(window, cx)
+                            }))
+                        }),
                 )
                 .child(save),
         );
 
     // The panel fills the window. An unsaved-changes prompt is drawn over it, in the same window.
-    let mut layer = div().relative().size_full().child(panel);
+    let mut layer = div().relative().flex_1().min_h_0().w_full().child(panel);
     if dialog.confirming_discard {
         layer = layer.child(discard_prompt(theme, cx));
     }
@@ -719,10 +690,13 @@ fn discard_prompt(theme: &Theme, cx: &mut Context<WorkspaceView>) -> AnyElement 
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui's `test` macro would shadow `#[test]`.
-    use super::ScheduleDialog;
-    use looji_domain::{DueDate, LocalMoment, ProjectId, ScheduleDraft, Workdays, WorkingSchedule};
+    use super::{Control, ScheduleDialog, time_choices};
+    use looji_domain::{
+        Clock, DueDate, LocalMoment, ProjectId, ScheduleDraft, Workdays, WorkingSchedule,
+    };
 
     const NO_WORKDAYS_MESSAGE: &str = "Select at least one workday to save.";
+    const START_BEFORE_END_MESSAGE: &str = "The start time must be before the end time.";
 
     fn anchor() -> LocalMoment {
         // Monday 12 October 2026 at 09:00.
@@ -730,7 +704,7 @@ mod tests {
     }
 
     fn open(schedule: WorkingSchedule) -> ScheduleDialog {
-        ScheduleDialog::open(ProjectId::new(), schedule, anchor())
+        ScheduleDialog::open(ProjectId::new(), schedule, anchor(), Clock::TwentyFour)
     }
 
     #[test]
@@ -740,10 +714,9 @@ mod tests {
             dialog.draft,
             ScheduleDraft::from_schedule(&WorkingSchedule::default())
         );
-        assert_eq!(dialog.start_text, "09:00");
-        assert_eq!(dialog.end_text, "17:00");
         assert!(!dialog.dirty());
         assert!(dialog.can_save());
+        assert_eq!(dialog.picker, None);
     }
 
     #[test]
@@ -772,51 +745,36 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_hours_changes_the_preview_on_the_same_anchor() {
+    fn a_picked_end_changes_the_preview_on_the_same_anchor() {
         // Five hours from 09:00 on Monday finish that day at 14:00, so the first date is Monday. With the day
         // ending at 12:00 there are three hours on Monday, and the rest falls on Tuesday.
         let mut dialog = open(WorkingSchedule::default());
         assert_eq!(dialog.preview[0], DueDate::new(2026, 10, 12).unwrap());
 
-        dialog.set_end_text("12:00".to_string());
+        dialog.set_end(12 * 60);
 
         assert_eq!(dialog.preview[0], DueDate::new(2026, 10, 13).unwrap());
     }
 
     #[test]
-    fn a_partial_time_is_not_committed_to_the_draft() {
+    fn a_picked_time_is_saved_to_the_draft_and_closes_the_list() {
         let mut dialog = open(WorkingSchedule::default());
-        let before = dialog.draft;
-
-        dialog.set_start_text("1".to_string());
-        assert_eq!(dialog.draft, before, "\"1\" must not reach the draft");
-        assert!(dialog.start_unreadable);
-        assert!(!dialog.can_save());
-
-        dialog.set_start_text("1:".to_string());
-        assert_eq!(dialog.draft, before, "\"1:\" must not reach the draft");
-        assert!(dialog.dirty());
-    }
-
-    #[test]
-    fn a_time_that_reads_is_committed_and_clears_the_unreadable_flag() {
-        let mut dialog = open(WorkingSchedule::default());
-        dialog.set_start_text("1:".to_string());
-        dialog.set_start_text("08:30".to_string());
+        dialog.picker = Some(Control::Start);
+        dialog.set_start(8 * 60 + 30);
         assert_eq!(dialog.draft.start, 8 * 60 + 30);
-        assert!(!dialog.start_unreadable);
-        assert!(dialog.can_save());
+        assert_eq!(dialog.picker, None);
+        assert!(dialog.dirty());
     }
 
     #[test]
     fn a_start_equal_to_the_end_blocks_save_with_its_message() {
         let mut dialog = open(WorkingSchedule::default());
-        dialog.set_start_text("17:00".to_string());
+        dialog.set_start(17 * 60);
         assert!(!dialog.can_save());
         assert!(
             dialog
                 .problems()
-                .contains(&"The start time must be before the end time.".to_string())
+                .contains(&START_BEFORE_END_MESSAGE.to_string())
         );
     }
 
@@ -841,5 +799,16 @@ mod tests {
                 .unwrap();
         let expected = looji_domain::preview_due_dates(&schedule, anchor(), 5).unwrap();
         assert_eq!(dialog.preview, expected);
+    }
+
+    #[test]
+    fn a_start_can_be_any_half_hour_before_midnight_and_an_end_can_reach_midnight() {
+        let starts = time_choices(Control::Start);
+        assert_eq!(starts.first(), Some(&0));
+        assert_eq!(starts.last(), Some(&(23 * 60 + 30)));
+        let ends = time_choices(Control::End);
+        assert_eq!(ends.first(), Some(&30));
+        assert_eq!(ends.last(), Some(&(24 * 60)));
+        assert!(starts.iter().chain(&ends).all(|minute| minute % 30 == 0));
     }
 }

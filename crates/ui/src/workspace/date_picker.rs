@@ -361,12 +361,12 @@ impl WorkspaceView {
             DateTarget::TaskStart => self
                 .task_dialog
                 .as_ref()
-                .map(|dialog| dialog.form.values.start.clone())
+                .map(|dialog| dialog.form.values.start.as_str().to_string())
                 .unwrap_or_default(),
             DateTarget::TaskDue => self
                 .task_dialog
                 .as_ref()
-                .map(|dialog| dialog.form.values.due.clone())
+                .map(|dialog| dialog.form.values.due.as_str().to_string())
                 .unwrap_or_default(),
             DateTarget::PlanTarget => self
                 .plan_wizard
@@ -421,13 +421,13 @@ impl WorkspaceView {
         match calendar.target {
             DateTarget::TaskStart => {
                 if let Some(dialog) = self.task_dialog.as_mut() {
-                    dialog.form.values.start = value;
+                    dialog.form.values.start = value.into();
                     dialog.form.focus(Field::Start);
                 }
             }
             DateTarget::TaskDue => {
                 if let Some(dialog) = self.task_dialog.as_mut() {
-                    dialog.form.values.due = value;
+                    dialog.form.values.due = value.into();
                     dialog.form.focus(Field::Due);
                 }
             }

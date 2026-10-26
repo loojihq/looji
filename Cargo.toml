@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["third_party/*"]
 
 [workspace.package]
 version = "0.0.1"
@@ -12,8 +11,5 @@ publish = false
 looji-domain = { path = "crates/domain" }
 looji-persistence = { path = "crates/persistence" }
 looji-ai = { path = "crates/ai" }
-gpui = "0.2.2"
-
-# Patched for Linux. See third_party/README.md.
-[patch.crates-io]
-xattr = { path = "third_party/xattr" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "bed9563afc7af5363821f5547f7766c77c57e497" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "bed9563afc7af5363821f5547f7766c77c57e497" }

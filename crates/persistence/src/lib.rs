@@ -1,5 +1,6 @@
 //! SQLite storage: where the database lives, how it is opened, and how its schema evolves.
 
+pub mod attachments;
 pub mod backup;
 pub mod file_tree;
 pub mod icons;

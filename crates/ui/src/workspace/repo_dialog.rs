@@ -14,11 +14,10 @@ use looji_domain::{
 };
 use looji_persistence::{repo_folder::check_repo_folder, wsl::start_distro};
 
-use super::fields::text_box;
 use super::task_dialog::button;
 use super::team_dialog::error_text;
-use super::{WorkspaceView, store, typed_text};
-use crate::theme::Theme;
+use super::{WorkspaceView, store};
+use crate::{components::edit_box, text_edit::TextEdit, theme::Theme};
 
 /// What the dialog shows for the project's folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,17 +41,17 @@ pub(super) struct Source {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RepoDialog {
     pub project: ProjectId,
-    pub draft: String,
+    pub draft: TextEdit,
     pub error: Option<String>,
     /// The WSL distribution the last attempt found stopped, so the dialog can offer to start it.
     pub stopped: Option<String>,
 }
 
 impl RepoDialog {
-    fn new(project: ProjectId) -> Self {
+    pub(super) fn new(project: ProjectId) -> Self {
         Self {
             project,
-            draft: String::new(),
+            draft: TextEdit::default(),
             error: None,
             stopped: None,
         }
@@ -60,21 +59,6 @@ impl RepoDialog {
 }
 
 impl WorkspaceView {
-    /// Opens the dialog for the selected project and checks its folder again, so the badge reflects the disk now.
-    pub(super) fn open_repo_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(project) = self.projects.active_id() else {
-            return;
-        };
-        self.repo_dialog = Some(RepoDialog::new(project));
-        let main = cx.entity();
-        cx.defer(move |cx| {
-            super::dialog_window::open(cx, main, super::dialog_window::Kind::Repository)
-        });
-        self.refresh_code_source(cx);
-        self.focus_handle.focus(window);
-        cx.notify();
-    }
-
     pub(super) fn close_repo_dialog(&mut self, cx: &mut Context<Self>) {
         self.repo_dialog = None;
         cx.notify();
@@ -210,7 +194,7 @@ impl WorkspaceView {
             shown: Shown::Checking,
         });
         if let Some(dialog) = self.repo_dialog.as_mut() {
-            dialog.draft = path.clone();
+            dialog.draft = TextEdit::new(path.clone());
             dialog.error = None;
             dialog.stopped = None;
         }
@@ -356,47 +340,27 @@ impl WorkspaceView {
 
     /// Keys while the dialog is open. Enter connects what's typed, and Escape closes the dialog.
     pub(super) fn repo_dialog_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         match event.keystroke.key.as_str() {
             "escape" => self.close_repo_dialog(cx),
             "enter" => {
-                if let Some(draft) = self.repo_dialog.as_ref().map(|dialog| dialog.draft.clone()) {
+                if let Some(draft) = self
+                    .repo_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.draft.as_str().to_string())
+                {
                     self.connect_folder(draft, cx);
                 }
             }
-            "backspace" => {
-                if let Some(dialog) = self.repo_dialog.as_mut() {
-                    dialog.draft.pop();
-                    dialog.error = None;
-                    cx.notify();
-                }
-            }
             _ => {
-                if modifier {
-                    return;
-                }
-                if let Some(text) = typed_text(&event.keystroke)
-                    && let Some(dialog) = self.repo_dialog.as_mut()
+                if let Some(dialog) = self.repo_dialog.as_mut()
+                    && dialog.draft.handle_key(&event.keystroke)
                 {
-                    dialog.draft.push_str(text);
                     dialog.error = None;
                     cx.notify();
                 }
             }
         }
     }
-}
-
-/// The repository button in the header. It's drawn only while a project is selected.
-pub(super) fn open_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
-    crate::components::button_icon(
-        "repo-open",
-        "git-branch",
-        "Repository",
-        crate::components::Variant::Secondary,
-        theme,
-    )
-    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_repo_dialog(window, cx)))
 }
 
 /// The repository dialog, drawn over the window. Nothing is drawn when it isn't open.
@@ -406,11 +370,7 @@ pub(super) fn panel(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let dialog = view.repo_dialog.as_ref()?;
-    let project = view
-        .projects
-        .active()
-        .map(|project| project.name().to_string())
-        .unwrap_or_default();
+
     let shown = match &view.code_source {
         Some(source) if source.project == dialog.project => source.shown.clone(),
         _ => Shown::Checking,
@@ -431,7 +391,53 @@ pub(super) fn panel(
         _ => None,
     });
 
-    let mut actions = div().flex().flex_row().gap(theme.spacing.sm).justify_end();
+    // A project has one repository. While one is connected, the folder field gives way to changing or
+    // dropping it, so there is never a second way to connect beside the one that is.
+    let browse_label = if broken {
+        "Locate again"
+    } else if stored.is_some() {
+        "Change folder"
+    } else {
+        "Browse"
+    };
+
+    // The folder to connect, with Connect beside it. Enter in the field connects it too.
+    let folder = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .child(
+            div()
+                .id("repo-path-field")
+                .flex_1()
+                .min_w_0()
+                .child(edit_box(
+                    &dialog.draft,
+                    "Path to the repository folder",
+                    true,
+                    theme,
+                )),
+        )
+        .child(
+            button("repo-connect", "Connect", true, theme).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    if let Some(draft) = this
+                        .repo_dialog
+                        .as_ref()
+                        .map(|dialog| dialog.draft.as_str().to_string())
+                    {
+                        this.connect_folder(draft, cx);
+                    }
+                },
+            )),
+        );
+
+    // The other ways to change the folder, in one row: browse for it, start a stopped distribution, or forget it.
+    let mut actions = div().flex().flex_row().gap(theme.spacing.sm).child(
+        button("repo-browse", browse_label, false, theme)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx))),
+    );
     if let Some(distro) = stopped {
         actions = actions.child(
             button("repo-start", &format!("Start {distro}"), true, theme).on_click(cx.listener(
@@ -445,94 +451,22 @@ pub(super) fn panel(
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.disconnect_folder(cx))),
         );
     }
-    let browse_label = if broken { "Locate again" } else { "Browse" };
+
     let panel = div()
         .id("repo-panel")
         .flex()
         .flex_col()
         .gap(theme.spacing.md)
         .w_full()
-        .p(theme.spacing.lg)
-        .bg(theme.palette.surface_raised)
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(
-            div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(format!("The local git repository for {project}")),
-        )
-        // A row keeps the badge its own width; the panel is a column, which would stretch it.
-        .child(div().flex().flex_row().child(badge(&shown, theme)))
         .child(status_text(&shown, theme))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.spacing.sm)
-                .child(
-                    div()
-                        .id("repo-path-field")
-                        .flex_1()
-                        .min_w_0()
-                        .child(text_box(
-                            &dialog.draft,
-                            "Folder path, then press Enter",
-                            true,
-                            theme,
-                        )),
-                )
-                .child(
-                    button("repo-connect", "Connect", true, theme).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            if let Some(draft) =
-                                this.repo_dialog.as_ref().map(|dialog| dialog.draft.clone())
-                            {
-                                this.connect_folder(draft, cx);
-                            }
-                        },
-                    )),
-                ),
-        )
-        .child(
-            button("repo-browse", browse_label, false, theme)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_repo_folder(cx))),
-        )
+        .when(stored.is_none(), |panel| panel.child(folder))
         .when_some(dialog.error.clone(), |panel, message| {
             panel.child(error_text(message, theme))
         })
-        .child(
-            actions.child(
-                button("repo-done", "Done", false, theme).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.close_repo_dialog(cx)),
-                ),
-            ),
-        );
+        .child(actions);
 
     Some(panel.into_any_element())
-}
-
-/// The status as a small labelled badge.
-fn badge(shown: &Shown, theme: &Theme) -> Div {
-    let (label, colour) = match shown {
-        Shown::Checking => ("Checking", theme.palette.text_disabled),
-        Shown::Known(CodeSourceStatus::Connected { .. }) => ("Connected", theme.palette.accent),
-        Shown::Known(CodeSourceStatus::Broken { .. }) | Shown::Failed(_) => {
-            ("Broken", theme.palette.danger)
-        }
-        Shown::Known(CodeSourceStatus::NotConnected) => {
-            ("Not connected", theme.palette.text_secondary)
-        }
-    };
-    div()
-        .px(theme.spacing.sm)
-        .py(theme.spacing.xs)
-        .rounded(theme.radius.md)
-        .border_1()
-        .border_color(colour)
-        .text_color(colour)
-        .text_size(theme.typography.caption)
-        .child(label)
 }
 
 /// What the status means for the user: the saved path, the reason it's broken, or what to do next.
@@ -545,9 +479,22 @@ fn status_text(shown: &Shown, theme: &Theme) -> Div {
         Shown::Known(CodeSourceStatus::NotConnected) => body
             .text_color(theme.palette.text_secondary)
             .child("Choose the folder that holds this project's git repository."),
+        // One repository per project, so the connected folder is shown as the answer, with its path under it.
         Shown::Known(CodeSourceStatus::Connected { path }) => body
-            .text_color(theme.palette.text_secondary)
-            .child(format!("Connected to {path}")),
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.xs)
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(theme.typography.body)
+                    .child("Connected"),
+            )
+            .child(
+                div()
+                    .text_color(theme.palette.text_secondary)
+                    .child(path.clone()),
+            ),
         Shown::Known(CodeSourceStatus::Broken { path, reason }) => body
             .flex()
             .flex_col()

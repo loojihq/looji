@@ -369,7 +369,7 @@ impl WorkspaceView {
                     self.watch_keyboard_focus(window, cx);
                     // The held card leaves its slot while the placeholder shows, so keys go to the
                     // workspace until the card is dropped or cancelled.
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                 }
                 // The hold shows what a mouse drag shows: the source dimmed, and the landing as
                 // the placeholder.
@@ -402,7 +402,7 @@ impl WorkspaceView {
                     self.drag.session.clear_hold();
                     self.drag.keyboard_activation = None;
                     // Dropped or cancelled, focus stays on the card that was moved.
-                    self.drag.focus_handle(held, cx).focus(window);
+                    self.drag.focus_handle(held, cx).focus(window, cx);
                 }
             }
         }

@@ -22,8 +22,8 @@ use looji_domain::{
 };
 use looji_persistence::{SqliteStore, repo_index::IndexError};
 
-use super::{WorkspaceView, fields::text_box, store, task_dialog::button, typed_text};
-use crate::{database::AppDatabase, theme::Theme};
+use super::{WorkspaceView, store, task_dialog::button};
+use crate::{components::edit_box, database::AppDatabase, text_edit::TextEdit, theme::Theme};
 
 /// How often the reader checks the stream for new text.
 const TICK: Duration = Duration::from_millis(60);
@@ -43,14 +43,17 @@ pub(super) struct Active {
 
 /// An open chat. The messages are reloaded from the store after each change, so the dialog always shows what's saved.
 pub(super) struct ChatDialog {
+    /// The task the conversation is about. For a conversation about the whole project, the project's own id.
     pub task: TaskId,
     pub project: ProjectId,
+    /// The conversation is about the project's whole codebase, not one task.
+    pub whole_project: bool,
     pub title: String,
     pub description: String,
     pub status: String,
     pub thread: Option<ChatThreadId>,
     pub messages: Vec<ChatMessage>,
-    pub draft: String,
+    pub draft: TextEdit,
     pub model: String,
     /// Shown when the saved model was removed and the default was used instead.
     pub model_notice: Option<String>,
@@ -73,6 +76,29 @@ struct Launch {
     title: String,
     description: String,
     status: String,
+    whole_project: bool,
+}
+
+/// What a conversation is about, when it opens.
+struct Subject {
+    owner: TaskId,
+    project: ProjectId,
+    title: String,
+    description: String,
+    status: String,
+    whole_project: bool,
+}
+
+/// The button in the project header that opens a chat about the project's whole codebase.
+pub(super) fn codebase_button(theme: &Theme, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+    crate::components::button_icon(
+        "project-ask-ai",
+        "sparkles",
+        "Ask AI",
+        crate::components::Variant::Secondary,
+        theme,
+    )
+    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_project_chat(window, cx)))
 }
 
 fn model_key(task: TaskId) -> String {
@@ -86,26 +112,77 @@ fn code_key(task: TaskId) -> String {
 impl WorkspaceView {
     /// Opens the chat for the selected task. Nothing opens when no task is selected.
     pub(super) fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(panel) = self.panel.as_ref() else {
+        let Some(task_id) = self.panel.as_ref().map(|panel| panel.task) else {
             return;
         };
-        let task_id = panel.task;
+        self.open_chat_for(task_id, window, cx);
+    }
+
+    /// Opens the AI chat about one task. Nothing opens when the task is no longer on the board.
+    pub(super) fn open_chat_for(
+        &mut self,
+        task_id: TaskId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(task) = self.board.iter().find(|task| task.id() == task_id).cloned() else {
             return;
         };
         let Some(project) = self.projects.active_id() else {
             return;
         };
+        let subject = Subject {
+            owner: task_id,
+            project,
+            title: task.title().to_string(),
+            description: task.description().to_string(),
+            status: task.status().as_str().to_string(),
+            whole_project: false,
+        };
+        self.open_chat_subject(subject, window, cx);
+    }
+
+    /// Opens the AI chat about the open project's whole codebase. It is saved with the project, under the project's
+    /// own id.
+    pub(super) fn open_project_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active() else {
+            return;
+        };
+        let id = project.id();
+        let subject = Subject {
+            owner: TaskId::from_uuid(id.as_uuid()),
+            project: id,
+            title: project.name().to_string(),
+            description: project.description().unwrap_or_default().to_string(),
+            status: String::new(),
+            whole_project: true,
+        };
+        self.open_chat_subject(subject, window, cx);
+    }
+
+    fn open_chat_subject(&mut self, subject: Subject, window: &mut Window, cx: &mut Context<Self>) {
+        let Subject {
+            owner: task_id,
+            project,
+            title,
+            description,
+            status,
+            whole_project,
+        } = subject;
         let saved = store(cx).get_setting(&model_key(task_id)).ok().flatten();
         let choice = resolve_model(saved.as_deref(), MODELS, DEFAULT_MODEL);
         let code_available = store(cx).load_path(project).ok().flatten().is_some();
         let use_code = code_available
-            && store(cx)
+            && match store(cx)
                 .get_setting(&code_key(task_id))
                 .ok()
                 .flatten()
                 .as_deref()
-                == Some("on");
+            {
+                Some(saved) => saved == "on",
+                // A conversation about the codebase starts with the code on. One about a task starts with it off.
+                None => whole_project,
+            };
         let thread = store(cx)
             .threads(task_id)
             .ok()
@@ -113,18 +190,23 @@ impl WorkspaceView {
         let messages = thread
             .and_then(|thread| store(cx).messages(thread).ok())
             .unwrap_or_default();
-        let status = task.status().as_str().to_string();
         self.chat_dialog = Some(ChatDialog {
             task: task_id,
             project,
-            title: task.title().to_string(),
-            description: task.description().to_string(),
+            whole_project,
+            title,
+            description,
             status,
             thread,
             messages,
-            draft: String::new(),
+            draft: TextEdit::default(),
             model: choice.model,
-            model_notice: choice.notice,
+            model_notice: choice.notice.or_else(|| {
+                (whole_project && !code_available).then(|| {
+                    "No repository is connected. Connect one in the project's settings to ask about its code."
+                        .to_string()
+                })
+            }),
             model_menu: false,
             use_code,
             code_available,
@@ -140,7 +222,7 @@ impl WorkspaceView {
         self.chat_scroll.scroll_to_bottom();
         let main = cx.entity();
         cx.defer(move |cx| super::dialog_window::open(cx, main, super::dialog_window::Kind::Chat));
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -201,6 +283,7 @@ impl WorkspaceView {
         let model = dialog.model.clone();
         let use_code = dialog.use_code;
         let project = dialog.project;
+        let whole_project = dialog.whole_project;
         let (title, description, status) = (
             dialog.title.clone(),
             dialog.description.clone(),
@@ -258,12 +341,19 @@ impl WorkspaceView {
             title,
             description,
             status,
+            whole_project,
         };
         if use_code {
             // Retrieval reads the repository and may refresh its index, so it runs off the UI thread on its own
             // connection. Its outcome decides what the model is shown, but the reply starts either way.
             let database_path = cx.global::<AppDatabase>().database_path.clone();
-            let (title, description) = (launch.title.clone(), launch.description.clone());
+            // A task is looked up by its title and description. A question about the codebase is looked up by what
+            // was asked.
+            let (title, description) = if launch.whole_project {
+                (latest_question(&launch.history), String::new())
+            } else {
+                (launch.title.clone(), launch.description.clone())
+            };
             let retrieval = cx
                 .background_executor()
                 .spawn(async move { retrieve_code(&database_path, project, &title, &description) });
@@ -300,6 +390,7 @@ impl WorkspaceView {
             title: &launch.title,
             description: &launch.description,
             status: &launch.status,
+            whole_project: launch.whole_project,
         };
         let (request, _left_out) = build_chat_request(
             &launch.model,
@@ -316,7 +407,7 @@ impl WorkspaceView {
             Some(active) if active.position == launch.position => Arc::clone(&active.queue),
             _ => return,
         };
-        let provider = super::preferences_panel::ai_provider(cx);
+        let provider = super::ai_settings::provider_for(cx, self.projects.active_id());
         spawn_reply(request, cancel, queue, provider);
         cx.notify();
     }
@@ -480,7 +571,6 @@ impl WorkspaceView {
 
     /// Keys while the chat is open. Enter sends, and Escape closes the model menu first, then the chat.
     pub(super) fn chat_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         match event.keystroke.key.as_str() {
             "escape" => {
                 if self
@@ -497,20 +587,10 @@ impl WorkspaceView {
                 }
             }
             "enter" => self.send_chat_message(cx),
-            "backspace" => {
-                if let Some(dialog) = self.chat_dialog.as_mut() {
-                    dialog.draft.pop();
-                    cx.notify();
-                }
-            }
             _ => {
-                if modifier {
-                    return;
-                }
-                if let Some(text) = typed_text(&event.keystroke)
-                    && let Some(dialog) = self.chat_dialog.as_mut()
+                if let Some(dialog) = self.chat_dialog.as_mut()
+                    && dialog.draft.handle_key(&event.keystroke)
                 {
-                    dialog.draft.push_str(text);
                     cx.notify();
                 }
             }
@@ -526,6 +606,16 @@ fn choice_saved_missing(saved: Option<&str>) -> bool {
 /// What a failed reply says. Each error is a sentence the user can act on.
 fn failure_text(err: &AiError) -> String {
     err.to_string()
+}
+
+/// The user's latest message in the conversation, which a question about the codebase is looked up by.
+fn latest_question(history: &[AiMessage]) -> String {
+    history
+        .iter()
+        .rev()
+        .find(|message| message.role == looji_ai::ChatRole::User)
+        .map(|message| message.content.clone())
+        .unwrap_or_default()
 }
 
 /// The code blocks' hunks for a task, read on a separate connection to the database. The error is a notice for the
@@ -639,7 +729,11 @@ pub(super) fn panel(
         body = body.child(
             div()
                 .text_color(theme.palette.text_secondary)
-                .child("Ask about this task. Replies can use the task's details and, if you turn it on, the repository's code."),
+                .child(if dialog.whole_project {
+                    "Ask about this project's codebase. Replies use the code that matches your question from the connected repository."
+                } else {
+                    "Ask about this task. Replies can use the task's details and, if you turn it on, the repository's code."
+                }),
         );
     }
     for message in &dialog.messages {
@@ -659,7 +753,7 @@ pub(super) fn panel(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(text_box(&dialog.draft, "Message", true, theme)),
+                .child(edit_box(&dialog.draft, "Message", true, theme)),
         )
         .child(if busy {
             button("chat-stop", "Stop", false, theme)

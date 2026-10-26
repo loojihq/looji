@@ -351,7 +351,7 @@ pub(super) fn switch(
             .child(view_label(mode))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.set_view_mode(mode, cx);
-                this.view_focus[index].focus(window);
+                this.view_focus[index].focus(window, cx);
             }))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let step: isize = match event.keystroke.key.as_str() {
@@ -363,7 +363,7 @@ pub(super) fn switch(
                 let next =
                     (index as isize + step).rem_euclid(ViewMode::ALL.len() as isize) as usize;
                 this.set_view_mode(ViewMode::ALL[next], cx);
-                this.view_focus[next].focus(window);
+                this.view_focus[next].focus(window, cx);
             }));
         group = group.child(tab);
     }

@@ -8,9 +8,9 @@ use gpui::{prelude::*, *};
 use looji_domain::{Priority, Task};
 
 use super::WorkspaceView;
-use super::fields::{chip, segment, text_box};
+use super::fields::{chip, segment};
 use super::task_edit::TagEdit;
-use crate::theme::Theme;
+use crate::{components::edit_box, text_edit::TextEdit, theme::Theme};
 
 const PRIORITY_CHOICES: [Option<Priority>; 4] = [
     None,
@@ -94,8 +94,8 @@ pub(super) fn tag_editor(
 
     let input = div()
         .id((scope, 0_u64))
-        .child(text_box(
-            editing.map_or("", |edit| edit.draft.as_str()),
+        .child(edit_box(
+            editing.map_or(&TextEdit::default(), |edit| &edit.draft),
             "Add a tag, then press Enter",
             editing.is_some(),
             theme,

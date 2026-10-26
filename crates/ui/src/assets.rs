@@ -8,6 +8,10 @@ use gpui::{AssetSource, Result, SharedString};
 /// Each icon by the path `components::icon` asks for.
 const ICONS: &[(&str, &[u8])] = &[
     (
+        "icons/paperclip.svg",
+        include_bytes!("../assets/icons/paperclip.svg"),
+    ),
+    (
         "icons/alert-triangle.svg",
         include_bytes!("../assets/icons/alert-triangle.svg"),
     ),

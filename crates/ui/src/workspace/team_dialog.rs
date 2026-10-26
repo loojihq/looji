@@ -11,17 +11,21 @@ use looji_domain::{
 };
 
 use super::card::tooltip;
-use super::fields::{member_mark, text_box};
+use super::fields::member_mark;
 use super::members::{self, Entry};
 use super::task_dialog::button;
-use super::{WorkspaceView, store, typed_text};
-use crate::{components, theme::Theme};
+use super::{WorkspaceView, store};
+use crate::{
+    components::{self, edit_box},
+    text_edit::TextEdit,
+    theme::Theme,
+};
 
 /// A member being renamed, with the name typed so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Rename {
     pub id: TeamMemberId,
-    pub draft: String,
+    pub draft: TextEdit,
     pub error: Option<String>,
 }
 
@@ -38,7 +42,7 @@ pub(super) struct Removal {
 pub(super) struct TeamDialog {
     pub workspace: WorkspaceId,
     /// The name typed for a new member.
-    pub adding: String,
+    pub adding: TextEdit,
     pub add_error: Option<String>,
     pub renaming: Option<Rename>,
     pub removing: Option<Removal>,
@@ -50,7 +54,7 @@ impl TeamDialog {
     fn new(workspace: WorkspaceId) -> Self {
         Self {
             workspace,
-            adding: String::new(),
+            adding: TextEdit::default(),
             add_error: None,
             renaming: None,
             removing: None,
@@ -101,7 +105,6 @@ impl WorkspaceView {
     /// field does.
     pub(super) fn team_dialog_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
-        let modifier = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         let Some(dialog) = self.team_dialog.as_ref() else {
             return;
         };
@@ -117,45 +120,34 @@ impl WorkspaceView {
             return match key {
                 "enter" => self.commit_team_rename(cx),
                 "escape" => self.cancel_team_rename(cx),
-                _ => self.edit_team_text(&event.keystroke, modifier, cx),
+                _ => self.edit_team_text(&event.keystroke, cx),
             };
         }
         match key {
             "escape" => self.close_team_dialog(cx),
             "enter" => self.add_team_member(cx),
-            _ => self.edit_team_text(&event.keystroke, modifier, cx),
+            _ => self.edit_team_text(&event.keystroke, cx),
         }
     }
 
     /// Types into the rename field while renaming, or into the add field otherwise.
-    fn edit_team_text(&mut self, keystroke: &Keystroke, modifier: bool, cx: &mut Context<Self>) {
+    fn edit_team_text(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
         let Some(dialog) = self.team_dialog.as_mut() else {
             return;
         };
-        if keystroke.key == "backspace" {
-            match dialog.renaming.as_mut() {
-                Some(rename) => {
-                    rename.draft.pop();
-                    rename.error = None;
+        match dialog.renaming.as_mut() {
+            Some(rename) => {
+                if !rename.draft.handle_key(keystroke) {
+                    return;
                 }
-                None => {
-                    dialog.adding.pop();
-                    dialog.add_error = None;
-                }
+                rename.error = None;
             }
-        } else if !modifier && let Some(text) = typed_text(keystroke) {
-            match dialog.renaming.as_mut() {
-                Some(rename) => {
-                    rename.draft.push_str(text);
-                    rename.error = None;
+            None => {
+                if !dialog.adding.handle_key(keystroke) {
+                    return;
                 }
-                None => {
-                    dialog.adding.push_str(text);
-                    dialog.add_error = None;
-                }
+                dialog.add_error = None;
             }
-        } else {
-            return;
         }
         cx.notify();
     }
@@ -201,12 +193,11 @@ impl WorkspaceView {
         let Some(member) = self.members.iter().find(|member| member.id() == id) else {
             return;
         };
-        let draft = member.name().to_string();
         if let Some(dialog) = self.team_dialog.as_mut() {
             dialog.removing = None;
             dialog.renaming = Some(Rename {
                 id,
-                draft,
+                draft: TextEdit::new(member.name()),
                 error: None,
             });
         }
@@ -394,7 +385,7 @@ pub(super) fn inline(
                         cx.notify();
                     }),
                 )
-                .child(text_box(
+                .child(edit_box(
                     &dialog.adding,
                     "Add a name, then press Enter",
                     adding_active,
@@ -499,11 +490,11 @@ fn member_row(
         .as_ref()
         .filter(|rename| rename.id == entry.id)
     {
-        Some(rename) => text_box(&rename.draft, "Name", true, theme).into_any_element(),
+        Some(rename) => edit_box(&rename.draft, "Name", true, theme).into_any_element(),
         None => div()
             .id(("team-name", index as u64))
             .flex_1()
-            .min_w_0()
+            .min_w(px(120.))
             .truncate()
             .tooltip(tooltip(members::tooltip(entry)))
             .child(entry.label.clone())
@@ -546,6 +537,7 @@ fn member_row(
             div()
                 .flex()
                 .flex_row()
+                .flex_wrap()
                 .items_center()
                 .gap(theme.spacing.sm)
                 .child(mark)
