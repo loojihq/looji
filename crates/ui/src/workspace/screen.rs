@@ -358,14 +358,10 @@ fn task_box(
         .bg(theme.palette.surface)
         .cursor_pointer()
         .hover(|style| style.bg(theme.palette.surface_hover))
+        .child(div().child(entry.task.title().to_string()))
         .child(
             div()
-                .min_w_0()
-                .truncate()
-                .child(entry.task.title().to_string()),
-        )
-        .child(
-            div()
+                .w_full()
                 .text_size(theme.typography.caption)
                 .text_color(theme.palette.text_secondary)
                 .truncate()
@@ -442,7 +438,8 @@ fn week(view: &WorkspaceView, theme: &Theme, cx: &mut Context<WorkspaceView>) ->
         .collect();
     let mut loose = div().flex().flex_row().flex_wrap().gap(theme.spacing.sm);
     for (index, entry) in &unscheduled {
-        loose = loose.child(task_box(*index, entry, theme, cx));
+        // Each card gets a fixed width so the wrapping tray lays them out in even columns.
+        loose = loose.child(div().w(px(180.)).child(task_box(*index, entry, theme, cx)));
     }
 
     div()
