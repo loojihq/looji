@@ -554,11 +554,11 @@ fn card_details(
                 .hover(|style| style.bg(theme.palette.surface_hover))
                 .text_size(theme.typography.caption)
                 .child(components::icon(
-                    "message-ai",
+                    "sparkles",
                     14.,
                     theme.palette.text_secondary,
                 ))
-                .child("Explain task")
+                .child("Explain issue")
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.open_chat_for(id, window, cx)
                 })),

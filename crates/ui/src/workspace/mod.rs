@@ -842,6 +842,7 @@ fn project_header(
                 .flex_row()
                 .items_center()
                 .gap(theme.spacing.sm)
+                .child(chat::codebase_button(theme, cx))
                 .child(project_settings::button(theme, cx)),
         );
 

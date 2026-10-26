@@ -12,14 +12,6 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../assets/icons/paperclip.svg"),
     ),
     (
-        "icons/message-ai.svg",
-        include_bytes!("../assets/icons/message-ai.svg"),
-    ),
-    (
-        "icons/robot.svg",
-        include_bytes!("../assets/icons/robot.svg"),
-    ),
-    (
         "icons/alert-triangle.svg",
         include_bytes!("../assets/icons/alert-triangle.svg"),
     ),

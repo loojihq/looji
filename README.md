@@ -33,8 +33,9 @@ computer.
 - **Planning with AI.** Describe a goal and get a plan of sections and tasks, each with a priority and an estimate. You
   review and edit the plan before anything is added to the board. An unfinished plan is kept for its project until you
   open it again or discard it.
-- **Task chat with repository context.** Link a project to a git repository, and a task's chat can read the code that
-  matches it.
+- **Chat with repository context.** Link a project to a git repository, and a task's chat can read the code that
+  matches it. **Ask AI** in the project header chats about the whole codebase, and the conversation is kept with the
+  project.
 - **Team and assignees.** Add people to a workspace, assign them to tasks, and filter the board by assignee.
 - **Reports.** Export a project as a PDF with a cover, a count for each status, and every task grouped by status.
 - **Light and dark.** looji follows the Windows light or dark setting.

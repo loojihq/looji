@@ -115,7 +115,7 @@ fn validate(migrations: &[Migration]) -> Result<()> {
 /// Migrations that rebuild a table other tables reference with ON DELETE CASCADE. Dropping that table
 /// with foreign keys on would delete those rows, so they're off while these run. The foreign key check
 /// still runs before the migration commits.
-const REBUILDS_WITHOUT_FOREIGN_KEYS: &[u32] = &[28];
+const REBUILDS_WITHOUT_FOREIGN_KEYS: &[u32] = &[28, 30];
 
 /// Runs one migration and its bookkeeping row in a single transaction.
 /// Any failure drops the transaction, which rolls back the migration's changes.

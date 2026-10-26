@@ -43,6 +43,7 @@ impl Kind {
             },
             Kind::Plan => "Generate with AI".to_string(),
             Kind::Chat => match view.chat_dialog.as_ref() {
+                Some(dialog) if dialog.whole_project => format!("Ask AI about {}", dialog.title),
                 Some(dialog) => format!("Ask AI: {}", dialog.title),
                 None => "Ask AI".to_string(),
             },

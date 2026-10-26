@@ -150,6 +150,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "task_attachments",
         sql: include_str!("sql/0029_task_attachments.sql"),
     },
+    Migration {
+        version: 30,
+        name: "project_threads",
+        sql: include_str!("sql/0030_project_threads.sql"),
+    },
 ];
 
 #[cfg(test)]

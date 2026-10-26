@@ -18,6 +18,8 @@ pub struct TaskBrief<'a> {
     pub title: &'a str,
     pub description: &'a str,
     pub status: &'a str,
+    /// The conversation is about the whole project and its codebase, and `title` is the project's name.
+    pub whole_project: bool,
 }
 
 /// The request for the conversation's next reply. `history` is every message so far, oldest first, and it ends with
@@ -36,11 +38,20 @@ pub fn build_chat_request(
     let start = recent_within_budget(&costs, budget_tokens);
     let kept = history[start..].to_vec();
 
-    let mut system = format!(
-        "You are helping with one task in a project plan. Answer about this task and the code shown. Earlier messages \
-         in this conversation are included, and a follow-up may refer to them.\n\nTask: {}\nStatus: {}",
-        brief.title, brief.status
-    );
+    let mut system = if brief.whole_project {
+        format!(
+            "You are helping with a software project, using its repository. Answer about the whole project and the \
+             code shown, and say so when the code shown is not enough to answer. Earlier messages in this \
+             conversation are included, and a follow-up may refer to them.\n\nProject: {}",
+            brief.title
+        )
+    } else {
+        format!(
+            "You are helping with one task in a project plan. Answer about this task and the code shown. Earlier messages \
+             in this conversation are included, and a follow-up may refer to them.\n\nTask: {}\nStatus: {}",
+            brief.title, brief.status
+        )
+    };
     if !brief.description.trim().is_empty() {
         system.push_str("\n\nDescription:\n");
         system.push_str(brief.description.trim());
