@@ -1044,6 +1044,14 @@ pub(super) fn panel(
                     theme,
                     cx,
                 ))
+                .children((!task.done_when.is_empty()).then(|| {
+                    // Read-only here. Refine rewrites them with the rest of the task, and the board's edit window
+                    // changes them after publishing.
+                    div()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(format!("Done when: {}", task.done_when.join("; ")))
+                }))
                 .child(
                     div()
                         .flex()

@@ -12,6 +12,7 @@
 //! - `watch`: noticing changes in the repository.
 
 pub mod chunk;
+pub mod drift;
 pub mod facts;
 pub mod git;
 pub mod hints;

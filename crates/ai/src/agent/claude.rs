@@ -24,8 +24,11 @@ use crate::{
     types::{ChatRole, Source},
 };
 
-/// The most turns Claude Code may take for one answer.
-const MAX_TURNS: &str = "12";
+/// The most turns Claude Code takes for a quick answer, such as a chat reply. Longer work, such as writing a
+/// blueprint, asks for more through `max_turns`.
+pub const QUICK_TURNS: u32 = 12;
+/// The most turns for work that reads a lot before it answers.
+pub const DEEP_TURNS: u32 = 40;
 
 /// What the agent may use: reading, and looji's knowledge tools.
 const ALLOWED_TOOLS: &str = "Read,Grep,Glob,mcp__looji__search,mcp__looji__read_file,mcp__looji__find_symbol,mcp__looji__find_references,mcp__looji__list_issues,mcp__looji__get_issue,mcp__looji__recent_changes,mcp__looji__repo_map";
@@ -42,6 +45,8 @@ pub struct ClaudeCodeAgent {
     pub server: PathBuf,
     /// Its arguments up to the sources log: `--knowledge-mcp <database> <project> <repository>`.
     pub server_args: Vec<String>,
+    /// The most turns it may take before it must answer.
+    pub max_turns: u32,
 }
 
 /// What one line of Claude Code's output means for the answer.
@@ -293,7 +298,7 @@ impl ChatProvider for ClaudeCodeAgent {
                     "--no-session-persistence",
                 ])
                 .args(["--model", &request.model])
-                .args(["--max-turns", MAX_TURNS])
+                .args(["--max-turns", &self.max_turns.to_string()])
                 .args(["--strict-mcp-config", "--mcp-config"])
                 .arg(&config_path)
                 .args(["--tools", "Read,Grep,Glob"])

@@ -56,6 +56,10 @@ enum Outcome {
     Ignored,
 }
 
+/// Blueprint documents are indexed as documents under this made-up folder, so a search can find the design and a
+/// source list can tell it apart from a file.
+pub const BLUEPRINT_PREFIX: &str = "blueprint/";
+
 pub struct Syncer {
     extractor: Extractor,
 }
@@ -91,7 +95,9 @@ impl Syncer {
         }
         for kind in [SourceKind::Code, SourceKind::Doc] {
             for reference in store.source_refs(project, kind)? {
-                if !present.contains(reference.as_str()) {
+                // Blueprint documents are not files, so a missing file is not a reason to drop them.
+                if !present.contains(reference.as_str()) && !reference.starts_with(BLUEPRINT_PREFIX)
+                {
                     store.remove_source(project, kind, &reference)?;
                     report.scanned += 1;
                     report.removed += 1;
@@ -242,6 +248,53 @@ impl Syncer {
 
     /// Brings the issue chunks in line with `issues`: new and changed issues are written, and issues that are gone
     /// are forgotten.
+    /// Indexes the blueprint's documents, given as (kind, title, body). Documents that are gone are removed.
+    pub fn sync_blueprint(
+        &self,
+        store: &mut KnowledgeStore,
+        project: &str,
+        docs: &[(String, String, String)],
+    ) -> Result<SyncReport> {
+        let mut report = SyncReport::default();
+        let mut present: HashSet<String> = HashSet::new();
+        for (kind, title, body) in docs {
+            let reference = format!("{BLUEPRINT_PREFIX}{kind}.md");
+            if !present.insert(reference.clone()) {
+                continue;
+            }
+            let text = format!(
+                "# {title}
+
+{body}"
+            );
+            let hash = hash_bytes(text.as_bytes());
+            if store
+                .source_hash(project, SourceKind::Doc, &reference)?
+                .as_deref()
+                == Some(hash.as_str())
+            {
+                report.absorb(Outcome::Unchanged);
+                continue;
+            }
+            let chunks = chunk_markdown(&reference, &text);
+            store.replace_source(
+                project,
+                SourceKind::Doc,
+                &reference,
+                &SourceMeta::new(&hash, text.len() as u64, Some("the project's blueprint")),
+                &chunks,
+            )?;
+            report.absorb(Outcome::Indexed);
+        }
+        for reference in store.source_refs(project, SourceKind::Doc)? {
+            if reference.starts_with(BLUEPRINT_PREFIX) && !present.contains(&reference) {
+                store.remove_source(project, SourceKind::Doc, &reference)?;
+                report.removed += 1;
+            }
+        }
+        Ok(report)
+    }
+
     pub fn sync_issues(
         &self,
         store: &mut KnowledgeStore,
@@ -537,6 +590,38 @@ mod tests {
             notes
                 .iter()
                 .any(|(path, note)| path == "src/config.rs" && note.contains("taken out"))
+        );
+    }
+
+    #[test]
+    fn blueprint_documents_are_searchable_survive_a_repository_sync_and_go_when_removed() {
+        let (dir, mut store, mut syncer) = setup();
+        write(dir.path(), "src/lib.rs", "pub fn alpha() {}");
+        syncer.sync_repo(&mut store, "p", dir.path()).unwrap();
+        let docs = vec![(
+            "decisions".to_string(),
+            "Decisions".to_string(),
+            "We chose zebra-striped caching for the session store.".to_string(),
+        )];
+        syncer.sync_blueprint(&mut store, "p", &docs).unwrap();
+        let found = store.search("p", &query("zebra caching")).unwrap();
+        assert_eq!(found[0].path.as_deref(), Some("blueprint/decisions.md"));
+
+        // A later look at the repository must not throw the design away.
+        syncer.sync_repo(&mut store, "p", dir.path()).unwrap();
+        assert!(
+            !store
+                .search("p", &query("zebra caching"))
+                .unwrap()
+                .is_empty()
+        );
+
+        syncer.sync_blueprint(&mut store, "p", &[]).unwrap();
+        assert!(
+            store
+                .search("p", &query("zebra caching"))
+                .unwrap()
+                .is_empty()
         );
     }
 

@@ -81,7 +81,7 @@ impl WorkspaceView {
 }
 
 /// A file name made from a project name, without the characters Windows doesn't allow in names.
-fn file_name_part(name: &str) -> String {
+pub(super) fn file_name_part(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| match c {
@@ -98,7 +98,7 @@ fn file_name_part(name: &str) -> String {
 }
 
 /// Where the save dialog starts: the user's Documents folder, or the current folder when there isn't one.
-fn documents_folder() -> PathBuf {
+pub(super) fn documents_folder() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(|home| PathBuf::from(home).join("Documents"))

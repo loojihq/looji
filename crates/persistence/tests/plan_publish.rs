@@ -330,6 +330,40 @@ fn done_when_points_are_kept_with_the_draft_and_published_into_the_task_descript
 }
 
 #[test]
+fn media_kept_with_a_section_survives_new_versions() {
+    use looji_domain::{BlueprintDoc, BlueprintMedia, BlueprintRepository, MediaKind};
+    let fx = fixture();
+    let store = fx.open();
+    let media = BlueprintMedia {
+        doc_kind: "architecture".to_string(),
+        stored_name: "abc123.png".to_string(),
+        file_name: "sketch.png".to_string(),
+        kind: MediaKind::Image,
+        created_at: at(1),
+    };
+    BlueprintRepository::add_blueprint_media(&store, fx.project, &media).unwrap();
+    let docs = [BlueprintDoc::new(
+        "architecture",
+        "Architecture",
+        "Parts.",
+        "",
+    )];
+    BlueprintRepository::replace_blueprint(&store, fx.project, &docs, at(2)).unwrap();
+    BlueprintRepository::replace_blueprint(&store, fx.project, &docs, at(3)).unwrap();
+    assert_eq!(
+        BlueprintRepository::blueprint_media(&store, fx.project).unwrap(),
+        [media]
+    );
+    BlueprintRepository::remove_blueprint_media(&store, fx.project, "architecture", "abc123.png")
+        .unwrap();
+    assert!(
+        BlueprintRepository::blueprint_media(&store, fx.project)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_new_blueprint_replaces_the_old_one_as_the_next_version() {
     use looji_domain::{BlueprintDoc, BlueprintRepository};
     let fx = fixture();
@@ -363,4 +397,20 @@ fn a_new_blueprint_replaces_the_old_one_as_the_next_version() {
     assert_eq!(now.len(), 1);
     assert_eq!((now[0].body.as_str(), now[0].version), ("New goals.", 2));
     assert_eq!(now[0].diagrams, "[]");
+
+    assert_eq!(
+        BlueprintRepository::blueprint_versions(&store, fx.project).unwrap(),
+        [2, 1]
+    );
+    let old = BlueprintRepository::blueprint_version(&store, fx.project, 1).unwrap();
+    assert_eq!(
+        old.iter().map(|doc| doc.kind.as_str()).collect::<Vec<_>>(),
+        ["overview", "architecture"]
+    );
+    assert_eq!(old[0].body, "Goals.");
+    assert!(
+        BlueprintRepository::blueprint_version(&store, fx.project, 9)
+            .unwrap()
+            .is_empty()
+    );
 }

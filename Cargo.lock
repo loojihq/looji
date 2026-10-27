@@ -3235,6 +3235,7 @@ dependencies = [
 name = "looji-diagram"
 version = "0.0.1"
 dependencies = [
+ "resvg",
  "serde_json",
 ]
 

@@ -493,7 +493,8 @@ impl WorkspaceView {
         };
         let provider = super::ai_settings::provider_for(cx, Some(project));
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
-        let agent = super::agent::agent_for(provider, &knowledge_path, project, Path::new(&root));
+        let agent =
+            super::agent::agent_for(provider, &knowledge_path, project, Path::new(&root), false);
         spawn_agent_reply(request, cancel, queue, agent);
         cx.notify();
     }

@@ -2,7 +2,7 @@
 //! model, interfaces, decisions, risks, and milestones. Diagrams are kept as JSON that the diagram crate reads, so the
 //! domain stays free of it.
 
-use crate::Timestamp;
+use crate::{MediaKind, Timestamp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlueprintDoc {
@@ -16,6 +16,17 @@ pub struct BlueprintDoc {
     /// Which version of the blueprint this document belongs to. Set when the blueprint is stored.
     pub version: u32,
     pub updated_at: Timestamp,
+}
+
+/// A file kept with one section of the blueprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlueprintMedia {
+    /// The section it belongs to, by the section's kind.
+    pub doc_kind: String,
+    pub stored_name: String,
+    pub file_name: String,
+    pub kind: MediaKind,
+    pub created_at: Timestamp,
 }
 
 impl BlueprintDoc {

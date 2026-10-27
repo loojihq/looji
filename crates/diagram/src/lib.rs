@@ -6,6 +6,6 @@ mod export;
 mod graph;
 mod layout;
 
-pub use export::{to_mermaid, to_svg};
+pub use export::{to_mermaid, to_png, to_svg};
 pub use graph::{Edge, EdgeStyle, Graph, GraphKind, Group, Link, Node, parse_graph};
 pub use layout::{Layout, PlacedGroup, PlacedNode, Route, layout};

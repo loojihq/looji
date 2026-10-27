@@ -53,7 +53,7 @@ pub use clock::{Clock, UtcOffset, format_clock_time, parse_clock_time};
 
 pub use activity::{ActivityKind, TaskActivity};
 pub use attachment::{Attachment, AttachmentRepository, MediaKind};
-pub use blueprint::BlueprintDoc;
+pub use blueprint::{BlueprintDoc, BlueprintMedia};
 pub use board::{Column, ColumnRecord};
 pub use chat::{
     ModelChoice, Reply, ReplyState, approximate_tokens, recent_within_budget, resolve_model,

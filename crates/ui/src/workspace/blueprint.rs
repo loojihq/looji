@@ -12,11 +12,20 @@ use std::{
 use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken,
-    blueprint::{build_blueprint_request, parse_blueprint},
+    blueprint::{
+        OutlineItem, build_blueprint_request, build_outline_request, build_revision_request,
+        parse_blueprint, parse_outline,
+    },
     generation::{Update, run_with},
 };
-use looji_diagram::{Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_svg};
-use looji_domain::{BlueprintDoc, BlueprintRepository, CodeSourceRepository, Timestamp};
+use looji_diagram::{
+    Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_png, to_svg,
+};
+use looji_domain::{
+    BlueprintDoc, BlueprintMedia, BlueprintRepository, CodeSourceRepository, MediaKind, Timestamp,
+};
+use looji_knowledge::drift::{Drift, Planned, PlannedNode, actual_units, compare};
+use looji_persistence::attachments::{import_attachment, remove_attachment};
 
 use super::{WorkspaceView, markdown_view, store, task_dialog::button};
 use crate::{database::AppDatabase, text_edit::TextEdit, theme::Theme};
@@ -51,6 +60,10 @@ fn doc_view(doc: BlueprintDoc) -> DocView {
 
 /// A generation in progress.
 struct Run {
+    /// Planning the outline, not writing yet.
+    outlining: bool,
+    /// The document being changed, when this is a revision and not a new blueprint.
+    revising: Option<usize>,
     steps: Vec<String>,
     queue: Arc<Mutex<Vec<Update>>>,
     cancel: CancellationToken,
@@ -61,12 +74,26 @@ pub(super) struct BlueprintState {
     docs: Vec<DocView>,
     selected: usize,
     idea: TextEdit,
+    /// What to change in the open document.
+    revise: TextEdit,
+    /// Whether typing goes to the revision box. Otherwise it goes to the idea box.
+    revise_focused: bool,
     running: Option<Run>,
     notice: Option<String>,
     error: Option<String>,
     /// The diagram whose copy button last said "Copied": the document, the diagram, and which format.
     copied: Option<(usize, usize, &'static str)>,
     scroll: ScrollHandle,
+    /// The design compared with the code, when the project has a repository with units of code.
+    drift: Option<Drift>,
+    /// Images and files kept with the sections, which stay across versions.
+    media: Vec<BlueprintMedia>,
+    /// The outline waiting for the user's say, each document with whether it stays.
+    outline: Option<Vec<(OutlineItem, bool)>>,
+    /// Every version the blueprint has had, newest first.
+    versions: Vec<u32>,
+    /// An older version being looked at, instead of the current one.
+    viewing: Option<u32>,
 }
 
 impl WorkspaceView {
@@ -86,12 +113,22 @@ impl WorkspaceView {
             docs,
             selected: 0,
             idea: TextEdit::new(&description),
+            revise: TextEdit::default(),
+            revise_focused: false,
             running: None,
             notice: None,
             error: None,
             copied: None,
             scroll: ScrollHandle::new(),
+            drift: None,
+            media: store(cx).blueprint_media(id).unwrap_or_default(),
+            outline: None,
+            versions: Vec::new(),
+            viewing: None,
         });
+        self.load_versions(cx);
+        self.index_blueprint(cx);
+        self.refresh_drift(cx);
         let main = cx.entity();
         cx.defer(move |cx| {
             super::dialog_window::open(cx, main, super::dialog_window::Kind::Blueprint)
@@ -116,7 +153,54 @@ impl WorkspaceView {
     }
 
     /// Starts writing a blueprint from the idea in the box.
+    /// Plans the outline first, for the user to adjust before anything is written.
     pub(super) fn generate_blueprint(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.blueprint.as_mut() {
+            state.outline = None;
+        }
+        self.start_run(None, true, cx);
+    }
+
+    /// Writes the blueprint from the outline the user agreed.
+    pub(super) fn write_blueprint(&mut self, cx: &mut Context<Self>) {
+        self.start_run(None, false, cx);
+    }
+
+    /// Drops the outline, to start again.
+    fn discard_outline(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.blueprint.as_mut() {
+            state.outline = None;
+        }
+        cx.notify();
+    }
+
+    /// Keeps a document in the outline, or leaves it out.
+    fn toggle_outline_item(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(entry) = self
+            .blueprint
+            .as_mut()
+            .and_then(|state| state.outline.as_mut())
+            .and_then(|outline| outline.get_mut(index))
+        {
+            entry.1 = !entry.1;
+        }
+        cx.notify();
+    }
+
+    /// Asks for a change to the open document, written as a new version of the blueprint.
+    pub(super) fn revise_document(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.blueprint.as_ref() else {
+            return;
+        };
+        if state.viewing.is_some() || state.revise.trim().is_empty() {
+            return;
+        }
+        let index = state.selected;
+        self.start_run(Some(index), false, cx);
+    }
+
+    /// Starts an agent: on the whole blueprint, or on one document of it.
+    fn start_run(&mut self, revising: Option<usize>, outlining: bool, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active() else {
             return;
         };
@@ -132,13 +216,48 @@ impl WorkspaceView {
             return;
         }
         let idea = state.idea.trim().to_string();
+        let change = state.revise.trim().to_string();
+        let agreed: Vec<OutlineItem> = state
+            .outline
+            .iter()
+            .flatten()
+            .filter(|(_, kept)| *kept)
+            .map(|(item, _)| item.clone())
+            .collect();
+        let document = revising
+            .and_then(|index| state.docs.get(index))
+            .map(|view| {
+                (
+                    view.doc.kind.clone(),
+                    view.doc.title.clone(),
+                    view.doc.body.clone(),
+                    view.doc.diagrams.clone(),
+                )
+            });
+        if revising.is_some() && document.is_none() {
+            return;
+        }
         state.error = None;
         state.notice = None;
         let root = store(cx).load_path(id).ok().flatten();
         let model = super::ai_settings::model_for(cx, Some(id));
         let provider = super::ai_settings::provider_for(cx, Some(id));
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
-        let request = build_blueprint_request(&model, &name, &description, &idea, root.is_some());
+        let request = match &document {
+            _ if outlining => {
+                build_outline_request(&model, &name, &description, &idea, root.is_some())
+            }
+            Some((kind, title, body, diagrams)) => build_revision_request(
+                &model,
+                &name,
+                (kind, title, body, diagrams),
+                &change,
+                root.is_some(),
+            ),
+            None => {
+                build_blueprint_request(&model, &name, &description, &idea, &agreed, root.is_some())
+            }
+        };
 
         let cancel = CancellationToken::new();
         let queue: Arc<Mutex<Vec<Update>>> = Arc::new(Mutex::new(Vec::new()));
@@ -155,6 +274,8 @@ impl WorkspaceView {
         });
         if let Some(state) = self.blueprint.as_mut() {
             state.running = Some(Run {
+                outlining,
+                revising,
                 steps: Vec::new(),
                 queue: Arc::clone(&queue),
                 cancel: cancel.clone(),
@@ -173,9 +294,13 @@ impl WorkspaceView {
                 };
                 // With a repository the agent researches it. Without one the model writes from the description.
                 let provider = match root {
-                    Some(root) => {
-                        super::agent::agent_for(provider, &knowledge_path, id, Path::new(&root))
-                    }
+                    Some(root) => super::agent::agent_for(
+                        provider,
+                        &knowledge_path,
+                        id,
+                        Path::new(&root),
+                        true,
+                    ),
                     None => looji_ai::connect(provider),
                 };
                 match provider {
@@ -195,6 +320,8 @@ impl WorkspaceView {
         let Some(run) = state.running.as_mut() else {
             return false;
         };
+        let revising = run.revising;
+        let outlining = run.outlining;
         let updates = match run.queue.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
@@ -203,30 +330,57 @@ impl WorkspaceView {
         for update in updates {
             match update {
                 Update::Step(step) => run.steps.push(step),
-                Update::Finished(text) => finished = Some(parse_blueprint(&text)),
+                Update::Finished(text) => finished = Some(Ok(text)),
                 Update::Failed(err) => finished = Some(Err(err.to_string())),
                 Update::Text(_) | Update::Source(_) => {}
             }
         }
-        let Some(outcome) = finished else {
+        let Some(reply) = finished else {
             cx.notify();
             return true;
         };
         state.running = None;
+        if outlining {
+            match reply.and_then(|text| parse_outline(&text)) {
+                Ok(items) => {
+                    state.outline = Some(items.into_iter().map(|item| (item, true)).collect());
+                }
+                Err(message) => state.error = Some(message),
+            }
+            cx.notify();
+            return false;
+        }
+        let outcome = reply.and_then(|text| parse_blueprint(&text));
+        let mut refresh = false;
         match outcome {
             Ok(parsed) => {
-                let docs: Vec<BlueprintDoc> = parsed
-                    .docs
-                    .iter()
-                    .map(|doc| {
-                        BlueprintDoc::new(
-                            &doc.kind,
-                            &doc.title,
-                            &doc.body,
-                            &serde_json::Value::Array(doc.diagrams.clone()).to_string(),
-                        )
-                    })
-                    .collect();
+                let made = |doc: &looji_ai::blueprint::ParsedDoc, kind: &str| {
+                    BlueprintDoc::new(
+                        kind,
+                        &doc.title,
+                        &doc.body,
+                        &serde_json::Value::Array(doc.diagrams.clone()).to_string(),
+                    )
+                };
+                let docs: Vec<BlueprintDoc> = match (revising, parsed.docs.first()) {
+                    // A revision replaces the one document and keeps the rest as they are.
+                    (Some(index), Some(changed)) => {
+                        let state = self.blueprint.as_ref().expect("the blueprint is open");
+                        state
+                            .docs
+                            .iter()
+                            .enumerate()
+                            .map(|(position, view)| {
+                                if position == index {
+                                    made(changed, &view.doc.kind)
+                                } else {
+                                    view.doc.clone()
+                                }
+                            })
+                            .collect()
+                    }
+                    _ => parsed.docs.iter().map(|doc| made(doc, &doc.kind)).collect(),
+                };
                 let project = self.projects.active_id();
                 let saved = project
                     .map(|project| store(cx).replace_blueprint(project, &docs, Timestamp::now()));
@@ -240,7 +394,10 @@ impl WorkspaceView {
                             .into_iter()
                             .map(doc_view)
                             .collect();
-                        state.selected = 0;
+                        state.outline = None;
+                        state.selected = revising.unwrap_or(0);
+                        state.revise = TextEdit::default();
+                        refresh = true;
                         state.notice = Some(if parsed.diagrams_dropped > 0 {
                             format!(
                                 "Version {version} written. {} diagram(s) were left out because they could not be drawn.",
@@ -258,8 +415,262 @@ impl WorkspaceView {
             }
             Err(message) => state.error = Some(message),
         }
+        if refresh {
+            self.load_versions(cx);
+            self.index_blueprint(cx);
+            self.refresh_drift(cx);
+        }
         cx.notify();
         false
+    }
+
+    fn load_versions(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let versions = store(cx).blueprint_versions(project).unwrap_or_default();
+        if let Some(state) = self.blueprint.as_mut() {
+            state.versions = versions;
+            state.viewing = None;
+        }
+    }
+
+    /// Shows one version of the blueprint. The newest is the current one, and can be changed. Older ones are for
+    /// reading, and can be restored.
+    fn view_version(&mut self, version: u32, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let docs: Vec<DocView> = store(cx)
+            .blueprint_version(project, version)
+            .unwrap_or_default()
+            .into_iter()
+            .map(doc_view)
+            .collect();
+        let Some(state) = self.blueprint.as_mut() else {
+            return;
+        };
+        if docs.is_empty() {
+            return;
+        }
+        let current = state.versions.first().copied() == Some(version);
+        state.docs = docs;
+        state.selected = 0;
+        state.viewing = (!current).then_some(version);
+        cx.notify();
+    }
+
+    /// Makes the version being looked at the current one again, as a new version.
+    fn restore_version(&mut self, cx: &mut Context<Self>) {
+        let (Some(project), Some(state)) = (self.projects.active_id(), self.blueprint.as_ref())
+        else {
+            return;
+        };
+        if state.viewing.is_none() {
+            return;
+        }
+        let docs: Vec<BlueprintDoc> = state.docs.iter().map(|view| view.doc.clone()).collect();
+        match store(cx).replace_blueprint(project, &docs, Timestamp::now()) {
+            Ok(version) => {
+                let restored = store(cx)
+                    .blueprint(project)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(doc_view)
+                    .collect();
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.docs = restored;
+                    state.selected = 0;
+                    state.notice = Some(format!("Restored as version {version}."));
+                }
+                self.load_versions(cx);
+                self.index_blueprint(cx);
+                self.refresh_drift(cx);
+            }
+            Err(err) => {
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.error = Some(format!("Could not restore it: {err}"));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Puts the blueprint's documents into the project's knowledge, so searches, chat and reviews can find the design.
+    fn index_blueprint(&self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let docs: Vec<(String, String, String)> = store(cx)
+            .blueprint(project)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|doc| (doc.kind, doc.title, doc.body))
+            .collect();
+        let path = cx.global::<AppDatabase>().knowledge_path.clone();
+        let key = project.as_uuid().to_string();
+        let outcome = looji_knowledge::KnowledgeStore::open(&path).and_then(|mut knowledge| {
+            looji_knowledge::Syncer::new()?.sync_blueprint(&mut knowledge, &key, &docs)
+        });
+        if let Err(err) = outcome {
+            eprintln!("looji: the blueprint could not be indexed: {err}");
+        }
+    }
+
+    /// Asks for files, then copies each into the attachments folder and keeps it with the section.
+    fn add_section_media(&mut self, doc_kind: String, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Add to this section".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let dir = cx.update(|cx| cx.global::<AppDatabase>().attachments_dir.clone());
+            for source in paths {
+                let dir = dir.clone();
+                let imported = cx
+                    .background_executor()
+                    .spawn(async move { import_attachment(&source, &dir) })
+                    .await;
+                let doc_kind = doc_kind.clone();
+                let _ = this.update(cx, |view, cx| {
+                    let Some(state) = view.blueprint.as_mut() else {
+                        return;
+                    };
+                    match imported {
+                        Ok(file) => {
+                            let media = BlueprintMedia {
+                                doc_kind,
+                                kind: MediaKind::from_file_name(&file.file_name),
+                                stored_name: file.stored_name.clone(),
+                                file_name: file.file_name,
+                                created_at: Timestamp::now(),
+                            };
+                            match store(cx).add_blueprint_media(project, &media) {
+                                Ok(()) => state.media.push(media),
+                                Err(err) => {
+                                    let _ = remove_attachment(
+                                        &cx.global::<AppDatabase>().attachments_dir,
+                                        &file.stored_name,
+                                    );
+                                    state.error = Some(format!("Could not add that file: {err}"));
+                                }
+                            }
+                        }
+                        Err(err) => state.error = Some(format!("Could not add that file: {err}")),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Removes a file from a section and deletes its copy.
+    fn remove_section_media(
+        &mut self,
+        doc_kind: String,
+        stored_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        match store(cx).remove_blueprint_media(project, &doc_kind, &stored_name) {
+            Ok(()) => {
+                let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+                if let Err(err) = remove_attachment(&dir, &stored_name) {
+                    eprintln!("could not delete the file of removed media: {err}");
+                }
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.media.retain(|item| {
+                        !(item.doc_kind == doc_kind && item.stored_name == stored_name)
+                    });
+                }
+            }
+            Err(err) => {
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.error = Some(format!("Could not remove the file: {err}"));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Opens the planner with the milestones written in as the goal, so each can be broken into tasks that name the
+    /// component they build and say when they are done. The user reads the plan and publishes it as they do any other.
+    fn plan_from_milestones(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.blueprint.as_ref() else {
+            return;
+        };
+        let Some(milestones) = state.docs.iter().find(|view| view.doc.kind == "milestones") else {
+            return;
+        };
+        let components: Vec<String> = planned_from(&state.docs)
+            .nodes
+            .into_iter()
+            .map(|node| node.label)
+            .collect();
+        let mut goal = format!(
+            "Break these milestones into tasks. Tag each task with the component it builds, and give each task 2 to 4 \"done when\" points. Plan only the work that is not done yet.
+
+{}",
+            milestones.doc.body
+        );
+        if !components.is_empty() {
+            goal.push_str(&format!(
+                "
+
+Components: {}.",
+                components.join(", ")
+            ));
+        }
+        let goal: String = goal.chars().take(looji_domain::MAX_GOAL_CHARS).collect();
+        if self.plan_wizard.is_some() {
+            return;
+        }
+        if self.unfinished_plan(cx).is_some() {
+            if let Some(state) = self.blueprint.as_mut() {
+                state.notice = Some(
+                    "Finish or discard the plan in progress first, then plan the milestones."
+                        .to_string(),
+                );
+            }
+            return cx.notify();
+        }
+        self.start_plan_wizard(window, cx);
+        if let Some(dialog) = self.plan_wizard.as_mut() {
+            dialog.wizard.set_goal(&goal);
+        }
+        cx.notify();
+    }
+
+    /// Compares the design's component diagrams with the repository's units of code.
+    pub(super) fn refresh_drift(&mut self, cx: &mut Context<Self>) {
+        let root = self
+            .projects
+            .active_id()
+            .and_then(|project| store(cx).load_path(project).ok().flatten());
+        let Some(state) = self.blueprint.as_mut() else {
+            return;
+        };
+        state.drift = root.and_then(|root| {
+            let root = Path::new(&root);
+            let units = actual_units(root);
+            if units.is_empty() {
+                return None;
+            }
+            let planned = planned_from(&state.docs);
+            (!planned.nodes.is_empty()).then(|| compare(&planned, &units, root))
+        });
+        cx.notify();
     }
 
     pub(super) fn stop_blueprint_run(&mut self, cx: &mut Context<Self>) {
@@ -284,11 +695,7 @@ impl WorkspaceView {
         let Some(view) = state.docs.get(doc).and_then(|d| d.diagrams.get(diagram)) else {
             return;
         };
-        let text = if format == "Mermaid" {
-            to_mermaid(&view.graph)
-        } else {
-            to_svg(&view.graph)
-        };
+        let text = to_mermaid(&view.graph);
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         state.copied = Some((doc, diagram, format));
         cx.notify();
@@ -299,6 +706,52 @@ impl WorkspaceView {
             let _ = this.update(cx, |view, cx| {
                 if let Some(state) = view.blueprint.as_mut() {
                     state.copied = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Asks where to save a diagram, then writes it as an SVG or a PNG image.
+    fn save_diagram(&mut self, doc: usize, diagram: usize, png: bool, cx: &mut Context<Self>) {
+        let Some(state) = self.blueprint.as_mut() else {
+            return;
+        };
+        let Some(view) = state.docs.get(doc).and_then(|d| d.diagrams.get(diagram)) else {
+            return;
+        };
+        let graph = view.graph.clone();
+        let name = if graph.title.is_empty() {
+            "diagram".to_string()
+        } else {
+            super::export::file_name_part(&graph.title)
+        };
+        let suggested = format!("{name}.{}", if png { "png" } else { "svg" });
+        let picked = cx.prompt_for_new_path(&super::export::documents_folder(), Some(&suggested));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else {
+                return;
+            };
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = if png {
+                        to_png(&graph, 2.0)?
+                    } else {
+                        to_svg(&graph).into_bytes()
+                    };
+                    std::fs::write(&path, bytes)
+                        .map(|_| path)
+                        .map_err(|err| format!("The image could not be saved: {err}"))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if let Some(state) = view.blueprint.as_mut() {
+                    match outcome {
+                        Ok(path) => state.notice = Some(format!("Saved to {}.", path.display())),
+                        Err(message) => state.error = Some(message),
+                    }
                     cx.notify();
                 }
             });
@@ -371,11 +824,112 @@ impl WorkspaceView {
         }
         if let Some(state) = self.blueprint.as_mut()
             && state.running.is_none()
-            && state.idea.handle_key(&event.keystroke)
         {
-            cx.notify();
+            let field = if state.revise_focused {
+                &mut state.revise
+            } else {
+                &mut state.idea
+            };
+            if field.handle_key(&event.keystroke) {
+                cx.notify();
+            }
         }
     }
+}
+
+/// The design's component diagrams as one planned graph. Nodes keep the order they were drawn in.
+fn planned_from(docs: &[DocView]) -> Planned {
+    let mut planned = Planned::default();
+    for diagram in docs
+        .iter()
+        .flat_map(|doc| &doc.diagrams)
+        .filter(|diagram| diagram.graph.kind == GraphKind::Component)
+    {
+        let base = planned.nodes.len();
+        let graph = &diagram.graph;
+        planned
+            .nodes
+            .extend(graph.nodes.iter().map(|node| PlannedNode {
+                label: node.label.clone(),
+                kind: node.kind.clone(),
+                file: match &node.link {
+                    Some(Link::File(path)) => Some(path.clone()),
+                    _ => None,
+                },
+            }));
+        for edge in &graph.edges {
+            let find = |id: &str| graph.nodes.iter().position(|node| node.id == id);
+            if let (Some(from), Some(to)) = (find(&edge.from), find(&edge.to)) {
+                planned.edges.push((base + from, base + to));
+            }
+        }
+    }
+    planned
+}
+
+/// What the code and the design disagree about, under the architecture document.
+fn drift_block(drift: &Drift, theme: &Theme, cx: &mut Context<WorkspaceView>) -> AnyElement {
+    let line = |text: String| {
+        div()
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child(text)
+    };
+    let mut block = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .p(theme.spacing.md)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border)
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Planned vs actual"),
+        );
+    if drift.is_clean() {
+        block = block.child(line(format!(
+            "The code and the design agree. {} parts of the design match code.",
+            drift.matched
+        )));
+    }
+    if !drift.missing.is_empty() {
+        block = block.child(line(format!(
+            "In the design, with no code behind it: {}.",
+            drift.missing.join(", ")
+        )));
+    }
+    if !drift.unclaimed.is_empty() {
+        block = block.child(line(format!(
+            "In the code, not in the design: {}.",
+            drift.unclaimed.join(", ")
+        )));
+    }
+    if !drift.unplanned.is_empty() {
+        let pairs: Vec<String> = drift
+            .unplanned
+            .iter()
+            .map(|(from, to)| format!("{from} depends on {to}"))
+            .collect();
+        block = block.child(line(format!(
+            "In the code, but not drawn in the design: {}.",
+            pairs.join(", ")
+        )));
+    }
+    block
+        .child(
+            div().flex().flex_row().child(
+                crate::components::button(
+                    "drift-check",
+                    "Check again",
+                    crate::components::Variant::Ghost,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh_drift(cx))),
+            ),
+        )
+        .into_any_element()
 }
 
 /// The button in the project header that opens the blueprint.
@@ -421,19 +975,74 @@ pub(super) fn panel(
     let mut generator = div().flex().flex_col().gap(theme.spacing.sm).child(caption(
         "What should the blueprint cover? It researches the repository first when one is connected.".to_string(),
     ));
-    generator = generator.child(crate::components::edit_box(
-        &state.idea,
-        "Describe the system",
-        state.running.is_none(),
-        theme,
-    ));
+    generator = generator.child(
+        div()
+            .id("blueprint-idea")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    if let Some(state) = this.blueprint.as_mut() {
+                        state.revise_focused = false;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(crate::components::edit_box(
+                &state.idea,
+                "Describe the system",
+                state.running.is_none() && !state.revise_focused,
+                theme,
+            )),
+    );
+    if let (None, Some(outline)) = (&state.running, &state.outline) {
+        // The outline, for the user to keep or drop documents from before anything is written.
+        generator = generator.child(caption(
+            "This is the plan. Click a document to leave it out, or change the description above and plan again."
+                .to_string(),
+        ));
+        for (index, (item, kept)) in outline.iter().enumerate() {
+            generator = generator.child(
+                crate::components::segment(*kept, theme)
+                    .id(("blueprint-outline", index))
+                    .justify_start()
+                    .child(div().child(format!(
+                        "{} {}: {}",
+                        if *kept { "\u{2713}" } else { "\u{2717}" },
+                        item.title,
+                        item.summary
+                    )))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.toggle_outline_item(index, cx)
+                    })),
+            );
+        }
+    }
+    let has_outline = state.outline.is_some();
     let action = match &state.running {
+        None if has_outline => div()
+            .flex()
+            .flex_row()
+            .gap(theme.spacing.sm)
+            .child(
+                button("blueprint-write", "Write blueprint", true, theme)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.write_blueprint(cx))),
+            )
+            .child(
+                button("blueprint-replan", "Plan again", false, theme).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.generate_blueprint(cx)),
+                ),
+            )
+            .child(
+                button("blueprint-discard", "Cancel", false, theme)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.discard_outline(cx))),
+            )
+            .into_any_element(),
         None => button(
             "blueprint-generate",
             if state.docs.is_empty() {
-                "Generate blueprint"
+                "Plan the blueprint"
             } else {
-                "Generate a new version"
+                "Plan a new version"
             },
             true,
             theme,
@@ -446,7 +1055,15 @@ pub(super) fn panel(
     };
     generator = generator.child(action);
     if let Some(run) = &state.running {
-        generator = generator.child(caption("Researching and writing\u{2026}".to_string()));
+        let writing = state.running.as_ref().is_some_and(|run| !run.outlining);
+        generator = generator.child(caption(
+            if writing {
+                "Researching and writing\u{2026}"
+            } else {
+                "Planning the outline\u{2026}"
+            }
+            .to_string(),
+        ));
         let skipped = run.steps.len().saturating_sub(4);
         for step in &run.steps[skipped..] {
             generator = generator.child(caption(format!("\u{2022} {step}")));
@@ -488,8 +1105,25 @@ pub(super) fn panel(
                 })),
         );
     }
-    if let Some(first) = state.docs.first() {
-        list = list.child(caption(format!("Version {}", first.doc.version)));
+    if !state.versions.is_empty() {
+        list = list.child(caption("Versions".to_string()));
+        let mut chips = div().flex().flex_row().flex_wrap().gap(px(4.));
+        for (position, version) in state.versions.iter().take(6).copied().enumerate() {
+            let shown = state.viewing.unwrap_or(state.versions[0]) == version;
+            chips = chips.child(
+                crate::components::segment(shown, theme)
+                    .id(("blueprint-version", position))
+                    .child(if position == 0 {
+                        format!("{version} (current)")
+                    } else {
+                        version.to_string()
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.view_version(version, cx)
+                    })),
+            );
+        }
+        list = list.child(chips);
     }
 
     // The open document.
@@ -501,6 +1135,7 @@ pub(super) fn panel(
             ))
             .into_any_element(),
         Some(doc) => {
+            let kind = doc.doc.kind.clone();
             let mut column = div()
                 .id("blueprint-document")
                 .flex()
@@ -509,14 +1144,78 @@ pub(super) fn panel(
                 .flex_1()
                 .min_w_0()
                 .overflow_y_scroll()
-                .track_scroll(&state.scroll)
-                .child(
+                .track_scroll(&state.scroll);
+            if let Some(version) = state.viewing {
+                column = column.child(
                     div()
-                        .text_size(theme.typography.title)
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(doc.doc.title.clone()),
-                )
-                .child(markdown_view::view(&doc.doc.body, theme));
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.spacing.sm)
+                        .child(caption(format!(
+                            "You are reading version {version}, an older one."
+                        )))
+                        .child(
+                            button("blueprint-restore", "Restore this version", false, theme)
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.restore_version(cx)
+                                })),
+                        ),
+                );
+            }
+            column = column.child(
+                div()
+                    .text_size(theme.typography.title)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(doc.doc.title.clone()),
+            );
+            if state.viewing.is_none() {
+                // Asking for a change to just this document.
+                column = column.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.spacing.sm)
+                        .child(
+                            div()
+                                .id("blueprint-revise")
+                                .flex_1()
+                                .min_w_0()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                        if let Some(state) = this.blueprint.as_mut() {
+                                            state.revise_focused = true;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(crate::components::edit_box(
+                                    &state.revise,
+                                    "Ask for a change to this document",
+                                    state.running.is_none() && state.revise_focused,
+                                    theme,
+                                )),
+                        )
+                        .child(
+                            button("blueprint-revise-go", "Revise", false, theme).on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.revise_document(cx)),
+                            ),
+                        ),
+                );
+            }
+            column = column.child(markdown_view::view(&doc.doc.body, theme));
+            column = column.child(section_media(state, &kind, theme, cx));
+            if doc.doc.kind == "milestones" && state.viewing.is_none() {
+                column = column.child(div().flex().flex_row().child(
+                    button("blueprint-plan", "Plan these as tasks", true, theme).on_click(
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.plan_from_milestones(window, cx)
+                        }),
+                    ),
+                ));
+            }
             for (index, diagram) in doc.diagrams.iter().enumerate() {
                 column = column.child(diagram_block(
                     state,
@@ -526,6 +1225,12 @@ pub(super) fn panel(
                     theme,
                     cx,
                 ));
+            }
+            if doc.doc.kind == "architecture"
+                && state.viewing.is_none()
+                && let Some(drift) = &state.drift
+            {
+                column = column.child(drift_block(drift, theme, cx));
             }
             column.into_any_element()
         }
@@ -555,6 +1260,95 @@ pub(super) fn panel(
     )
 }
 
+/// The images and files kept with a section, and the button that adds more.
+fn section_media(
+    state: &BlueprintState,
+    doc_kind: &str,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+    let mut tiles = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(theme.spacing.sm)
+        .items_center();
+    for (index, item) in state
+        .media
+        .iter()
+        .filter(|item| item.doc_kind == doc_kind)
+        .enumerate()
+    {
+        let path = dir.join(&item.stored_name);
+        let body = match item.kind {
+            MediaKind::Image => div()
+                .w(px(180.))
+                .h(px(120.))
+                .rounded(theme.radius.md)
+                .overflow_hidden()
+                .border_1()
+                .border_color(theme.palette.border)
+                .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover))
+                .into_any_element(),
+            _ => div()
+                .px(theme.spacing.sm)
+                .py(theme.spacing.xs)
+                .pr(px(30.))
+                .rounded(theme.radius.md)
+                .border_1()
+                .border_color(theme.palette.border)
+                .bg(theme.palette.surface)
+                .text_size(theme.typography.caption)
+                .child(item.file_name.clone())
+                .into_any_element(),
+        };
+        let (remove_kind, remove_name, open) =
+            (item.doc_kind.clone(), item.stored_name.clone(), path);
+        tiles = tiles.child(
+            div()
+                .id(("section-media", index))
+                .relative()
+                .cursor_pointer()
+                .child(body)
+                .child(
+                    div().absolute().top(px(4.)).right(px(4.)).child(
+                        crate::components::icon_button(("section-media-remove", index), "x", theme)
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.remove_section_media(
+                                    remove_kind.clone(),
+                                    remove_name.clone(),
+                                    cx,
+                                )
+                            })),
+                    ),
+                )
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_with_system(&open))),
+        );
+    }
+    let kind = doc_kind.to_string();
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(tiles)
+        .child(
+            div().flex().flex_row().child(
+                crate::components::button(
+                    "section-media-add",
+                    "Add an image or file",
+                    crate::components::Variant::Ghost,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.add_section_media(kind.clone(), cx)
+                })),
+            ),
+        )
+        .into_any_element()
+}
+
 /// One diagram with its title and the copy buttons.
 fn diagram_block(
     state: &BlueprintState,
@@ -568,10 +1362,7 @@ fn diagram_block(
         if state.copied == Some((doc, index, format)) {
             "Copied"
         } else {
-            match format {
-                "Mermaid" => "Copy Mermaid",
-                _ => "Copy SVG",
-            }
+            "Copy Mermaid"
         }
     };
     let kind = match diagram.graph.kind {
@@ -619,17 +1410,16 @@ fn diagram_block(
                             )),
                         )
                         .child(
-                            button(
-                                ("diagram-svg", doc * 100 + index),
-                                label("SVG"),
-                                false,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    this.copy_diagram(doc, index, "SVG", cx)
-                                },
-                            )),
+                            button(("diagram-svg", doc * 100 + index), "Save SVG", false, theme)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.save_diagram(doc, index, false, cx)
+                                })),
+                        )
+                        .child(
+                            button(("diagram-png", doc * 100 + index), "Save PNG", false, theme)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.save_diagram(doc, index, true, cx)
+                                })),
                         ),
                 ),
         )

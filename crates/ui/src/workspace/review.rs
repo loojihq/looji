@@ -231,6 +231,7 @@ fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<
             &job.knowledge_path,
             job.project,
             Path::new(&job.root),
+            false,
         ) {
             Ok(agent) => run_with(agent.as_ref(), request, cancel, push).await,
             Err(err) => push(Update::Failed(err)),
