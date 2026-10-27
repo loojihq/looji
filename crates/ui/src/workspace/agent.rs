@@ -5,7 +5,11 @@ use std::{path::Path, sync::Arc};
 
 use looji_ai::{
     AiError, ChatProvider, Provider,
-    agent::{ToolHost, ToolReply, ToolSpec, anthropic::AnthropicAgent, claude::ClaudeCodeAgent},
+    agent::{
+        ToolHost, ToolReply, ToolSpec,
+        anthropic::AnthropicAgent,
+        claude::{ClaudeCodeAgent, DEEP_TURNS, QUICK_TURNS},
+    },
     claude_code, key_store,
 };
 use looji_domain::ProjectId;
@@ -53,6 +57,7 @@ pub(super) fn agent_for(
     knowledge_path: &Path,
     project: ProjectId,
     root: &Path,
+    deep: bool,
 ) -> Result<Arc<dyn ChatProvider>, AiError> {
     let project = project.as_uuid().to_string();
     match provider {
@@ -77,6 +82,7 @@ pub(super) fn agent_for(
                     project,
                     root.to_string_lossy().into_owned(),
                 ],
+                max_turns: if deep { DEEP_TURNS } else { QUICK_TURNS },
             }))
         }
         Provider::Anthropic => {

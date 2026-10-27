@@ -58,8 +58,25 @@ that file.\n\n\
 Reply with only a JSON object: {\"documents\": [{\"kind\": \"...\", \"title\": \"...\", \"body\": \"Markdown\", \
 \"diagrams\": []}]}. No text outside it.";
 
-/// The request that asks an agent for a blueprint. `idea` is what the user wants built or described.
-pub fn build_blueprint_request(
+/// One document the blueprint plans to hold, before it is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineItem {
+    pub kind: String,
+    pub title: String,
+    /// What the document will cover, in a sentence.
+    pub summary: String,
+}
+
+const OUTLINE_INSTRUCTIONS: &str = "You plan the blueprint for a software project before it is written. If the project has a \
+repository, look at it briefly with your tools (the repo map, a few searches) so the plan fits what exists. Then \
+propose the documents the blueprint should hold, from these kinds: \"overview\", \"architecture\", \"data_model\", \
+\"interfaces\", \"decisions\", \"risks\", \"milestones\". Leave out a kind that does not apply, and name the real \
+parts of this project in each summary instead of generic words. At most 8 documents.\n\n\
+Reply with only a JSON object: {\"outline\": [{\"kind\": \"...\", \"title\": \"...\", \"summary\": \"one sentence on what \
+it will cover\"}]}. No text outside it.";
+
+/// The request that asks an agent for an outline, which the user adjusts before the blueprint is written.
+pub fn build_outline_request(
     model: &str,
     project: &str,
     description: &str,
@@ -71,10 +88,88 @@ pub fn build_blueprint_request(
         message.push_str(&format!("\nDescription:\n{}\n", description.trim()));
     }
     if !idea.trim().is_empty() {
+        message.push_str(&format!("\nWhat the blueprint is for:\n{}\n", idea.trim()));
+    }
+    message.push_str(if has_repository {
+        "\nThe project has a repository."
+    } else {
+        "\nThe project has no repository yet."
+    });
+    ChatRequest {
+        model: model.to_string(),
+        system: Some(OUTLINE_INSTRUCTIONS.to_string()),
+        messages: vec![ChatMessage::user(message)],
+        max_tokens: 2_000,
+    }
+}
+
+/// Reads an outline. Entries without a title are skipped, and an unknown kind becomes "other".
+pub fn parse_outline(reply: &str) -> Result<Vec<OutlineItem>, String> {
+    let value = json_object(reply).ok_or("The outline was not readable.")?;
+    let items: Vec<OutlineItem> = value
+        .get("outline")
+        .and_then(Value::as_array)
+        .ok_or("The outline had no documents.")?
+        .iter()
+        .filter_map(|item| {
+            let title = item.get("title")?.as_str()?.trim();
+            if title.is_empty() {
+                return None;
+            }
+            let kind = item
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|kind| kind.trim().to_ascii_lowercase().replace([' ', '-'], "_"))
+                .filter(|kind| KINDS.contains(&kind.as_str()))
+                .unwrap_or_else(|| "other".to_string());
+            Some(OutlineItem {
+                kind,
+                title: title.to_string(),
+                summary: item
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            })
+        })
+        .take(8)
+        .collect();
+    if items.is_empty() {
+        return Err("The outline had no documents.".to_string());
+    }
+    Ok(items)
+}
+
+/// The request that asks an agent for a blueprint. `idea` is what the user wants built or described.
+pub fn build_blueprint_request(
+    model: &str,
+    project: &str,
+    description: &str,
+    idea: &str,
+    outline: &[OutlineItem],
+    has_repository: bool,
+) -> ChatRequest {
+    let mut message = format!("Project: {project}\n");
+    if !description.trim().is_empty() {
+        message.push_str(&format!("\nDescription:\n{}\n", description.trim()));
+    }
+    if !idea.trim().is_empty() {
         message.push_str(&format!(
             "\nWhat to write the blueprint for:\n{}\n",
             idea.trim()
         ));
+    }
+    if !outline.is_empty() {
+        message.push_str(
+            "\nThe user has agreed this outline. Write exactly these documents, in this order, and no others:\n",
+        );
+        for item in outline {
+            message.push_str(&format!(
+                "- kind \"{}\", titled \"{}\": {}\n",
+                item.kind, item.title, item.summary
+            ));
+        }
     }
     message.push_str(if has_repository {
         "\nThe project has a repository. Research it before you write."
@@ -262,10 +357,38 @@ mod tests {
     }
 
     #[test]
+    fn an_outline_is_read_with_unknown_kinds_as_other_and_blank_titles_skipped() {
+        let reply = r#"{"outline": [
+            {"kind": "overview", "title": "Overview", "summary": "What the shop is."},
+            {"kind": "Data Model", "title": "Data", "summary": "Orders and items."},
+            {"kind": "poetry", "title": "Verse"},
+            {"kind": "risks", "title": " "}
+        ]}"#;
+        let items = parse_outline(reply).unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[1].kind, "data_model");
+        assert_eq!(items[2].kind, "other");
+        assert!(parse_outline(r#"{"outline": []}"#).is_err());
+        assert!(parse_outline("no").is_err());
+    }
+
+    #[test]
+    fn an_agreed_outline_goes_into_the_writing_request() {
+        let outline = vec![OutlineItem {
+            kind: "overview".into(),
+            title: "Overview".into(),
+            summary: "Goals of the shop.".into(),
+        }];
+        let request = build_blueprint_request("m", "Shop", "", "", &outline, false);
+        let text = &request.messages[0].content;
+        assert!(text.contains("exactly these documents") && text.contains("Goals of the shop."));
+    }
+
+    #[test]
     fn the_request_says_whether_there_is_a_repository_to_research() {
-        let with = build_blueprint_request("m", "Shop", "A shop.", "Add payments", true);
+        let with = build_blueprint_request("m", "Shop", "A shop.", "Add payments", &[], true);
         assert!(with.messages[0].content.contains("Research it"));
-        let without = build_blueprint_request("m", "Shop", "", "", false);
+        let without = build_blueprint_request("m", "Shop", "", "", &[], false);
         assert!(without.messages[0].content.contains("no repository"));
     }
 }

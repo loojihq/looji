@@ -12,7 +12,10 @@ use std::{
 use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken,
-    blueprint::{build_blueprint_request, build_revision_request, parse_blueprint},
+    blueprint::{
+        OutlineItem, build_blueprint_request, build_outline_request, build_revision_request,
+        parse_blueprint, parse_outline,
+    },
     generation::{Update, run_with},
 };
 use looji_diagram::{
@@ -54,6 +57,8 @@ fn doc_view(doc: BlueprintDoc) -> DocView {
 
 /// A generation in progress.
 struct Run {
+    /// Planning the outline, not writing yet.
+    outlining: bool,
     /// The document being changed, when this is a revision and not a new blueprint.
     revising: Option<usize>,
     steps: Vec<String>,
@@ -78,6 +83,8 @@ pub(super) struct BlueprintState {
     scroll: ScrollHandle,
     /// The design compared with the code, when the project has a repository with units of code.
     drift: Option<Drift>,
+    /// The outline waiting for the user's say, each document with whether it stays.
+    outline: Option<Vec<(OutlineItem, bool)>>,
     /// Every version the blueprint has had, newest first.
     versions: Vec<u32>,
     /// An older version being looked at, instead of the current one.
@@ -109,6 +116,7 @@ impl WorkspaceView {
             copied: None,
             scroll: ScrollHandle::new(),
             drift: None,
+            outline: None,
             versions: Vec::new(),
             viewing: None,
         });
@@ -139,8 +147,38 @@ impl WorkspaceView {
     }
 
     /// Starts writing a blueprint from the idea in the box.
+    /// Plans the outline first, for the user to adjust before anything is written.
     pub(super) fn generate_blueprint(&mut self, cx: &mut Context<Self>) {
-        self.start_run(None, cx);
+        if let Some(state) = self.blueprint.as_mut() {
+            state.outline = None;
+        }
+        self.start_run(None, true, cx);
+    }
+
+    /// Writes the blueprint from the outline the user agreed.
+    pub(super) fn write_blueprint(&mut self, cx: &mut Context<Self>) {
+        self.start_run(None, false, cx);
+    }
+
+    /// Drops the outline, to start again.
+    fn discard_outline(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.blueprint.as_mut() {
+            state.outline = None;
+        }
+        cx.notify();
+    }
+
+    /// Keeps a document in the outline, or leaves it out.
+    fn toggle_outline_item(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(entry) = self
+            .blueprint
+            .as_mut()
+            .and_then(|state| state.outline.as_mut())
+            .and_then(|outline| outline.get_mut(index))
+        {
+            entry.1 = !entry.1;
+        }
+        cx.notify();
     }
 
     /// Asks for a change to the open document, written as a new version of the blueprint.
@@ -152,11 +190,11 @@ impl WorkspaceView {
             return;
         }
         let index = state.selected;
-        self.start_run(Some(index), cx);
+        self.start_run(Some(index), false, cx);
     }
 
     /// Starts an agent: on the whole blueprint, or on one document of it.
-    fn start_run(&mut self, revising: Option<usize>, cx: &mut Context<Self>) {
+    fn start_run(&mut self, revising: Option<usize>, outlining: bool, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active() else {
             return;
         };
@@ -173,6 +211,13 @@ impl WorkspaceView {
         }
         let idea = state.idea.trim().to_string();
         let change = state.revise.trim().to_string();
+        let agreed: Vec<OutlineItem> = state
+            .outline
+            .iter()
+            .flatten()
+            .filter(|(_, kept)| *kept)
+            .map(|(item, _)| item.clone())
+            .collect();
         let document = revising
             .and_then(|index| state.docs.get(index))
             .map(|view| {
@@ -193,6 +238,9 @@ impl WorkspaceView {
         let provider = super::ai_settings::provider_for(cx, Some(id));
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
         let request = match &document {
+            _ if outlining => {
+                build_outline_request(&model, &name, &description, &idea, root.is_some())
+            }
             Some((kind, title, body, diagrams)) => build_revision_request(
                 &model,
                 &name,
@@ -200,7 +248,9 @@ impl WorkspaceView {
                 &change,
                 root.is_some(),
             ),
-            None => build_blueprint_request(&model, &name, &description, &idea, root.is_some()),
+            None => {
+                build_blueprint_request(&model, &name, &description, &idea, &agreed, root.is_some())
+            }
         };
 
         let cancel = CancellationToken::new();
@@ -218,6 +268,7 @@ impl WorkspaceView {
         });
         if let Some(state) = self.blueprint.as_mut() {
             state.running = Some(Run {
+                outlining,
                 revising,
                 steps: Vec::new(),
                 queue: Arc::clone(&queue),
@@ -237,9 +288,13 @@ impl WorkspaceView {
                 };
                 // With a repository the agent researches it. Without one the model writes from the description.
                 let provider = match root {
-                    Some(root) => {
-                        super::agent::agent_for(provider, &knowledge_path, id, Path::new(&root))
-                    }
+                    Some(root) => super::agent::agent_for(
+                        provider,
+                        &knowledge_path,
+                        id,
+                        Path::new(&root),
+                        true,
+                    ),
                     None => looji_ai::connect(provider),
                 };
                 match provider {
@@ -260,6 +315,7 @@ impl WorkspaceView {
             return false;
         };
         let revising = run.revising;
+        let outlining = run.outlining;
         let updates = match run.queue.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
@@ -268,16 +324,27 @@ impl WorkspaceView {
         for update in updates {
             match update {
                 Update::Step(step) => run.steps.push(step),
-                Update::Finished(text) => finished = Some(parse_blueprint(&text)),
+                Update::Finished(text) => finished = Some(Ok(text)),
                 Update::Failed(err) => finished = Some(Err(err.to_string())),
                 Update::Text(_) | Update::Source(_) => {}
             }
         }
-        let Some(outcome) = finished else {
+        let Some(reply) = finished else {
             cx.notify();
             return true;
         };
         state.running = None;
+        if outlining {
+            match reply.and_then(|text| parse_outline(&text)) {
+                Ok(items) => {
+                    state.outline = Some(items.into_iter().map(|item| (item, true)).collect());
+                }
+                Err(message) => state.error = Some(message),
+            }
+            cx.notify();
+            return false;
+        }
+        let outcome = reply.and_then(|text| parse_blueprint(&text));
         let mut refresh = false;
         match outcome {
             Ok(parsed) => {
@@ -321,6 +388,7 @@ impl WorkspaceView {
                             .into_iter()
                             .map(doc_view)
                             .collect();
+                        state.outline = None;
                         state.selected = revising.unwrap_or(0);
                         state.revise = TextEdit::default();
                         refresh = true;
@@ -833,13 +901,55 @@ pub(super) fn panel(
                 theme,
             )),
     );
+    if let (None, Some(outline)) = (&state.running, &state.outline) {
+        // The outline, for the user to keep or drop documents from before anything is written.
+        generator = generator.child(caption(
+            "This is the plan. Click a document to leave it out, or change the description above and plan again."
+                .to_string(),
+        ));
+        for (index, (item, kept)) in outline.iter().enumerate() {
+            generator = generator.child(
+                crate::components::segment(*kept, theme)
+                    .id(("blueprint-outline", index))
+                    .justify_start()
+                    .child(div().child(format!(
+                        "{} {}: {}",
+                        if *kept { "\u{2713}" } else { "\u{2717}" },
+                        item.title,
+                        item.summary
+                    )))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.toggle_outline_item(index, cx)
+                    })),
+            );
+        }
+    }
+    let has_outline = state.outline.is_some();
     let action = match &state.running {
+        None if has_outline => div()
+            .flex()
+            .flex_row()
+            .gap(theme.spacing.sm)
+            .child(
+                button("blueprint-write", "Write blueprint", true, theme)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.write_blueprint(cx))),
+            )
+            .child(
+                button("blueprint-replan", "Plan again", false, theme).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.generate_blueprint(cx)),
+                ),
+            )
+            .child(
+                button("blueprint-discard", "Cancel", false, theme)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.discard_outline(cx))),
+            )
+            .into_any_element(),
         None => button(
             "blueprint-generate",
             if state.docs.is_empty() {
-                "Generate blueprint"
+                "Plan the blueprint"
             } else {
-                "Generate a new version"
+                "Plan a new version"
             },
             true,
             theme,
@@ -852,7 +962,15 @@ pub(super) fn panel(
     };
     generator = generator.child(action);
     if let Some(run) = &state.running {
-        generator = generator.child(caption("Researching and writing\u{2026}".to_string()));
+        let writing = state.running.as_ref().is_some_and(|run| !run.outlining);
+        generator = generator.child(caption(
+            if writing {
+                "Researching and writing\u{2026}"
+            } else {
+                "Planning the outline\u{2026}"
+            }
+            .to_string(),
+        ));
         let skipped = run.steps.len().saturating_sub(4);
         for step in &run.steps[skipped..] {
             generator = generator.child(caption(format!("\u{2022} {step}")));
