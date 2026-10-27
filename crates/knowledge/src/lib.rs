@@ -15,6 +15,7 @@ pub mod chunk;
 pub mod facts;
 pub mod git;
 pub mod mcp;
+pub mod related;
 pub mod safety;
 pub mod store;
 pub mod sync;

@@ -15,7 +15,8 @@ use std::{
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId, Task, pack_hunks,
+    CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId, Task, TaskId,
+    pack_hunks,
 };
 use looji_knowledge::{
     Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, watch::RepoWatcher,
@@ -337,6 +338,29 @@ impl WorkspaceView {
 
 /// The hunks to show the model for a question, from the knowledge base. `None` when the project hasn't been indexed
 /// yet, so the caller can fall back to reading the repository directly.
+/// The project's other issues that look like this one, read from the knowledge base. Empty until the project has been
+/// indexed, and when anything goes wrong, since this is a hint and not something the user asked for.
+pub(super) fn related_for(
+    knowledge_path: &Path,
+    project: ProjectId,
+    task: TaskId,
+    title: &str,
+    description: &str,
+) -> Vec<looji_knowledge::related::RelatedIssue> {
+    let Ok(store) = looji_knowledge::KnowledgeStore::open(knowledge_path) else {
+        return Vec::new();
+    };
+    store
+        .related_issues(
+            &project.as_uuid().to_string(),
+            title,
+            description,
+            Some(&task.as_uuid().to_string()),
+            3,
+        )
+        .unwrap_or_default()
+}
+
 pub(super) fn search_hunks(
     database: &Path,
     project: ProjectId,

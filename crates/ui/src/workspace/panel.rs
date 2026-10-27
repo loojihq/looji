@@ -49,6 +49,8 @@ pub(super) struct PanelState {
     pub error: Option<String>,
     /// Plain information, such as a link that isn't available yet.
     pub notice: Option<String>,
+    /// Other issues that look like this one.
+    pub related: Vec<looji_knowledge::related::RelatedIssue>,
 }
 
 /// What a history entry says, in words.
@@ -128,6 +130,19 @@ impl WorkspaceView {
             Vec::new()
         });
         self.load_review(task, cx);
+        let related = match (
+            self.projects.active_id(),
+            self.board.iter().find(|t| t.id() == task),
+        ) {
+            (Some(project), Some(found)) => super::knowledge::related_for(
+                &cx.global::<crate::database::AppDatabase>().knowledge_path,
+                project,
+                task,
+                found.title(),
+                found.description(),
+            ),
+            _ => Vec::new(),
+        };
         let already_open = self.panel.is_some();
         self.panel = Some(PanelState {
             task,
@@ -136,6 +151,7 @@ impl WorkspaceView {
             media,
             error: None,
             notice: None,
+            related,
         });
         // The task opens in its own window. One that is already open follows the new task.
         if !already_open {
@@ -487,6 +503,7 @@ pub(super) fn render(
                     .child(notice),
             )
         })
+        .children(related_section(panel, theme, cx))
         .children(super::review::section(
             view,
             panel.task,
@@ -501,6 +518,59 @@ pub(super) fn render(
         .child(history);
 
     Some(panel_column.into_any_element())
+}
+
+/// Other issues that look like the open one, with the likely duplicates marked. A click opens the other issue.
+fn related_section(
+    panel: &PanelState,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> Option<AnyElement> {
+    if panel.related.is_empty() {
+        return None;
+    }
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(crate::components::section_label("Looks like", theme));
+    for (index, issue) in panel.related.iter().enumerate() {
+        let Some(id) = uuid::Uuid::parse_str(&issue.id).ok().map(TaskId::from_uuid) else {
+            continue;
+        };
+        let note = if issue.possible_duplicate {
+            "Possible duplicate"
+        } else {
+            "Related"
+        };
+        column = column.child(
+            div()
+                .id(("panel-related", index))
+                .flex()
+                .flex_row()
+                .gap(theme.spacing.sm)
+                .cursor_pointer()
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(theme.typography.caption)
+                        .text_color(if issue.possible_duplicate {
+                            theme.palette.danger
+                        } else {
+                            theme.palette.text_secondary
+                        })
+                        .child(note),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(format!("{} ({})", issue.title, issue.status)),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_panel(id, cx))),
+        );
+    }
+    Some(column.into_any_element())
 }
 
 /// Puts an edited task back on the board, in its place. Only that one task changes, so the card for
