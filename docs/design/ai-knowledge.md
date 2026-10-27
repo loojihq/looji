@@ -336,8 +336,14 @@ How:
 - **Prefetch.** When a card expands, its retrieval runs in the background, so Explain issue starts with its context
   ready. When a review is likely (a card is dragged toward In review), its diff is gathered ahead of time.
 - **Parallel tool calls** in the agent loop, and streaming for every step and answer.
-- **A warm Claude Code session.** CLI start-up costs seconds per call. Keep one session per project alive through
-  the Agent SDK's streaming mode, or reuse a session id, so follow-ups don't pay start-up again.
+- **A warm Claude Code session: measured, not built.** The idea was that CLI start-up costs seconds per call, so one
+  session per project could stay alive through streaming input. Measured on 2026-10-27 with a one-word prompt: a cold
+  `claude -p` took 6.6 to 8.3 seconds, and the second and third turns of a session kept alive in streaming mode took
+  7.0 and 5.4 seconds, so there was no gain. With `--bare`, which skips start-up work but needs an API key, a call
+  failed in about 1 second, so the process itself starts in about that long and the rest is the model call. A warm
+  process would also carry earlier turns and break the per-request tool limits. Speed comes from fewer turns, from
+  prefetching retrieval, and from the Anthropic API path (prompt caching), not from keeping the CLI alive. Measure
+  again if the CLI's start-up changes.
 
 ## Phasing
 
@@ -376,7 +382,7 @@ Each phase ships on its own and is useful by itself.
 **Phase 4: proactive and deeper reviews (ongoing)**
 - Opt-in test runs in reviews. Architecture drift findings in reviews.
 - Digests, risk notes, stale and blocker nudges.
-- A warm Claude Code session. Rerank where measurement says it helps.
+- Rerank where measurement says it helps. (A warm Claude Code session was measured and gave no gain.)
 - Wireframes, and text from PDFs and images.
 
 ## Phase 1 status
