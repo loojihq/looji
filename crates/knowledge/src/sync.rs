@@ -15,7 +15,7 @@ use crate::{
         Chunk, CommitDoc, IssueDoc, SourceKind, chunk_code, chunk_commit, chunk_issue,
         chunk_markdown, chunk_plain,
     },
-    safety::{self, FileClass, MAX_FILE_BYTES},
+    safety::{self, FileClass, MAX_FILE_BYTES, MAX_PDF_BYTES},
     store::{KnowledgeStore, SourceMeta},
 };
 
@@ -151,7 +151,7 @@ impl Syncer {
         note: &str,
     ) -> Result<Outcome> {
         let kind = match safety::classify(path) {
-            FileClass::Doc => SourceKind::Doc,
+            FileClass::Doc | FileClass::Pdf => SourceKind::Doc,
             _ => SourceKind::Code,
         };
         store.replace_source(
@@ -162,6 +162,52 @@ impl Syncer {
             &[],
         )?;
         Ok(Outcome::HeldBack)
+    }
+
+    /// Reads a PDF's text into the knowledge base, a chunk or more for each page, labelled with the page. A PDF with
+    /// no text layer, or one that can't be read, is held back with the reason.
+    fn index_pdf(
+        &mut self,
+        store: &mut KnowledgeStore,
+        project: &str,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<Outcome> {
+        let hash = hash_bytes(bytes);
+        if store
+            .source_hash(project, SourceKind::Doc, path)?
+            .as_deref()
+            == Some(hash.as_str())
+        {
+            return Ok(Outcome::Unchanged);
+        }
+        let pages = match crate::pdf::pages(bytes) {
+            Ok(pages) => pages,
+            Err(reason) => {
+                return self.hold_back(store, project, path, &format!("held back: {reason}"));
+            }
+        };
+        let mut chunks = Vec::new();
+        let mut redacted_any = false;
+        for (number, text) in pages {
+            let Some((text, redacted)) = safety::redact(&text) else {
+                return self.hold_back(store, project, path, "held back: contains a private key");
+            };
+            redacted_any |= redacted;
+            for mut chunk in chunk_plain(path, SourceKind::Doc, &text) {
+                chunk.label = Some(format!("page {number}"));
+                chunks.push(chunk);
+            }
+        }
+        let note = redacted_any.then_some("secret text was taken out before it was indexed");
+        store.replace_source(
+            project,
+            SourceKind::Doc,
+            path,
+            &SourceMeta::new(&hash, bytes.len() as u64, note),
+            &chunks,
+        )?;
+        Ok(Outcome::Indexed)
     }
 
     /// Reads one file into the knowledge base, unless it hasn't changed.
@@ -199,11 +245,18 @@ impl Syncer {
             });
         }
         let kind = match class {
-            FileClass::Doc => SourceKind::Doc,
+            FileClass::Doc | FileClass::Pdf => SourceKind::Doc,
             _ => SourceKind::Code,
         };
 
         let metadata = fs::metadata(&full).map_err(|err| Error::Io(err.to_string()))?;
+        if class == FileClass::Pdf {
+            if metadata.len() > MAX_PDF_BYTES {
+                return self.hold_back(store, project, path, "held back: larger than 20 MB");
+            }
+            let bytes = fs::read(&full).map_err(|err| Error::Io(err.to_string()))?;
+            return self.index_pdf(store, project, path, &bytes);
+        }
         if metadata.len() > MAX_FILE_BYTES {
             return self.hold_back(store, project, path, "held back: larger than 1 MB");
         }
@@ -671,6 +724,39 @@ mod tests {
 
         assert!(store.search("p", &query("zqprivate")).unwrap().is_empty());
         assert!(!store.search("p", &query("zqpublic")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_pdfs_text_is_searchable_by_page_and_a_scanned_pdf_is_held_back() {
+        let (dir, mut store, mut syncer) = setup();
+        let write_bytes = |name: &str, bytes: Vec<u8>| {
+            let path = dir.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        write_bytes(
+            "docs/policy.pdf",
+            crate::pdf::fixtures::pdf(&["Introduction to returns", "Zebracorn refund window"]),
+        );
+        write_bytes("docs/scan.pdf", crate::pdf::fixtures::pdf(&[""]));
+
+        syncer.sync_repo(&mut store, "p", dir.path()).unwrap();
+
+        let hits = store.search("p", &query("zebracorn")).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path.as_deref(), Some("docs/policy.pdf"));
+        assert_eq!(hits[0].label.as_deref(), Some("page 2"));
+        let notes = store.health("p").unwrap().notes;
+        assert!(
+            notes
+                .iter()
+                .any(|(path, note)| path == "docs/scan.pdf" && note.contains("no text layer")),
+            "{notes:?}"
+        );
+
+        // Reading it again changes nothing.
+        let report = syncer.sync_repo(&mut store, "p", dir.path()).unwrap();
+        assert_eq!(report.indexed, 0);
     }
 
     #[test]

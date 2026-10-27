@@ -12,6 +12,8 @@ use looji_domain::Language;
 
 /// Largest file indexed, in bytes. A file this big is almost always generated or data.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+/// PDFs are bigger than text for what they say, so they get a larger limit.
+pub const MAX_PDF_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Folders that are never read, whatever the ignore files say.
 const EXCLUDED_DIRS: &[&str] = &[
@@ -47,6 +49,8 @@ pub enum FileClass {
     Code(Language),
     /// Prose: markdown and plain text.
     Doc,
+    /// A PDF, read for its text layer.
+    Pdf,
     /// Not indexed.
     Skip,
 }
@@ -108,6 +112,9 @@ pub fn classify(path: &str) -> FileClass {
         return FileClass::Code(language);
     }
     let lower = name.to_lowercase();
+    if lower.ends_with(".pdf") {
+        return FileClass::Pdf;
+    }
     if lower.ends_with(".md")
         || lower.ends_with(".mdx")
         || lower.ends_with(".markdown")

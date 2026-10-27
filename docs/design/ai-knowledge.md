@@ -388,7 +388,14 @@ Each phase ships on its own and is useful by itself.
 - Opt-in test runs in reviews. Architecture drift findings in reviews.
 - Digests, risk notes, stale and blocker nudges.
 - A warm Claude Code session and reranking were both measured and gave no gain, so neither is built.
-- Wireframes, and text from PDFs and images.
+- Text from PDFs: built for PDFs in the repository (see below). Still to do: PDFs attached to tasks, text from images
+  (OCR), and wireframes.
+
+**PDFs in the repository.** A `.pdf` file in the repository is indexed like a document, one set of chunks for each
+page, labelled "page N", up to 20 MB, 200 pages, and 400,000 characters. Only the text layer is read, by `pdf-extract`.
+`lopdf` alone was tried first and wrote "Identity-H Unimplemented" in place of the text of a PDF made by our own
+report export, so it was dropped for reading. A scanned PDF has no text layer and is held back with that reason, which
+the index health view lists, since reading it needs OCR. Secrets are redacted as in any other text.
 
 ## Phase 1 status
 
