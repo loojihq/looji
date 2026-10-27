@@ -4,6 +4,7 @@ mod agent;
 mod ai_settings;
 mod autoscroll;
 mod avatar;
+mod blueprint;
 mod board;
 mod board_search;
 mod card;
@@ -121,6 +122,8 @@ pub struct WorkspaceView {
     team_dialog: Option<team_dialog::TeamDialog>,
     /// The task chat, while it is open.
     chat_dialog: Option<chat::ChatDialog>,
+    /// The open project's blueprint window.
+    blueprint: Option<blueprint::BlueprintState>,
     /// The reviews of tasks that went into review, running or finished.
     reviews: review::Reviews,
     /// Follows the newest message in the chat, so a streaming reply stays in view.
@@ -230,6 +233,7 @@ impl WorkspaceView {
                     task_dialog: None,
                     team_dialog: None,
                     chat_dialog: None,
+                    blueprint: None,
                     reviews: review::Reviews::new(),
                     chat_scroll: ScrollHandle::new(),
                     update_task: None,
@@ -530,6 +534,9 @@ impl WorkspaceView {
         }
         if self.chat_dialog.is_some() {
             return self.chat_key(event, cx);
+        }
+        if self.blueprint.is_some() {
+            return self.blueprint_key(event, cx);
         }
         if self.project_settings_open && event.keystroke.key == "escape" {
             return self.request_project_settings_close(window, cx);
@@ -855,6 +862,7 @@ fn project_header(
                 .items_center()
                 .gap(theme.spacing.sm)
                 .child(chat::codebase_button(theme, cx))
+                .child(blueprint::button_open(theme, cx))
                 .child(project_settings::button(theme, cx)),
         );
 

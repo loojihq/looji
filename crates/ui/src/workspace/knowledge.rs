@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     thread::{self, JoinHandle},
@@ -15,7 +16,8 @@ use std::{
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId, Task, pack_hunks,
+    CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId, Task, TaskId,
+    pack_hunks,
 };
 use looji_knowledge::{
     Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, watch::RepoWatcher,
@@ -49,6 +51,10 @@ pub(super) struct Status {
     pub health: Option<Health>,
     /// Changes are found by scanning, because the system can't report them for this folder.
     pub polling: bool,
+    /// Passages with a meaning vector, out of all passages. `None` until the first look.
+    pub vectors: Option<(usize, usize)>,
+    /// Why the meaning index stopped, such as the model not downloading.
+    pub meaning_note: Option<String>,
 }
 
 enum Command {
@@ -64,11 +70,14 @@ pub(super) struct Service {
     commands: Sender<Command>,
     pub status: Arc<Mutex<Status>>,
     issues_fingerprint: u64,
+    /// Set when the service is dropped, so a long embedding pass ends between batches.
+    stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl Drop for Service {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
         let _ = self.commands.send(Command::Stop);
         // The worker notices within a moment. It is not waited for, so closing a project never stalls the window.
         drop(self.worker.take());
@@ -85,11 +94,13 @@ impl Service {
     ) -> Self {
         let (commands, receiver) = mpsc::channel();
         let status = Arc::new(Mutex::new(Status::default()));
+        let stop = Arc::new(AtomicBool::new(false));
         let worker = {
-            let (status, root, key) = (
+            let (status, root, key, stop) = (
                 Arc::clone(&status),
                 root.clone(),
                 project.as_uuid().to_string(),
+                Arc::clone(&stop),
             );
             thread::Builder::new()
                 .name("looji-knowledge".into())
@@ -101,6 +112,7 @@ impl Service {
                         issues,
                         &receiver,
                         &status,
+                        &stop,
                     )
                 })
                 .ok()
@@ -111,6 +123,7 @@ impl Service {
             commands,
             status,
             issues_fingerprint: fingerprint,
+            stop,
             worker,
         }
     }
@@ -137,6 +150,7 @@ fn run(
     mut issues: Vec<IssueDoc>,
     commands: &Receiver<Command>,
     status: &Mutex<Status>,
+    stop: &AtomicBool,
 ) {
     let fail = |message: String| update(status, |status| status.phase = Phase::Failed(message));
     let mut store = match KnowledgeStore::open(database) {
@@ -172,8 +186,46 @@ fn run(
             take_new_commits(store, syncer, project, root, issues);
             refresh_health(store);
         };
+    // Meaning vectors are made after the words are indexed, so search works at once and improves as they arrive.
+    let embedder = looji_embed::LocalEmbedder::new(
+        database
+            .parent()
+            .map(|parent| parent.join("models"))
+            .unwrap_or_else(|| PathBuf::from("models")),
+    );
+    let mut meaning_failed = false;
+    let mut embed = |store: &KnowledgeStore| {
+        if meaning_failed || stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let model = looji_knowledge::vectors::Embedder::model_id(&embedder).to_string();
+        let report = |store: &KnowledgeStore| {
+            if let Ok(progress) = store.vector_progress(project, &model) {
+                update(status, |status| status.vectors = Some(progress));
+            }
+        };
+        report(store);
+        let outcome = looji_knowledge::vectors::embed_pending(
+            store,
+            project,
+            &embedder,
+            looji_embed::BATCH,
+            stop,
+            &mut |_| report(store),
+        );
+        match outcome {
+            Ok(_) => update(status, |status| status.meaning_note = None),
+            Err(err) => {
+                eprintln!("looji: meaning index stopped: {err}");
+                meaning_failed = true;
+                update(status, |status| status.meaning_note = Some(err.to_string()));
+            }
+        }
+        report(store);
+    };
     index_everything(&mut store, &mut syncer, &issues);
     update(status, |status| status.phase = Phase::Watching);
+    embed(&store);
 
     loop {
         match commands.recv_timeout(Duration::from_millis(150)) {
@@ -188,6 +240,7 @@ fn run(
                 update(status, |status| status.phase = Phase::Indexing);
                 index_everything(&mut store, &mut syncer, &issues);
                 update(status, |status| status.phase = Phase::Watching);
+                embed(&store);
             }
             Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
@@ -204,6 +257,7 @@ fn run(
         }
         if touched {
             refresh_health(&store);
+            embed(&store);
         }
     }
     drop(watcher);
@@ -337,6 +391,29 @@ impl WorkspaceView {
 
 /// The hunks to show the model for a question, from the knowledge base. `None` when the project hasn't been indexed
 /// yet, so the caller can fall back to reading the repository directly.
+/// The project's other issues that look like this one, read from the knowledge base. Empty until the project has been
+/// indexed, and when anything goes wrong, since this is a hint and not something the user asked for.
+pub(super) fn related_for(
+    knowledge_path: &Path,
+    project: ProjectId,
+    task: TaskId,
+    title: &str,
+    description: &str,
+) -> Vec<looji_knowledge::related::RelatedIssue> {
+    let Ok(store) = looji_knowledge::KnowledgeStore::open(knowledge_path) else {
+        return Vec::new();
+    };
+    store
+        .related_issues(
+            &project.as_uuid().to_string(),
+            title,
+            description,
+            Some(&task.as_uuid().to_string()),
+            8,
+        )
+        .unwrap_or_default()
+}
+
 pub(super) fn search_hunks(
     database: &Path,
     project: ProjectId,
@@ -419,6 +496,17 @@ pub(super) fn health_block(
         )));
         if let Some(at) = health.last_indexed_at {
             block = block.child(line(format!("Last change read {}.", ago(at))));
+        }
+        if let Some(note) = &status.meaning_note {
+            block = block.child(line(format!(
+                "Matching by meaning is off: {note} Words still work."
+            )));
+        } else if let Some((done, total)) = status.vectors.filter(|(_, total)| *total > 0) {
+            block = block.child(line(if done >= total {
+                "Matching by meaning is on.".to_string()
+            } else {
+                format!("Learning the meaning of the passages: {done} of {total}.")
+            }));
         }
         for (path, note) in health.notes.iter().take(5) {
             block = block.child(line(format!("{path}: {note}")));

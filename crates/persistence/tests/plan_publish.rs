@@ -328,3 +328,39 @@ fn done_when_points_are_kept_with_the_draft_and_published_into_the_task_descript
         "Done when:\n- Empty passwords are refused\n- A test covers it"
     );
 }
+
+#[test]
+fn a_new_blueprint_replaces_the_old_one_as_the_next_version() {
+    use looji_domain::{BlueprintDoc, BlueprintRepository};
+    let fx = fixture();
+    let store = fx.open();
+    assert!(
+        BlueprintRepository::blueprint(&store, fx.project)
+            .unwrap()
+            .is_empty()
+    );
+
+    let first = [
+        BlueprintDoc::new("overview", "Overview", "Goals.", ""),
+        BlueprintDoc::new(
+            "architecture",
+            "Architecture",
+            "Parts.",
+            "[{\"type\":\"component\"}]",
+        ),
+    ];
+    assert_eq!(
+        BlueprintRepository::replace_blueprint(&store, fx.project, &first, at(1)).unwrap(),
+        1
+    );
+    let second = [BlueprintDoc::new("overview", "Overview", "New goals.", "")];
+    assert_eq!(
+        BlueprintRepository::replace_blueprint(&store, fx.project, &second, at(2)).unwrap(),
+        2
+    );
+
+    let now = BlueprintRepository::blueprint(&store, fx.project).unwrap();
+    assert_eq!(now.len(), 1);
+    assert_eq!((now[0].body.as_str(), now[0].version), ("New goals.", 2));
+    assert_eq!(now[0].diagrams, "[]");
+}

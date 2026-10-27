@@ -181,6 +181,7 @@ pub struct KnowledgeTools {
     store: Mutex<KnowledgeStore>,
     project: String,
     root: PathBuf,
+    embedder: Option<std::sync::Arc<dyn crate::vectors::Embedder>>,
 }
 
 impl KnowledgeTools {
@@ -197,7 +198,14 @@ impl KnowledgeTools {
             store: Mutex::new(store),
             project: project.to_string(),
             root: root.to_path_buf(),
+            embedder: None,
         }
+    }
+
+    /// Lets searches match by meaning as well as by words, once the project has vectors.
+    pub fn with_embedder(mut self, embedder: std::sync::Arc<dyn crate::vectors::Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
     }
 
     /// Runs one tool. A bad call is an answer with `is_error` set, never a failure of the caller.
@@ -231,14 +239,22 @@ impl KnowledgeTools {
             })
             .unwrap_or_default();
         let limit = number_arg(input, "limit", 8).clamp(1, 15);
-        let hits = store.search(
+        let request = SearchQuery {
+            text: query.clone(),
+            kinds,
+            limit,
+            ..Default::default()
+        };
+        let vector = self.embedder.as_ref().and_then(|embedder| {
+            crate::vectors::embed_query(store, &self.project, embedder.as_ref(), &query)
+                .map(|vector| (embedder.model_id().to_string(), vector))
+        });
+        let hits = store.search_hybrid(
             &self.project,
-            &SearchQuery {
-                text: query.clone(),
-                kinds,
-                limit,
-                ..Default::default()
-            },
+            &request,
+            vector
+                .as_ref()
+                .map(|(model, vector)| (model.as_str(), vector.as_slice())),
         )?;
         if hits.is_empty() {
             return Ok(ToolOutput::ok(

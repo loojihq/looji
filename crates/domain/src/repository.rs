@@ -225,3 +225,20 @@ pub trait ReviewNoteRepository {
     ) -> RepoResult<()>;
     fn notes(&self, task: TaskId) -> RepoResult<Vec<crate::review_note::ReviewNote>>;
 }
+
+/// The documents of a project's blueprint. Writing a blueprint replaces the whole set, and keeps the old one.
+pub trait BlueprintRepository {
+    /// The project's current documents, in order. Empty before a blueprint has been written.
+    fn blueprint(
+        &self,
+        project: crate::ids::ProjectId,
+    ) -> RepoResult<Vec<crate::blueprint::BlueprintDoc>>;
+    /// Replaces the project's blueprint with these documents as the next version. The one it replaces goes to the
+    /// history.
+    fn replace_blueprint(
+        &self,
+        project: crate::ids::ProjectId,
+        docs: &[crate::blueprint::BlueprintDoc],
+        at: crate::Timestamp,
+    ) -> RepoResult<u32>;
+}

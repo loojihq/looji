@@ -49,7 +49,12 @@ fn run_knowledge_server() -> Option<i32> {
         project,
         std::path::Path::new(root),
     ) {
-        Ok(tools) => tools,
+        Ok(tools) => tools.with_embedder(std::sync::Arc::new(looji_embed::LocalEmbedder::new(
+            std::path::Path::new(database)
+                .parent()
+                .map(|parent| parent.join("models"))
+                .unwrap_or_else(|| std::path::PathBuf::from("models")),
+        ))),
         Err(err) => {
             eprintln!("looji: the knowledge tools could not start: {err}");
             return Some(1);

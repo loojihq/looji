@@ -59,6 +59,14 @@ const WORKSPACE_SCOPED: &[(&str, &str)] = &[
         "index_entries",
         "DELETE FROM index_entries WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
     ),
+    (
+        "blueprint_docs",
+        "DELETE FROM blueprint_docs WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
+    (
+        "blueprint_history",
+        "DELETE FROM blueprint_history WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+    ),
     ("projects", "DELETE FROM projects WHERE workspace_id = ?1"),
 ];
 

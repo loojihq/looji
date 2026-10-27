@@ -5,6 +5,7 @@
 
 mod activity;
 mod attachment;
+mod blueprint;
 mod board;
 mod chat;
 mod clock;
@@ -52,6 +53,7 @@ pub use clock::{Clock, UtcOffset, format_clock_time, parse_clock_time};
 
 pub use activity::{ActivityKind, TaskActivity};
 pub use attachment::{Attachment, AttachmentRepository, MediaKind};
+pub use blueprint::BlueprintDoc;
 pub use board::{Column, ColumnRecord};
 pub use chat::{
     ModelChoice, Reply, ReplyState, approximate_tokens, recent_within_budget, resolve_model,
@@ -89,10 +91,10 @@ pub use project::{
 pub use project_view::{ProjectView, ProjectViewState, ScrollOffset, scroll_key};
 pub use report::{ReportItem, StatusSection, group_by_status, status_label};
 pub use repository::{
-    CodeSourceRepository, ColumnRepository, ListViewRepository, PlanDraftRepository,
-    ProjectFilterRepository, ProjectRepository, ProjectViewRepository, ReviewNoteRepository,
-    SettingsRepository, TaskChatRepository, TaskRepository, TeamMemberRepository,
-    WorkspaceRepository,
+    BlueprintRepository, CodeSourceRepository, ColumnRepository, ListViewRepository,
+    PlanDraftRepository, ProjectFilterRepository, ProjectRepository, ProjectViewRepository,
+    ReviewNoteRepository, SettingsRepository, TaskChatRepository, TaskRepository,
+    TeamMemberRepository, WorkspaceRepository,
 };
 pub use retrieval::{
     DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, estimate_tokens, is_test_path, pack_hunks, score_symbol,

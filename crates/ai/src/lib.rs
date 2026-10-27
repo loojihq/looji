@@ -7,6 +7,7 @@
 
 pub mod agent;
 pub mod anthropic;
+pub mod blueprint;
 pub mod chat;
 pub mod claude_code;
 mod error;
