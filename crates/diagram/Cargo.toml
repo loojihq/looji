@@ -1,0 +1,9 @@
+[package]
+name = "looji-diagram"
+description = "Diagrams as data: a constrained graph that an AI can write, a layered layout, and Mermaid and SVG export. No GPUI or SQLite."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json = "1"

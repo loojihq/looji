@@ -24,6 +24,7 @@ looji-report = { version = "0.0.1", path = "../report" }
 looji-updates = { version = "0.0.1", path = "../updates" }
 looji-knowledge = { version = "0.0.1", path = "../knowledge" }
 looji-embed = { version = "0.0.1", path = "../embed" }
+looji-diagram = { version = "0.0.1", path = "../diagram" }
 serde_json = { version = "1", features = ["raw_value"] }
 
 [build-dependencies]

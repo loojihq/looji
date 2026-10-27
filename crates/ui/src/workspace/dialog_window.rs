@@ -10,7 +10,7 @@
 use gpui::{prelude::*, *};
 
 use super::WorkspaceView;
-use super::{chat, plan_wizard, preferences_panel, task_dialog, task_form::Mode};
+use super::{blueprint, chat, plan_wizard, preferences_panel, task_dialog, task_form::Mode};
 use crate::{components, theme::ActiveTheme, title_bar::TITLE_BAR_HEIGHT, window_move};
 
 /// Which dialog a window shows.
@@ -19,6 +19,7 @@ pub(super) enum Kind {
     Task,
     TaskDetail,
     Chat,
+    Blueprint,
     Plan,
     ProjectSettings,
     Preferences,
@@ -42,6 +43,10 @@ impl Kind {
                 None => "Project settings".to_string(),
             },
             Kind::Plan => "Generate with AI".to_string(),
+            Kind::Blueprint => match view.projects.active() {
+                Some(project) => format!("{} blueprint", project.name()),
+                None => "Blueprint".to_string(),
+            },
             Kind::Chat => match view.chat_dialog.as_ref() {
                 Some(dialog) if dialog.whole_project => format!("Ask AI about {}", dialog.title),
                 Some(dialog) => format!("Ask AI: {}", dialog.title),
@@ -60,12 +65,13 @@ impl Kind {
             Kind::Preferences => size(px(720.), px(680.)),
             Kind::ProjectSettings => size(px(680.), px(720.)),
             Kind::Plan => size(px(1040.), px(800.)),
+            Kind::Blueprint => size(px(1040.), px(800.)),
         }
     }
 
     /// Whether the window can be resized. The planning window grows with its review.
     fn resizable(self) -> bool {
-        matches!(self, Kind::Plan)
+        matches!(self, Kind::Plan | Kind::Blueprint)
     }
 
     /// Whether this dialog is open in the main window's state.
@@ -77,6 +83,7 @@ impl Kind {
             Kind::Preferences => view.preferences_open,
             Kind::ProjectSettings => view.project_settings_open,
             Kind::Plan => view.plan_wizard.is_some(),
+            Kind::Blueprint => view.blueprint.is_some(),
         }
     }
 
@@ -93,6 +100,7 @@ impl Kind {
                 view.repo_dialog = None;
             }
             Kind::Plan => view.plan_wizard = None,
+            Kind::Blueprint => view.close_blueprint_state(),
         }
     }
 
@@ -114,6 +122,7 @@ impl Kind {
             Kind::Preferences => view.close_preferences(cx),
             Kind::ProjectSettings => view.request_project_settings_close(window, cx),
             Kind::Plan => view.request_plan_close(window, cx),
+            Kind::Blueprint => view.close_blueprint(cx),
         }
     }
 
@@ -130,6 +139,7 @@ impl Kind {
             Kind::TaskDetail => super::panel::render(view, theme, cx),
             Kind::Chat => chat::panel(view, theme, window, cx),
             Kind::Plan => plan_wizard::panel(view, theme, window, cx),
+            Kind::Blueprint => blueprint::panel(view, theme, cx),
             Kind::Preferences => Some(preferences_panel::render(view, theme, window, cx)),
             Kind::ProjectSettings => super::project_settings::panel(view, theme, window, cx),
         }

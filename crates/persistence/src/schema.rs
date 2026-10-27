@@ -160,6 +160,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "done_when_and_sources",
         sql: include_str!("sql/0031_done_when_and_sources.sql"),
     },
+    Migration {
+        version: 32,
+        name: "blueprints",
+        sql: include_str!("sql/0032_blueprints.sql"),
+    },
 ];
 
 #[cfg(test)]

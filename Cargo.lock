@@ -3218,6 +3218,7 @@ version = "0.0.1"
 dependencies = [
  "futures-util",
  "keyring",
+ "looji-diagram",
  "looji-domain",
  "looji-persistence",
  "looji-symbols",
@@ -3228,6 +3229,13 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "looji-diagram"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -3317,6 +3325,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "looji-ai",
+ "looji-diagram",
  "looji-domain",
  "looji-embed",
  "looji-knowledge",
