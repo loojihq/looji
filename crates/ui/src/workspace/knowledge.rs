@@ -409,7 +409,7 @@ pub(super) fn related_for(
             title,
             description,
             Some(&task.as_uuid().to_string()),
-            3,
+            8,
         )
         .unwrap_or_default()
 }

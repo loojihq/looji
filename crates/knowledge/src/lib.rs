@@ -14,6 +14,7 @@
 pub mod chunk;
 pub mod facts;
 pub mod git;
+pub mod hints;
 pub mod mcp;
 pub mod related;
 pub mod safety;

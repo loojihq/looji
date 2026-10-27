@@ -51,6 +51,8 @@ pub(super) struct PanelState {
     pub notice: Option<String>,
     /// Other issues that look like this one.
     pub related: Vec<looji_knowledge::related::RelatedIssue>,
+    /// What similar finished tasks suggest for this one.
+    pub hints: looji_knowledge::hints::Hints,
 }
 
 /// What a history entry says, in words.
@@ -143,6 +145,7 @@ impl WorkspaceView {
             ),
             _ => Vec::new(),
         };
+        let hints = hints_for(&related, &self.board);
         let already_open = self.panel.is_some();
         self.panel = Some(PanelState {
             task,
@@ -151,6 +154,7 @@ impl WorkspaceView {
             media,
             error: None,
             notice: None,
+            hints,
             related,
         });
         // The task opens in its own window. One that is already open follows the new task.
@@ -503,7 +507,7 @@ pub(super) fn render(
                     .child(notice),
             )
         })
-        .children(related_section(panel, theme, cx))
+        .children(related_section(view, panel, theme, cx))
         .children(super::review::section(
             view,
             panel.task,
@@ -522,11 +526,25 @@ pub(super) fn render(
 
 /// Other issues that look like the open one, with the likely duplicates marked. A click opens the other issue.
 fn related_section(
+    view: &WorkspaceView,
     panel: &PanelState,
     theme: &Theme,
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
-    if panel.related.is_empty() {
+    let task = view.board.iter().find(|task| task.id() == panel.task)?;
+    let estimate_hint = panel
+        .hints
+        .estimate_minutes
+        .filter(|_| task.estimate().is_none());
+    let assignee_hint = panel
+        .hints
+        .assignee
+        .as_deref()
+        .and_then(|key| uuid::Uuid::parse_str(key).ok())
+        .map(TeamMemberId::from_uuid)
+        .filter(|_| task.assignee_id().is_none())
+        .and_then(|id| view.members.iter().find(|member| member.id() == id));
+    if panel.related.is_empty() && estimate_hint.is_none() && assignee_hint.is_none() {
         return None;
     }
     let mut column = div()
@@ -534,7 +552,7 @@ fn related_section(
         .flex_col()
         .gap(theme.spacing.xs)
         .child(crate::components::section_label("Looks like", theme));
-    for (index, issue) in panel.related.iter().enumerate() {
+    for (index, issue) in panel.related.iter().take(3).enumerate() {
         let Some(id) = uuid::Uuid::parse_str(&issue.id).ok().map(TaskId::from_uuid) else {
             continue;
         };
@@ -570,7 +588,137 @@ fn related_section(
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_panel(id, cx))),
         );
     }
+    let note = |text: String| {
+        div()
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child(text)
+    };
+    if let Some(minutes) = estimate_hint {
+        let task_id = panel.task;
+        column = column.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .child(note(format!(
+                    "Similar finished tasks took about {} ({} of them).",
+                    hours_text(minutes),
+                    panel.hints.estimate_from
+                )))
+                .child(
+                    super::task_dialog::button(
+                        "hint-estimate",
+                        &format!("Use {}", hours_text(minutes)),
+                        false,
+                        theme,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.apply_estimate_hint(task_id, minutes, cx)
+                        },
+                    )),
+                ),
+        );
+    }
+    if let Some(member) = assignee_hint {
+        let (task_id, member_id) = (panel.task, member.id());
+        column = column.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.spacing.sm)
+                .child(note(format!(
+                    "{} has {} similar task(s).",
+                    member.name(),
+                    panel.hints.assignee_from
+                )))
+                .child(
+                    super::task_dialog::button(
+                        "hint-assignee",
+                        &format!("Assign {}", member.name()),
+                        false,
+                        theme,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.apply_assignee_hint(task_id, member_id, cx)
+                        },
+                    )),
+                ),
+        );
+    }
     Some(column.into_any_element())
+}
+
+/// Minutes as the panel writes them: "3h", "1.5h", or "45 min".
+fn hours_text(minutes: u32) -> String {
+    if minutes < 60 {
+        return format!("{minutes} min");
+    }
+    let hours = f64::from(minutes) / 60.0;
+    if minutes.is_multiple_of(60) {
+        format!("{}h", minutes / 60)
+    } else {
+        format!("{hours:.1}h")
+    }
+}
+
+/// What the similar tasks on the board suggest. A similar task counts once it can be found on the board, and it counts
+/// as done in the board's Done column.
+fn hints_for(
+    related: &[looji_knowledge::related::RelatedIssue],
+    board: &[Task],
+) -> looji_knowledge::hints::Hints {
+    let past: Vec<looji_knowledge::hints::PastTask> = related
+        .iter()
+        .filter_map(|issue| {
+            let id = uuid::Uuid::parse_str(&issue.id).ok()?;
+            let task = board.iter().find(|task| task.id().as_uuid() == id)?;
+            Some(looji_knowledge::hints::PastTask {
+                percent: issue.percent,
+                done: task.status() == Status::Done,
+                minutes: task.estimate().map(|estimate| estimate.minutes()),
+                assignee: task
+                    .assignee_id()
+                    .map(|member| member.as_uuid().to_string()),
+            })
+        })
+        .collect();
+    looji_knowledge::hints::hints(&past)
+}
+
+impl WorkspaceView {
+    /// Gives the task the estimate similar finished tasks suggest.
+    fn apply_estimate_hint(&mut self, task: TaskId, minutes: u32, cx: &mut Context<Self>) {
+        let result = self.edit_task(
+            task,
+            |task| task.set_estimate_minutes(Some(i64::from(minutes))),
+            cx,
+        );
+        if let Err(message) = result {
+            self.set_panel_error(message, cx);
+        }
+        cx.notify();
+    }
+
+    /// Assigns the task to the person who has the most similar work.
+    fn apply_assignee_hint(&mut self, task: TaskId, member: TeamMemberId, cx: &mut Context<Self>) {
+        let result = self.edit_task(
+            task,
+            |task| {
+                task.assign(Some(member));
+                Ok(())
+            },
+            cx,
+        );
+        if let Err(message) = result {
+            self.set_panel_error(message, cx);
+        }
+        cx.notify();
+    }
 }
 
 /// Puts an edited task back on the board, in its place. Only that one task changes, so the card for
@@ -597,7 +745,7 @@ mod tests {
         Position, ProjectId, Status, Task, TaskEvent, TaskEventKind, TaskId, Timestamp,
     };
 
-    use super::{describe, format_time, is_gone, replace_task};
+    use super::{describe, format_time, hints_for, hours_text, is_gone, replace_task};
 
     fn task(title: &str) -> Task {
         Task::new(
@@ -667,5 +815,36 @@ mod tests {
             format_time(Timestamp::from_unix_millis(millis)),
             "2026-10-14 00:23 UTC"
         );
+    }
+
+    #[test]
+    fn estimates_read_as_hours_or_minutes() {
+        assert_eq!(hours_text(45), "45 min");
+        assert_eq!(hours_text(180), "3h");
+        assert_eq!(hours_text(90), "1.5h");
+    }
+
+    #[test]
+    fn similar_finished_tasks_on_the_board_give_an_estimate_hint() {
+        use looji_knowledge::related::RelatedIssue;
+        let mut first = task("Fix login timeout");
+        first.set_status(Status::Done);
+        first.set_estimate_minutes(Some(120)).unwrap();
+        let mut second = task("Fix login timeout again");
+        second.set_status(Status::Done);
+        second.set_estimate_minutes(Some(180)).unwrap();
+        let related: Vec<RelatedIssue> = [&first, &second]
+            .iter()
+            .map(|found| RelatedIssue {
+                id: found.id().as_uuid().to_string(),
+                title: found.title().to_string(),
+                status: "Done".to_string(),
+                percent: 50,
+                possible_duplicate: false,
+            })
+            .collect();
+        let hints = hints_for(&related, &[first, second]);
+        assert_eq!(hints.estimate_minutes, Some(150));
+        assert_eq!(hints.estimate_from, 2);
     }
 }
