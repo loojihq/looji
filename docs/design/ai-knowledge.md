@@ -135,8 +135,13 @@ end_line, content, content_hash, updated_at)`.
   - Recently changed files.
   - Files owned (by blame) by the issue's assignee.
   - Chunks that open issues link to.
-- **Rerank (optional).** A cheap model pass over the top 30 ("rank these by relevance to the question"), used only
-  when the question is broad. This is phase 4, behind measurement.
+- **Rerank: measured, not built.** The idea was a model pass over the top results, used when the question is broad.
+  Measured on 2026-10-27 with `crates/embed/tests/rerank_eval.rs`, which reorders the top 20 hybrid results with the
+  `jina-reranker-v1-turbo-en` cross-encoder on the sample repository's questions. Identifier and docs questions were
+  already at recall 1.00 and mean reciprocal rank 1.00 and stayed there. Paraphrase questions got worse, from a mean
+  reciprocal rank of 0.81 to 0.70, at about 46 ms per question in a debug build. The set is small (20 questions over
+  six files) and covers one reranker, so this says "not now", not "never". Run the eval again on a larger repository,
+  or with another reranker, before building it.
 - **Packing.** Dedupe overlapping ranges, merge neighbours in the same file, expand to whole symbols, and fit a token
   budget. This keeps today's `pack_hunks` idea.
 
@@ -382,7 +387,7 @@ Each phase ships on its own and is useful by itself.
 **Phase 4: proactive and deeper reviews (ongoing)**
 - Opt-in test runs in reviews. Architecture drift findings in reviews.
 - Digests, risk notes, stale and blocker nudges.
-- Rerank where measurement says it helps. (A warm Claude Code session was measured and gave no gain.)
+- A warm Claude Code session and reranking were both measured and gave no gain, so neither is built.
 - Wireframes, and text from PDFs and images.
 
 ## Phase 1 status
