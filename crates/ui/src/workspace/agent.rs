@@ -81,11 +81,17 @@ pub(super) fn agent_for(
         }
         Provider::Anthropic => {
             let key = key_store::load()?.ok_or(AiError::NoApiKey)?;
-            let tools = KnowledgeTools::open(knowledge_path, &project, root).map_err(|err| {
-                AiError::CommandFailed(format!(
-                    "The project's knowledge could not be opened: {err}"
-                ))
-            })?;
+            let tools = KnowledgeTools::open(knowledge_path, &project, root)
+                .map(|tools| {
+                    tools.with_embedder(Arc::new(looji_embed::LocalEmbedder::new(
+                        knowledge_path.with_file_name("models"),
+                    )))
+                })
+                .map_err(|err| {
+                    AiError::CommandFailed(format!(
+                        "The project's knowledge could not be opened: {err}"
+                    ))
+                })?;
             Ok(Arc::new(AnthropicAgent::new(key, Arc::new(Host(tools)))))
         }
     }

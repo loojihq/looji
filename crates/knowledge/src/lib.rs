@@ -21,6 +21,7 @@ pub mod store;
 pub mod sync;
 pub mod tokens;
 pub mod tools;
+pub mod vectors;
 pub mod watch;
 
 pub use chunk::{Chunk, CommitDoc, IssueDoc, SourceKind};
@@ -42,6 +43,8 @@ pub enum Error {
     Git(String),
     #[error("the file watcher failed: {0}")]
     Watch(String),
+    #[error("the embedding model failed: {0}")]
+    Embed(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Bumped when the tables change. An older file is emptied and rebuilt.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// A chunk as it comes back from a search.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,7 +117,8 @@ impl KnowledgeStore {
                  DROP TABLE IF EXISTS meta;
                  DROP TABLE IF EXISTS commit_links;
                  DROP TABLE IF EXISTS issue_facts;
-                 DROP TABLE IF EXISTS commit_facts;",
+                 DROP TABLE IF EXISTS commit_facts;
+                 DROP TABLE IF EXISTS chunk_vectors;",
             )?;
         }
         connection.execute_batch(
@@ -172,6 +173,13 @@ impl KnowledgeStore {
                  files   TEXT    NOT NULL,
                  PRIMARY KEY (project, sha)
              );
+             CREATE TABLE IF NOT EXISTS chunk_vectors (
+                 chunk_id INTEGER PRIMARY KEY,
+                 project  TEXT NOT NULL,
+                 model    TEXT NOT NULL,
+                 vector   BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS chunk_vectors_by_project ON chunk_vectors (project, model);
              CREATE TABLE IF NOT EXISTS commit_links (
                  project TEXT NOT NULL,
                  sha     TEXT NOT NULL,
@@ -291,7 +299,7 @@ impl KnowledgeStore {
             "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE project = ?1)",
             params![project],
         )?;
-        for table in ["chunks", "sources", "meta", "commit_links"] {
+        for table in ["chunks", "sources", "meta", "commit_links", "chunk_vectors"] {
             transaction.execute(
                 &format!("DELETE FROM {table} WHERE project = ?1"),
                 params![project],
@@ -463,6 +471,11 @@ fn delete_chunks(
 ) -> Result<()> {
     connection.execute(
         "DELETE FROM chunks_fts WHERE rowid IN
+             (SELECT id FROM chunks WHERE project = ?1 AND kind = ?2 AND source = ?3)",
+        params![project, kind.stored(), reference],
+    )?;
+    connection.execute(
+        "DELETE FROM chunk_vectors WHERE chunk_id IN
              (SELECT id FROM chunks WHERE project = ?1 AND kind = ?2 AND source = ?3)",
         params![project, kind.stored(), reference],
     )?;
