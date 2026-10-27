@@ -218,7 +218,19 @@ fn sources_used(
             theme,
         ));
     for (index, source) in sources.iter().take(SHOWN).enumerate() {
+        let design = source
+            .reference
+            .starts_with(looji_knowledge::sync::BLUEPRINT_PREFIX);
         let text = match source.kind.as_str() {
+            // The blueprint is not a file, so it is named for what it is.
+            "doc" if design => format!(
+                "Blueprint: {}",
+                source
+                    .reference
+                    .trim_start_matches(looji_knowledge::sync::BLUEPRINT_PREFIX)
+                    .trim_end_matches(".md")
+                    .replace('_', " ")
+            ),
             "code" | "doc" if source.start_line > 0 => format!(
                 "{}:{}-{}",
                 source.reference, source.start_line, source.end_line
@@ -236,18 +248,20 @@ fn sources_used(
             .text_size(theme.typography.caption)
             .text_color(theme.palette.accent)
             .child(text);
-        list = list.child(if matches!(source.kind.as_str(), "code" | "doc") {
-            let reference = source.reference.clone();
-            row.cursor_pointer()
-                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                    if let Ok(Some(root)) = store(cx).load_path(project) {
-                        cx.reveal_path(&Path::new(&root).join(&reference));
-                    }
-                }))
-                .into_any_element()
-        } else {
-            row.into_any_element()
-        });
+        list = list.child(
+            if matches!(source.kind.as_str(), "code" | "doc") && !design {
+                let reference = source.reference.clone();
+                row.cursor_pointer()
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        if let Ok(Some(root)) = store(cx).load_path(project) {
+                            cx.reveal_path(&Path::new(&root).join(&reference));
+                        }
+                    }))
+                    .into_any_element()
+            } else {
+                row.into_any_element()
+            },
+        );
     }
     if sources.len() > SHOWN {
         list = list.child(caption(

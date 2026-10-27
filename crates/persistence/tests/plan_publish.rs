@@ -363,4 +363,20 @@ fn a_new_blueprint_replaces_the_old_one_as_the_next_version() {
     assert_eq!(now.len(), 1);
     assert_eq!((now[0].body.as_str(), now[0].version), ("New goals.", 2));
     assert_eq!(now[0].diagrams, "[]");
+
+    assert_eq!(
+        BlueprintRepository::blueprint_versions(&store, fx.project).unwrap(),
+        [2, 1]
+    );
+    let old = BlueprintRepository::blueprint_version(&store, fx.project, 1).unwrap();
+    assert_eq!(
+        old.iter().map(|doc| doc.kind.as_str()).collect::<Vec<_>>(),
+        ["overview", "architecture"]
+    );
+    assert_eq!(old[0].body, "Goals.");
+    assert!(
+        BlueprintRepository::blueprint_version(&store, fx.project, 9)
+            .unwrap()
+            .is_empty()
+    );
 }

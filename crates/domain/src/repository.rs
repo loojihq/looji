@@ -233,6 +233,15 @@ pub trait BlueprintRepository {
         &self,
         project: crate::ids::ProjectId,
     ) -> RepoResult<Vec<crate::blueprint::BlueprintDoc>>;
+    /// The versions the project's blueprint has had, newest first, with the current one first. Each is its version
+    /// number.
+    fn blueprint_versions(&self, project: crate::ids::ProjectId) -> RepoResult<Vec<u32>>;
+    /// The documents of one version, current or past. Empty for a version that does not exist.
+    fn blueprint_version(
+        &self,
+        project: crate::ids::ProjectId,
+        version: u32,
+    ) -> RepoResult<Vec<crate::blueprint::BlueprintDoc>>;
     /// Replaces the project's blueprint with these documents as the next version. The one it replaces goes to the
     /// history.
     fn replace_blueprint(

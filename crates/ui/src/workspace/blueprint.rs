@@ -70,6 +70,10 @@ pub(super) struct BlueprintState {
     scroll: ScrollHandle,
     /// The design compared with the code, when the project has a repository with units of code.
     drift: Option<Drift>,
+    /// Every version the blueprint has had, newest first.
+    versions: Vec<u32>,
+    /// An older version being looked at, instead of the current one.
+    viewing: Option<u32>,
 }
 
 impl WorkspaceView {
@@ -95,7 +99,11 @@ impl WorkspaceView {
             copied: None,
             scroll: ScrollHandle::new(),
             drift: None,
+            versions: Vec::new(),
+            viewing: None,
         });
+        self.load_versions(cx);
+        self.index_blueprint(cx);
         self.refresh_drift(cx);
         let main = cx.entity();
         cx.defer(move |cx| {
@@ -266,10 +274,105 @@ impl WorkspaceView {
             Err(message) => state.error = Some(message),
         }
         if refresh {
+            self.load_versions(cx);
+            self.index_blueprint(cx);
             self.refresh_drift(cx);
         }
         cx.notify();
         false
+    }
+
+    fn load_versions(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let versions = store(cx).blueprint_versions(project).unwrap_or_default();
+        if let Some(state) = self.blueprint.as_mut() {
+            state.versions = versions;
+            state.viewing = None;
+        }
+    }
+
+    /// Shows one version of the blueprint. The newest is the current one, and can be changed. Older ones are for
+    /// reading, and can be restored.
+    fn view_version(&mut self, version: u32, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let docs: Vec<DocView> = store(cx)
+            .blueprint_version(project, version)
+            .unwrap_or_default()
+            .into_iter()
+            .map(doc_view)
+            .collect();
+        let Some(state) = self.blueprint.as_mut() else {
+            return;
+        };
+        if docs.is_empty() {
+            return;
+        }
+        let current = state.versions.first().copied() == Some(version);
+        state.docs = docs;
+        state.selected = 0;
+        state.viewing = (!current).then_some(version);
+        cx.notify();
+    }
+
+    /// Makes the version being looked at the current one again, as a new version.
+    fn restore_version(&mut self, cx: &mut Context<Self>) {
+        let (Some(project), Some(state)) = (self.projects.active_id(), self.blueprint.as_ref())
+        else {
+            return;
+        };
+        if state.viewing.is_none() {
+            return;
+        }
+        let docs: Vec<BlueprintDoc> = state.docs.iter().map(|view| view.doc.clone()).collect();
+        match store(cx).replace_blueprint(project, &docs, Timestamp::now()) {
+            Ok(version) => {
+                let restored = store(cx)
+                    .blueprint(project)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(doc_view)
+                    .collect();
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.docs = restored;
+                    state.selected = 0;
+                    state.notice = Some(format!("Restored as version {version}."));
+                }
+                self.load_versions(cx);
+                self.index_blueprint(cx);
+                self.refresh_drift(cx);
+            }
+            Err(err) => {
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.error = Some(format!("Could not restore it: {err}"));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Puts the blueprint's documents into the project's knowledge, so searches, chat and reviews can find the design.
+    fn index_blueprint(&self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let docs: Vec<(String, String, String)> = store(cx)
+            .blueprint(project)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|doc| (doc.kind, doc.title, doc.body))
+            .collect();
+        let path = cx.global::<AppDatabase>().knowledge_path.clone();
+        let key = project.as_uuid().to_string();
+        let outcome = looji_knowledge::KnowledgeStore::open(&path).and_then(|mut knowledge| {
+            looji_knowledge::Syncer::new()?.sync_blueprint(&mut knowledge, &key, &docs)
+        });
+        if let Err(err) = outcome {
+            eprintln!("looji: the blueprint could not be indexed: {err}");
+        }
     }
 
     /// Compares the design's component diagrams with the repository's units of code.
@@ -614,8 +717,25 @@ pub(super) fn panel(
                 })),
         );
     }
-    if let Some(first) = state.docs.first() {
-        list = list.child(caption(format!("Version {}", first.doc.version)));
+    if !state.versions.is_empty() {
+        list = list.child(caption("Versions".to_string()));
+        let mut chips = div().flex().flex_row().flex_wrap().gap(px(4.));
+        for (position, version) in state.versions.iter().take(6).copied().enumerate() {
+            let shown = state.viewing.unwrap_or(state.versions[0]) == version;
+            chips = chips.child(
+                crate::components::segment(shown, theme)
+                    .id(("blueprint-version", position))
+                    .child(if position == 0 {
+                        format!("{version} (current)")
+                    } else {
+                        version.to_string()
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.view_version(version, cx)
+                    })),
+            );
+        }
+        list = list.child(chips);
     }
 
     // The open document.
@@ -635,7 +755,26 @@ pub(super) fn panel(
                 .flex_1()
                 .min_w_0()
                 .overflow_y_scroll()
-                .track_scroll(&state.scroll)
+                .track_scroll(&state.scroll);
+            if let Some(version) = state.viewing {
+                column = column.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.spacing.sm)
+                        .child(caption(format!(
+                            "You are reading version {version}, an older one."
+                        )))
+                        .child(
+                            button("blueprint-restore", "Restore this version", false, theme)
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.restore_version(cx)
+                                })),
+                        ),
+                );
+            }
+            column = column
                 .child(
                     div()
                         .text_size(theme.typography.title)
@@ -654,6 +793,7 @@ pub(super) fn panel(
                 ));
             }
             if doc.doc.kind == "architecture"
+                && state.viewing.is_none()
                 && let Some(drift) = &state.drift
             {
                 column = column.child(drift_block(drift, theme, cx));
