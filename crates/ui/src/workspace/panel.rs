@@ -55,6 +55,8 @@ pub(super) struct PanelState {
     pub hints: looji_knowledge::hints::Hints,
     /// Quiet risk notes: stale, overdue, or due soon with nothing committed.
     pub risks: Vec<looji_knowledge::risk::Note>,
+    /// The task's reviews, newest first.
+    pub review_history: Vec<looji_domain::ReviewRecord>,
 }
 
 /// What a history entry says, in words.
@@ -134,6 +136,14 @@ impl WorkspaceView {
             Vec::new()
         });
         self.load_review(task, cx);
+        let review_history = looji_domain::ReviewHistoryRepository::reviews(store(cx), task)
+            .unwrap_or_else(|err| {
+                eprintln!(
+                    "could not load the reviews of task {}: {err}",
+                    task.as_uuid()
+                );
+                Vec::new()
+            });
         let related = match (
             self.projects.active_id(),
             self.board.iter().find(|t| t.id() == task),
@@ -170,6 +180,7 @@ impl WorkspaceView {
             hints,
             related,
             risks,
+            review_history,
         });
         // The task opens in its own window. One that is already open follows the new task.
         if !already_open {

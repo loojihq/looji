@@ -12,6 +12,7 @@ mod list_view;
 pub(crate) mod plan_draft;
 mod project;
 mod project_view;
+mod review_history;
 pub(crate) mod settings;
 mod task;
 mod task_chat;

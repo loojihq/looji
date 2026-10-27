@@ -93,14 +93,14 @@ pub use report::{ReportItem, StatusSection, group_by_status, status_label};
 pub use repository::{
     BlueprintRepository, CodeSourceRepository, ColumnRepository, ListViewRepository,
     PlanDraftRepository, ProjectFilterRepository, ProjectRepository, ProjectViewRepository,
-    ReviewNoteRepository, SettingsRepository, TaskChatRepository, TaskRepository,
-    TeamMemberRepository, WorkspaceRepository,
+    ReviewHistoryRepository, ReviewNoteRepository, SettingsRepository, TaskChatRepository,
+    TaskRepository, TeamMemberRepository, WorkspaceRepository,
 };
 pub use retrieval::{
     DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, estimate_tokens, is_test_path, pack_hunks, score_symbol,
     score_terms, task_terms,
 };
-pub use review_note::{NoteKind, ReviewNote};
+pub use review_note::{NoteKind, ReviewNote, ReviewRecord};
 pub use schedule_draft::{
     DraftIssue, PREVIEW_COUNT, SAMPLE_ESTIMATE_HOURS, ScheduleDraft, TIME_FORMAT_MESSAGE,
     TimeField, parse_time, preview_due_dates,

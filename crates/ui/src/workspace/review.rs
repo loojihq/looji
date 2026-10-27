@@ -21,7 +21,8 @@ use looji_ai::{
     },
 };
 use looji_domain::{
-    BlueprintRepository, CodeSourceRepository, ProjectId, SettingsRepository, Status, TaskId,
+    BlueprintRepository, CodeSourceRepository, ProjectId, ReviewHistoryRepository, ReviewRecord,
+    SettingsRepository, Status, TaskId,
 };
 
 use super::{WorkspaceView, store, task_dialog::button};
@@ -177,6 +178,22 @@ impl WorkspaceView {
                         "could not save the review of task {}: {err}",
                         task.as_uuid()
                     );
+                }
+                let record = ReviewRecord {
+                    outcome: review.outcome.stored().to_string(),
+                    summary: review.summary.clone(),
+                    review_json: review.to_json(),
+                    model: Some(super::ai_settings::model_for(cx, self.projects.active_id())),
+                    created_at: looji_domain::Timestamp::now(),
+                };
+                if let Err(err) = store(cx).add_review(task, &record) {
+                    eprintln!(
+                        "could not keep the review of task {} in its history: {err}",
+                        task.as_uuid()
+                    );
+                }
+                if let Some(panel) = self.panel.as_mut().filter(|panel| panel.task == task) {
+                    panel.review_history = store(cx).reviews(task).unwrap_or_default();
                 }
                 self.reviews.insert(task, ReviewRun::Ready(review));
             }
@@ -435,5 +452,42 @@ pub(super) fn section(
             column = actions(column, true, cx);
         }
     }
+    // Reviews before the one shown, newest first. The record of the review shown above is left out, found by its
+    // content, so a review that could not be kept in the history never hides an earlier one.
+    if let Some(panel) = view.panel.as_ref().filter(|panel| panel.task == task) {
+        let shown = match run {
+            Some(ReviewRun::Ready(review)) => Some(review.to_json()),
+            _ => None,
+        };
+        let earlier: Vec<&ReviewRecord> = panel
+            .review_history
+            .iter()
+            .enumerate()
+            .filter(|(index, record)| {
+                !(*index == 0 && shown.as_deref() == Some(record.review_json.as_str()))
+            })
+            .map(|(_, record)| record)
+            .take(MAX_EARLIER)
+            .collect();
+        if !earlier.is_empty() {
+            column = column.child(crate::components::section_label("Earlier reviews", theme));
+            for record in earlier {
+                let verdict =
+                    Outcome::from_stored(&record.outcome).map_or("Review", Outcome::label);
+                column = column.child(caption(format!(
+                    "{} \u{00b7} {verdict}{}",
+                    super::panel::format_time(record.created_at),
+                    if record.summary.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" \u{2014} {}", record.summary)
+                    }
+                )));
+            }
+        }
+    }
     Some(column.into_any_element())
 }
+
+/// How many earlier reviews the task window lists.
+const MAX_EARLIER: usize = 5;

@@ -170,6 +170,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "blueprint_media",
         sql: include_str!("sql/0033_blueprint_media.sql"),
     },
+    Migration {
+        version: 34,
+        name: "task_reviews",
+        sql: include_str!("sql/0034_task_reviews.sql"),
+    },
 ];
 
 #[cfg(test)]

@@ -35,3 +35,14 @@ pub struct ReviewNote {
     pub body: String,
     pub files: Vec<String>,
 }
+
+/// One review a task has had, as it was kept. `outcome` and `summary` are what a list shows, and `review_json` is the
+/// whole review for the AI crate to read back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRecord {
+    pub outcome: String,
+    pub summary: String,
+    pub review_json: String,
+    pub model: Option<String>,
+    pub created_at: crate::Timestamp,
+}

@@ -66,7 +66,7 @@ impl Outcome {
         }
     }
 
-    fn stored(self) -> &'static str {
+    pub fn stored(self) -> &'static str {
         match self {
             Outcome::Done => "done",
             Outcome::NeedsWork => "needs_work",
@@ -74,7 +74,7 @@ impl Outcome {
         }
     }
 
-    fn from_stored(text: &str) -> Option<Self> {
+    pub fn from_stored(text: &str) -> Option<Self> {
         match text
             .trim()
             .to_ascii_lowercase()
