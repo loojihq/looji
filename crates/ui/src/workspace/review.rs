@@ -14,6 +14,7 @@ use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken,
     generation::{Update, run_with},
+    review::testrun,
     review::verdict::{
         MAX_CHANGES_CHARS, Outcome, Rating, TaskReview, build_review_request, done_when,
         parse_review,
@@ -91,6 +92,7 @@ impl WorkspaceView {
         let provider = super::ai_settings::provider_for(cx, Some(project));
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
         let (title, description) = (task.title().to_string(), task.description().to_string());
+        let test_command = super::ai_settings::tests_for(cx, project);
 
         let cancel = CancellationToken::new();
         let queue: Arc<Mutex<Vec<Update>>> = Arc::new(Mutex::new(Vec::new()));
@@ -127,6 +129,7 @@ impl WorkspaceView {
                 title,
                 description,
                 criteria,
+                test_command,
             },
             cancel,
             queue,
@@ -202,6 +205,8 @@ struct ReviewJob {
     title: String,
     description: String,
     criteria: Vec<String>,
+    /// The test command to run first, when the project turned that on.
+    test_command: Option<String>,
 }
 
 fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<Update>>>) {
@@ -219,12 +224,29 @@ fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<
             })
             .await
             .unwrap_or_default();
+        let tests = match job.test_command.clone() {
+            Some(command) => {
+                push(Update::Step(format!("Running {command}")));
+                let root = job.root.clone();
+                looji_ai::runtime()
+                    .spawn_blocking(move || {
+                        testrun::run(Path::new(&root), &command, testrun::TIMEOUT).report()
+                    })
+                    .await
+                    .ok()
+            }
+            None => None,
+        };
+        if cancel.is_cancelled() {
+            return;
+        }
         let request = build_review_request(
             &job.model,
             &job.title,
             &job.description,
             &job.criteria,
             &changes,
+            tests.as_deref(),
         );
         match super::agent::agent_for(
             job.provider,

@@ -291,4 +291,10 @@ fn ai_section(view: &WorkspaceView, theme: &Theme, cx: &mut Context<WorkspaceVie
             setting_menu::setting_select(view, setting_menu::Field::Model, scope, theme, cx),
             theme,
         ))
+        .child(components::settings_row(
+            "Run tests in reviews",
+            Some("Runs this command in the repository when a task is reviewed, and gives the reviewer the result. It runs the project's code, so it is off until you choose one."),
+            setting_menu::setting_select(view, setting_menu::Field::Tests, scope, theme, cx),
+            theme,
+        ))
 }

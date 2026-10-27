@@ -4,6 +4,7 @@
 
 pub mod check;
 pub mod notes;
+pub mod testrun;
 pub mod verdict;
 
 use looji_domain::Hunk;

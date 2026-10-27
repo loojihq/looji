@@ -205,7 +205,8 @@ const INSTRUCTIONS: &str = "You review one task that a developer has moved into 
 what the task asked. Use your tools to look: read the code the task is about, and check the changes you are shown \
 against it. Judge each \"Done when\" point separately, and only call it met when you have seen the code that does it. \
 If there are no points, judge the task's title and description in the same way. Then note anything else worth fixing \
-in the changes: bugs, missing handling, missing tests.\n\nFinish with only a JSON object of this shape, with no other \
+in the changes: bugs, missing handling, missing tests. When a test run is given, a failing test is a finding, with \
+the test's name as its location, and tests that pass are evidence a point is met.\n\nFinish with only a JSON object of this shape, with no other \
 text: {\"outcome\": \"done\" | \"needs_work\" | \"unclear\", \"summary\": \"one or two sentences\", \"criteria\": \
 [{\"text\": \"the point\", \"rating\": \"met\" | \"partly\" | \"not_met\" | \"unclear\", \"evidence\": \"path:line \
 where it shows, or what is missing\"}], \"findings\": [{\"severity\": \"high\" | \"medium\" | \"low\", \"text\": \
@@ -218,6 +219,7 @@ pub fn build_review_request(
     description: &str,
     criteria: &[String],
     changes: &str,
+    tests: Option<&str>,
 ) -> ChatRequest {
     let mut message = format!("Task: {title}\n");
     if !description.trim().is_empty() {
@@ -238,6 +240,11 @@ pub fn build_review_request(
     } else {
         message.push_str("\nUncommitted changes in the repository:\n\n");
         message.push_str(changes.trim());
+        message.push('\n');
+    }
+    if let Some(report) = tests {
+        message.push_str("\nTest run, made just now:\n");
+        message.push_str(report.trim());
         message.push('\n');
     }
     ChatRequest {
@@ -546,11 +553,14 @@ mod tests {
             "Details.",
             &points(&["a", "b"]),
             "diff --git a/x b/x",
+            Some("`cargo test` passed."),
         );
         let text = &request.messages[0].content;
         assert!(text.contains("1. a") && text.contains("2. b"));
         assert!(text.contains("diff --git"));
-        let none = build_review_request("m", "Fix login", "", &[], "");
+        assert!(text.contains("Test run, made just now:\n`cargo test` passed."));
+        let none = build_review_request("m", "Fix login", "", &[], "", None);
+        assert!(!none.messages[0].content.contains("Test run"));
         assert!(none.messages[0].content.contains("no \"Done when\" points"));
         assert!(none.messages[0].content.contains("no uncommitted changes"));
     }

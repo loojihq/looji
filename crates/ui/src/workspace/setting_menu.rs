@@ -16,6 +16,8 @@ pub(super) enum Field {
     Model,
     Clock,
     Offset,
+    /// The test command reviews run. A project's own setting only.
+    Tests,
 }
 
 /// Whether a dropdown changes the app's setting or one project's.
@@ -43,6 +45,7 @@ enum Choice {
     Model(String),
     Clock(Clock),
     Offset(UtcOffset),
+    Tests(String),
 }
 
 /// The value the setting has when it's left on Default, shown inside the Default row.
@@ -55,6 +58,7 @@ fn inherited(field: Field, scope: Scope, cx: &gpui::App) -> String {
             .unwrap_or_else(|| looji_ai::models::DEFAULT_MODEL.to_string()),
         (Field::Clock, _) => time_settings::app_clock(cx).label().to_string(),
         (Field::Offset, _) => time_settings::app_offset(cx).to_string(),
+        (Field::Tests, _) => "Off".to_string(),
     }
 }
 
@@ -81,17 +85,23 @@ fn current(field: Field, scope: Scope, cx: &gpui::App) -> Choice {
             time_settings::project_offset_choice(cx, project)
                 .map_or(Choice::Default, Choice::Offset)
         }
+        (Field::Tests, Scope::App) => Choice::Default,
+        (Field::Tests, Scope::Project(project)) => {
+            ai_settings::tests_for(cx, project).map_or(Choice::Default, Choice::Tests)
+        }
     }
 }
 
 /// The text a choice shows.
 fn label(choice: &Choice, field: Field, scope: Scope, cx: &gpui::App) -> String {
     match choice {
+        Choice::Default if field == Field::Tests => "Off".to_string(),
         Choice::Default => format!("Default ({})", inherited(field, scope, cx)),
         Choice::Provider(provider) => provider.label().to_string(),
         Choice::Model(model) => model.clone(),
         Choice::Clock(clock) => clock.label().to_string(),
         Choice::Offset(offset) => offset.to_string(),
+        Choice::Tests(command) => command.clone(),
     }
 }
 
@@ -115,6 +125,11 @@ fn options(field: Field, scope: Scope) -> Vec<Choice> {
                 .into_iter()
                 .map(Choice::Offset),
         ),
+        Field::Tests => choices.extend(
+            looji_ai::review::testrun::PRESETS
+                .iter()
+                .map(|command| Choice::Tests((*command).to_string())),
+        ),
     }
     choices
 }
@@ -126,6 +141,7 @@ fn project_key_name(field: Field) -> &'static str {
         Field::Model => ai_settings::PROJECT_MODEL,
         Field::Clock => time_settings::PROJECT_CLOCK,
         Field::Offset => time_settings::PROJECT_OFFSET,
+        Field::Tests => ai_settings::PROJECT_TESTS,
     }
 }
 
@@ -156,6 +172,7 @@ fn save(scope: Scope, field: Field, choice: &Choice, cx: &mut gpui::App) -> Repo
                 Choice::Model(model) => Some(model.clone()),
                 Choice::Clock(clock) => Some(clock.stored().to_string()),
                 Choice::Offset(offset) => Some(offset.stored()),
+                Choice::Tests(command) => Some(command.clone()),
             };
             match value {
                 Some(value) => store(cx).set_setting(&key, &value),
