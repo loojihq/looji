@@ -441,6 +441,54 @@ impl WorkspaceView {
         }
     }
 
+    /// Opens the planner with the milestones written in as the goal, so each can be broken into tasks that name the
+    /// component they build and say when they are done. The user reads the plan and publishes it as they do any other.
+    fn plan_from_milestones(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.blueprint.as_ref() else {
+            return;
+        };
+        let Some(milestones) = state.docs.iter().find(|view| view.doc.kind == "milestones") else {
+            return;
+        };
+        let components: Vec<String> = planned_from(&state.docs)
+            .nodes
+            .into_iter()
+            .map(|node| node.label)
+            .collect();
+        let mut goal = format!(
+            "Break these milestones into tasks. Tag each task with the component it builds, and give each task 2 to 4 \"done when\" points.
+
+{}",
+            milestones.doc.body
+        );
+        if !components.is_empty() {
+            goal.push_str(&format!(
+                "
+
+Components: {}.",
+                components.join(", ")
+            ));
+        }
+        let goal: String = goal.chars().take(looji_domain::MAX_GOAL_CHARS).collect();
+        if self.plan_wizard.is_some() {
+            return;
+        }
+        if self.unfinished_plan(cx).is_some() {
+            if let Some(state) = self.blueprint.as_mut() {
+                state.notice = Some(
+                    "Finish or discard the plan in progress first, then plan the milestones."
+                        .to_string(),
+                );
+            }
+            return cx.notify();
+        }
+        self.start_plan_wizard(window, cx);
+        if let Some(dialog) = self.plan_wizard.as_mut() {
+            dialog.wizard.set_goal(&goal);
+        }
+        cx.notify();
+    }
+
     /// Compares the design's component diagrams with the repository's units of code.
     pub(super) fn refresh_drift(&mut self, cx: &mut Context<Self>) {
         let root = self
@@ -902,6 +950,15 @@ pub(super) fn panel(
                 );
             }
             column = column.child(markdown_view::view(&doc.doc.body, theme));
+            if doc.doc.kind == "milestones" && state.viewing.is_none() {
+                column = column.child(div().flex().flex_row().child(
+                    button("blueprint-plan", "Plan these as tasks", true, theme).on_click(
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.plan_from_milestones(window, cx)
+                        }),
+                    ),
+                ));
+            }
             for (index, diagram) in doc.diagrams.iter().enumerate() {
                 column = column.child(diagram_block(
                     state,
