@@ -420,8 +420,9 @@ pub(super) fn risks_for(
     knowledge_path: &Path,
     project: ProjectId,
     task: &Task,
+    board: &[Task],
 ) -> Vec<looji_knowledge::risk::Note> {
-    use looji_knowledge::risk::{Stage, TaskState, notes};
+    use looji_knowledge::risk::{Other, Stage, TaskState, notes, waiting_notes};
     const DAY_MILLIS: i64 = 86_400_000;
     let today = looji_domain::Timestamp::now().unix_millis() / DAY_MILLIS;
     let stage = match task.status() {
@@ -456,12 +457,26 @@ pub(super) fn risks_for(
                 })
                 .count()
         });
-    notes(&TaskState {
+    let mut found = notes(&TaskState {
         stage,
         idle_days: (today - task.updated_at().unix_millis() / DAY_MILLIS).max(0),
         due_in_days: task.due_on().map(|due| due.day_number() - today),
         linked_commits: linked_commits.unwrap_or(usize::MAX),
-    })
+    });
+    if stage != Stage::Done {
+        let others: Vec<Other> = board
+            .iter()
+            .filter(|other| other.id() != task.id())
+            .map(|other| Other {
+                title: other.title().to_string(),
+                short_id: other.id().as_uuid().to_string().chars().take(8).collect(),
+                done: other.status() == looji_domain::Status::Done,
+                idle_days: (today - other.updated_at().unix_millis() / DAY_MILLIS).max(0),
+            })
+            .collect();
+        found.extend(waiting_notes(task.description(), &others));
+    }
+    found
 }
 
 pub(super) fn search_hunks(

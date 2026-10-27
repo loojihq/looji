@@ -166,6 +166,7 @@ impl WorkspaceView {
                 &cx.global::<crate::database::AppDatabase>().knowledge_path,
                 project,
                 found,
+                &self.board,
             ),
             _ => Vec::new(),
         };

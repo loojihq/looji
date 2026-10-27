@@ -173,6 +173,22 @@ impl WorkspaceView {
         self.send_chat_message(cx);
     }
 
+    /// Asks the open chat a ready-made question at once. Repository code is turned on when the project has a
+    /// repository, so the answer can use the commits.
+    pub(super) fn ask_preset(&mut self, question: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.chat_dialog.as_mut() else {
+            return;
+        };
+        if dialog.active.is_some() {
+            return;
+        }
+        if dialog.code_available {
+            dialog.use_code = true;
+        }
+        dialog.draft = TextEdit::new(question);
+        self.send_chat_message(cx);
+    }
+
     /// Opens the AI chat about the open project's whole codebase. It is saved with the project, under the project's
     /// own id.
     pub(super) fn open_project_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -902,6 +918,21 @@ fn fake_provider(request: &ChatRequest) -> Option<Arc<dyn ChatProvider>> {
 #[cfg(debug_assertions)]
 const MARKDOWN_SAMPLE: &str = "## Plan\n\nThe **login** fix has *three* parts:\n\n- check `verify_password`\n- add a test\n- update the [notes](https://example.com)\n\n| File | Change |\n| --- | --- |\n| login.rs | refuse empty |\n| invoice.py | round totals |\n\n```rust\nif password.is_empty() {\n    return None;\n}\n```\n\n```\nno language here\n```\n\nDone.\n";
 
+/// Questions the project chat offers before anything has been asked: a label and the question it sends. The agent
+/// answers them with its tools, so what it says is cited from the commits and issues.
+const PRESETS: [(&str, &str); 2] = [
+    (
+        "What changed this week",
+        "What changed in this project in the last 7 days? Group the commits by the issues they touch, list the issues that \
+moved between statuses or were created, and say what is still open and due soon. Cite the commits and issues.",
+    ),
+    (
+        "What is at risk",
+        "What is at risk in this project right now? Look for overdue or soon-due issues with no commits about them, \
+started work that has not moved in a week, and issues that say they wait on others that have gone quiet. Cite the issues.",
+    ),
+];
+
 /// The chat's panel, which the chat window fills. Nothing is drawn when the chat isn't open.
 pub(super) fn panel(
     view: &WorkspaceView,
@@ -984,6 +1015,18 @@ pub(super) fn panel(
                 .text_color(theme.palette.danger)
                 .child(error),
         );
+    }
+    // Ready-made questions for the whole project, always within reach while nothing is being answered.
+    if dialog.whole_project && !busy {
+        let mut row = div().flex().flex_row().flex_wrap().gap(theme.spacing.sm);
+        for (index, (label, question)) in PRESETS.iter().enumerate() {
+            row = row.child(
+                button(("chat-preset", index), label, false, theme).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_preset(question, cx)),
+                ),
+            );
+        }
+        panel = panel.child(row);
     }
     panel = panel.child(composer).child(
         div().flex().flex_row().justify_end().child(
