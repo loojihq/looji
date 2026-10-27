@@ -456,7 +456,7 @@ impl WorkspaceView {
             .map(|node| node.label)
             .collect();
         let mut goal = format!(
-            "Break these milestones into tasks. Tag each task with the component it builds, and give each task 2 to 4 \"done when\" points.
+            "Break these milestones into tasks. Tag each task with the component it builds, and give each task 2 to 4 \"done when\" points. Plan only the work that is not done yet.
 
 {}",
             milestones.doc.body
