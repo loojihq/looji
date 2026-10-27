@@ -18,6 +18,7 @@ pub mod git;
 pub mod hints;
 pub mod mcp;
 pub mod related;
+pub mod risk;
 pub mod safety;
 pub mod store;
 pub mod sync;

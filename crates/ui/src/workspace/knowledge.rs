@@ -414,6 +414,56 @@ pub(super) fn related_for(
         .unwrap_or_default()
 }
 
+/// Quiet risk notes for a task: stale, overdue, or due soon with no commit about it. Commits come from the knowledge
+/// base. Until the project's commits are indexed their count is unknown, and the note that needs it stays quiet.
+pub(super) fn risks_for(
+    knowledge_path: &Path,
+    project: ProjectId,
+    task: &Task,
+) -> Vec<looji_knowledge::risk::Note> {
+    use looji_knowledge::risk::{Stage, TaskState, notes};
+    const DAY_MILLIS: i64 = 86_400_000;
+    let today = looji_domain::Timestamp::now().unix_millis() / DAY_MILLIS;
+    let stage = match task.status() {
+        looji_domain::Status::Done => Stage::Done,
+        looji_domain::Status::InProgress | looji_domain::Status::InReview => Stage::Active,
+        _ => Stage::NotStarted,
+    };
+    let key = project.as_uuid().to_string();
+    let linked_commits = KnowledgeStore::open(knowledge_path)
+        .ok()
+        .filter(|store| {
+            store
+                .health(&key)
+                .is_ok_and(|health| health.commit_chunks > 0)
+        })
+        .map(|store| {
+            let issue = IssueDoc {
+                id: task.id().as_uuid().to_string(),
+                title: task.title().to_string(),
+                description: String::new(),
+                status: String::new(),
+                priority: None,
+                assignee: None,
+                tags: Vec::new(),
+            };
+            store
+                .commits(&key, None, 500)
+                .unwrap_or_default()
+                .iter()
+                .filter(|commit| {
+                    !git::issues_for_commit(commit, std::slice::from_ref(&issue)).is_empty()
+                })
+                .count()
+        });
+    notes(&TaskState {
+        stage,
+        idle_days: (today - task.updated_at().unix_millis() / DAY_MILLIS).max(0),
+        due_in_days: task.due_on().map(|due| due.day_number() - today),
+        linked_commits: linked_commits.unwrap_or(usize::MAX),
+    })
+}
+
 pub(super) fn search_hunks(
     database: &Path,
     project: ProjectId,
