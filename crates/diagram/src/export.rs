@@ -184,6 +184,33 @@ pub fn to_svg(graph: &Graph) -> String {
     svg
 }
 
+/// The diagram as a PNG image, `scale` times its natural size, on a white page. Text uses the computer's own fonts, so
+/// a machine with none draws boxes and arrows without words.
+pub fn to_png(graph: &Graph, scale: f32) -> Result<Vec<u8>, String> {
+    use resvg::{tiny_skia, usvg};
+
+    let svg = to_svg(graph);
+    let mut options = usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    options.font_family = "Segoe UI".to_string();
+    let tree = usvg::Tree::from_str(&svg, &options)
+        .map_err(|err| format!("the diagram could not be drawn: {err}"))?;
+    let size = tree.size();
+    let width = (size.width() * scale).ceil().max(1.0) as u32;
+    let height = (size.height() * scale).ceil().max(1.0) as u32;
+    let mut pixmap =
+        tiny_skia::Pixmap::new(width, height).ok_or("the diagram is too large to draw")?;
+    pixmap.fill(tiny_skia::Color::WHITE);
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    pixmap
+        .encode_png()
+        .map_err(|err| format!("the image could not be written: {err}"))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -233,6 +260,17 @@ mod tests {
     #[test]
     fn a_deployment_diagram_runs_top_to_bottom() {
         assert!(to_mermaid(&sample("deployment")).starts_with("flowchart TB\n"));
+    }
+
+    #[test]
+    fn the_png_is_a_real_image_at_the_scale_asked_for() {
+        let graph = sample("component");
+        let one = to_png(&graph, 1.0).unwrap();
+        let two = to_png(&graph, 2.0).unwrap();
+        assert_eq!(&one[..4], &[0x89, b'P', b'N', b'G']);
+        // The header holds the size: width then height as big-endian numbers after the IHDR tag.
+        let width = |png: &[u8]| u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        assert_eq!(width(&two), width(&one) * 2);
     }
 
     #[test]

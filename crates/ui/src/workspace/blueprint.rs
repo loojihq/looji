@@ -15,7 +15,9 @@ use looji_ai::{
     blueprint::{build_blueprint_request, build_revision_request, parse_blueprint},
     generation::{Update, run_with},
 };
-use looji_diagram::{Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_svg};
+use looji_diagram::{
+    Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_png, to_svg,
+};
 use looji_domain::{BlueprintDoc, BlueprintRepository, CodeSourceRepository, Timestamp};
 use looji_knowledge::drift::{Drift, Planned, PlannedNode, actual_units, compare};
 
@@ -532,11 +534,7 @@ Components: {}.",
         let Some(view) = state.docs.get(doc).and_then(|d| d.diagrams.get(diagram)) else {
             return;
         };
-        let text = if format == "Mermaid" {
-            to_mermaid(&view.graph)
-        } else {
-            to_svg(&view.graph)
-        };
+        let text = to_mermaid(&view.graph);
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         state.copied = Some((doc, diagram, format));
         cx.notify();
@@ -547,6 +545,52 @@ Components: {}.",
             let _ = this.update(cx, |view, cx| {
                 if let Some(state) = view.blueprint.as_mut() {
                     state.copied = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Asks where to save a diagram, then writes it as an SVG or a PNG image.
+    fn save_diagram(&mut self, doc: usize, diagram: usize, png: bool, cx: &mut Context<Self>) {
+        let Some(state) = self.blueprint.as_mut() else {
+            return;
+        };
+        let Some(view) = state.docs.get(doc).and_then(|d| d.diagrams.get(diagram)) else {
+            return;
+        };
+        let graph = view.graph.clone();
+        let name = if graph.title.is_empty() {
+            "diagram".to_string()
+        } else {
+            super::export::file_name_part(&graph.title)
+        };
+        let suggested = format!("{name}.{}", if png { "png" } else { "svg" });
+        let picked = cx.prompt_for_new_path(&super::export::documents_folder(), Some(&suggested));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else {
+                return;
+            };
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = if png {
+                        to_png(&graph, 2.0)?
+                    } else {
+                        to_svg(&graph).into_bytes()
+                    };
+                    std::fs::write(&path, bytes)
+                        .map(|_| path)
+                        .map_err(|err| format!("The image could not be saved: {err}"))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if let Some(state) = view.blueprint.as_mut() {
+                    match outcome {
+                        Ok(path) => state.notice = Some(format!("Saved to {}.", path.display())),
+                        Err(message) => state.error = Some(message),
+                    }
                     cx.notify();
                 }
             });
@@ -1016,10 +1060,7 @@ fn diagram_block(
         if state.copied == Some((doc, index, format)) {
             "Copied"
         } else {
-            match format {
-                "Mermaid" => "Copy Mermaid",
-                _ => "Copy SVG",
-            }
+            "Copy Mermaid"
         }
     };
     let kind = match diagram.graph.kind {
@@ -1067,17 +1108,16 @@ fn diagram_block(
                             )),
                         )
                         .child(
-                            button(
-                                ("diagram-svg", doc * 100 + index),
-                                label("SVG"),
-                                false,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    this.copy_diagram(doc, index, "SVG", cx)
-                                },
-                            )),
+                            button(("diagram-svg", doc * 100 + index), "Save SVG", false, theme)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.save_diagram(doc, index, false, cx)
+                                })),
+                        )
+                        .child(
+                            button(("diagram-png", doc * 100 + index), "Save PNG", false, theme)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.save_diagram(doc, index, true, cx)
+                                })),
                         ),
                 ),
         )
