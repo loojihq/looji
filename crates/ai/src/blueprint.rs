@@ -2,7 +2,7 @@
 //! project has one, then answers with one JSON object. Diagrams in it are the constrained graphs of `looji-diagram`,
 //! and each is checked there. A diagram that fails its checks is left out and counted, and the document stays.
 
-use looji_diagram::parse_graph;
+use looji_diagram::{is_wireframe, parse_graph, parse_wireframe};
 use serde_json::Value;
 
 use crate::{ChatMessage, ChatRequest, review::json_object};
@@ -55,6 +55,10 @@ Diagrams are not drawn. Write each as a graph in a document's \"diagrams\" list:
 nodes each, labels under 40 characters. Give the architecture a component diagram and, where it helps, a flow \
 diagram of the main data path. Give the data model an entity diagram. Link a node to a file only if you have seen \
 that file.\n\n\
+For a project with screens, give the interfaces document a wireframe of the main screen, in the same list: \
+{\"type\": \"wireframe\", \"title\": \"...\", \"root\": {\"kind\": \"column\", \"children\": [...]}}. Each element \
+has a \"kind\": column, row, or card (they hold \"children\"), or heading, text, button, input, image, divider (they \
+hold a short \"label\"). At most 40 elements, nested at most 5 deep.\n\n\
 Reply with only a JSON object: {\"documents\": [{\"kind\": \"...\", \"title\": \"...\", \"body\": \"Markdown\", \
 \"diagrams\": []}]}. No text outside it.";
 
@@ -269,7 +273,12 @@ pub fn parse_blueprint(reply: &str) -> Result<ParsedBlueprint, String> {
             .into_iter()
             .flatten()
         {
-            if parse_graph(diagram).is_ok() {
+            let drawable = if is_wireframe(diagram) {
+                parse_wireframe(diagram).is_ok()
+            } else {
+                parse_graph(diagram).is_ok()
+            };
+            if drawable {
                 diagrams.push(diagram.clone());
             } else {
                 dropped += 1;
@@ -324,6 +333,19 @@ mod tests {
     #[test]
     fn a_diagram_that_fails_its_checks_is_dropped_and_counted_and_the_document_stays() {
         let bad = r#", {"type": "flow", "nodes": [{"id": "a", "label": "A"}], "edges": [{"from": "a", "to": "ghost"}]}"#;
+        let blueprint = parse_blueprint(&reply(bad)).unwrap();
+        assert_eq!(blueprint.docs[1].diagrams.len(), 1);
+        assert_eq!(blueprint.diagrams_dropped, 1);
+    }
+
+    #[test]
+    fn a_wireframe_is_kept_beside_the_diagrams_and_a_broken_one_is_dropped() {
+        let good = r#", {"type": "wireframe", "title": "Home", "root": {"kind": "column", "children": [{"kind": "button", "label": "Go"}]}}"#;
+        let blueprint = parse_blueprint(&reply(good)).unwrap();
+        assert_eq!(blueprint.docs[1].diagrams.len(), 2);
+        assert_eq!(blueprint.diagrams_dropped, 0);
+
+        let bad = r#", {"type": "wireframe", "root": {"kind": "carousel"}}"#;
         let blueprint = parse_blueprint(&reply(bad)).unwrap();
         assert_eq!(blueprint.docs[1].diagrams.len(), 1);
         assert_eq!(blueprint.diagrams_dropped, 1);

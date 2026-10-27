@@ -19,7 +19,8 @@ use looji_ai::{
     generation::{Update, run_with},
 };
 use looji_diagram::{
-    Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_png, to_svg,
+    Graph, GraphKind, Layout, Link, Wireframe, is_wireframe, layout, parse_graph, parse_wireframe,
+    to_mermaid, to_png, to_svg,
 };
 use looji_domain::{
     BlueprintDoc, BlueprintMedia, BlueprintRepository, CodeSourceRepository, MediaKind, Timestamp,
@@ -43,6 +44,17 @@ pub(super) struct DiagramView {
 pub(super) struct DocView {
     doc: BlueprintDoc,
     diagrams: Vec<DiagramView>,
+    wireframes: Vec<Wireframe>,
+}
+
+/// The wireframes a document's stored diagrams hold.
+fn wireframes_of(diagrams: &str) -> Vec<Wireframe> {
+    serde_json::from_str::<Vec<serde_json::Value>>(diagrams)
+        .unwrap_or_default()
+        .iter()
+        .filter(|json| is_wireframe(json))
+        .filter_map(|json| parse_wireframe(json).ok())
+        .collect()
 }
 
 fn doc_view(doc: BlueprintDoc) -> DocView {
@@ -55,7 +67,12 @@ fn doc_view(doc: BlueprintDoc) -> DocView {
             graph,
         })
         .collect();
-    DocView { doc, diagrams }
+    let wireframes = wireframes_of(&doc.diagrams);
+    DocView {
+        doc,
+        diagrams,
+        wireframes,
+    }
 }
 
 /// A generation in progress.
@@ -505,7 +522,15 @@ impl WorkspaceView {
             .blueprint(project)
             .unwrap_or_default()
             .into_iter()
-            .map(|doc| (doc.kind, doc.title, doc.body))
+            .map(|doc| {
+                // A wireframe has no words of its own in the body, so its outline is added for search to find.
+                let mut body = doc.body;
+                for wireframe in wireframes_of(&doc.diagrams) {
+                    body.push_str("\n\n");
+                    body.push_str(&wireframe.outline());
+                }
+                (doc.kind, doc.title, body)
+            })
             .collect();
         let path = cx.global::<AppDatabase>().knowledge_path.clone();
         let key = project.as_uuid().to_string();
@@ -1246,6 +1271,9 @@ pub(super) fn panel(
                     theme,
                     cx,
                 ));
+            }
+            for wireframe in &doc.wireframes {
+                column = column.child(super::wireframe_view::block(wireframe, theme));
             }
             if doc.doc.kind == "architecture"
                 && state.viewing.is_none()
