@@ -15,7 +15,7 @@ use looji_ai::{
     blueprint::{build_blueprint_request, parse_blueprint},
     generation::{Update, run_with},
 };
-use looji_diagram::{Graph, GraphKind, Layout, layout, parse_graph, to_mermaid, to_svg};
+use looji_diagram::{Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_svg};
 use looji_domain::{BlueprintDoc, BlueprintRepository, CodeSourceRepository, Timestamp};
 
 use super::{WorkspaceView, markdown_view, store, task_dialog::button};
@@ -306,6 +306,55 @@ impl WorkspaceView {
         .detach();
     }
 
+    /// Goes where a diagram node points: a file shows in the file manager, a section opens in the blueprint, and an
+    /// issue opens its task.
+    fn follow_link(&mut self, link: Link, cx: &mut Context<Self>) {
+        match link {
+            Link::File(path) => {
+                let Some(project) = self.projects.active_id() else {
+                    return;
+                };
+                if let Ok(Some(root)) = store(cx).load_path(project) {
+                    cx.reveal_path(&Path::new(&root).join(path));
+                }
+            }
+            Link::Section(title) => {
+                let wanted = title.to_lowercase();
+                if let Some(state) = self.blueprint.as_mut()
+                    && let Some(index) = state.docs.iter().position(|view| {
+                        let doc = &view.doc;
+                        doc.title.to_lowercase() == wanted
+                            || kind_label(&doc.kind).to_lowercase() == wanted
+                    })
+                {
+                    state.selected = index;
+                    cx.notify();
+                }
+            }
+            Link::Issue(target) => {
+                let wanted = target.to_lowercase();
+                let found = self
+                    .board
+                    .iter()
+                    .find(|task| {
+                        task.id().as_uuid().to_string() == wanted
+                            || task.title().to_lowercase() == wanted
+                    })
+                    .map(|task| task.id());
+                match found {
+                    Some(task) => self.open_panel(task, cx),
+                    None => {
+                        if let Some(state) = self.blueprint.as_mut() {
+                            state.notice =
+                                Some(format!("No task called \"{target}\" on this board."));
+                            cx.notify();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Keys while the blueprint is open: Escape closes it, and typing goes to the idea box.
     pub(super) fn blueprint_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
@@ -583,13 +632,13 @@ fn diagram_block(
                 .border_1()
                 .border_color(theme.palette.border)
                 .bg(theme.palette.surface)
-                .child(draw(diagram, theme)),
+                .child(draw(diagram, theme, cx)),
         )
         .into_any_element()
 }
 
 /// The diagram, drawn from its layout: groups behind, edges as paths, nodes on top.
-fn draw(diagram: &DiagramView, theme: &Theme) -> AnyElement {
+fn draw(diagram: &DiagramView, theme: &Theme, cx: &mut Context<WorkspaceView>) -> AnyElement {
     let layout = &diagram.layout;
     let graph = &diagram.graph;
     let mut surface = div()
@@ -690,6 +739,7 @@ fn draw(diagram: &DiagramView, theme: &Theme) -> AnyElement {
     for node in &layout.nodes {
         let source = &graph.nodes[node.index];
         let mut inner = div()
+            .id(("diagram-node", node.index))
             .absolute()
             .left(px(node.x))
             .top(px(node.y))
@@ -712,6 +762,16 @@ fn draw(diagram: &DiagramView, theme: &Theme) -> AnyElement {
                     .text_color(theme.palette.text_secondary)
                     .child(kind.clone()),
             );
+        }
+        if let Some(link) = source.link.clone() {
+            // A node that points somewhere says so with its outline, and a click goes there.
+            inner = inner
+                .border_color(theme.palette.accent)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.palette.surface_hover))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.follow_link(link.clone(), cx)
+                }));
         }
         surface = surface.child(inner);
     }

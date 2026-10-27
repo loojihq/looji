@@ -167,12 +167,29 @@ pub fn layout(graph: &Graph) -> Layout {
             .and_then(|id| graph.groups.iter().position(|group| &group.id == id))
             .unwrap_or(usize::MAX)
     };
+    // Each group, and the nodes outside any group, gets a horizontal lane of its own, so one group's box can never
+    // run through another's. Lanes are ordered by how early their nodes sit.
+    let mut lane_keys: Vec<usize> = (0..count).map(group_of).collect();
+    lane_keys.sort_unstable();
+    lane_keys.dedup();
+    let mean_rank = |key: usize| {
+        let members: Vec<usize> = (0..count)
+            .filter(|&index| group_of(index) == key)
+            .map(|index| rank[index])
+            .collect();
+        members.iter().sum::<usize>() as f32 / members.len() as f32
+    };
+    lane_keys.sort_by(|a, b| mean_rank(*a).total_cmp(&mean_rank(*b)).then(a.cmp(b)));
+    let lane_of = |index: usize| {
+        let key = group_of(index);
+        lane_keys.iter().position(|&lane| lane == key).unwrap_or(0)
+    };
     let mut layers: Vec<Vec<usize>> = vec![Vec::new(); layer_count];
     for index in 0..count {
         layers[rank[index]].push(index);
     }
     for layer in &mut layers {
-        layer.sort_by_key(|&index| (group_of(index), index));
+        layer.sort_by_key(|&index| (lane_of(index), index));
     }
 
     // Order each layer by the average place of its neighbours, back and forth, so edges cross less.
@@ -209,25 +226,50 @@ pub fn layout(graph: &Graph) -> Layout {
                     } else {
                         neighbours.iter().sum::<f32>() / neighbours.len() as f32
                     };
-                    (centre, group_of(index), index)
+                    (centre, lane_of(index), index)
                 })
                 .collect();
-            keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+            keyed.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.total_cmp(&b.0)).then(a.2.cmp(&b.2)));
             layers[layer_index] = keyed.into_iter().map(|(_, _, index)| index).collect();
             refresh(&layers, &mut place);
         }
     }
 
-    // Sizes, then positions: layers left to right, each layer's nodes top to bottom and centred on the tallest.
+    // Sizes, then positions. Layers run left to right. Each lane is a band of the height its tallest layer needs, and
+    // a group's box wraps its lane, so boxes of different groups are always apart.
     let sizes: Vec<(f32, f32)> = (0..count).map(|index| node_size(graph, index)).collect();
-    let layer_heights: Vec<f32> = layers
-        .iter()
-        .map(|layer| {
-            layer.iter().map(|&index| sizes[index].1).sum::<f32>()
-                + NODE_GAP * layer.len().saturating_sub(1) as f32
-        })
-        .collect();
-    let tallest = layer_heights.iter().copied().fold(0.0, f32::max);
+    let lane_count = lane_keys.len();
+    let in_lane = |layer: &[usize], lane: usize| -> Vec<usize> {
+        layer
+            .iter()
+            .copied()
+            .filter(|&index| lane_of(index) == lane)
+            .collect()
+    };
+    let stack_height = |members: &[usize]| -> f32 {
+        members.iter().map(|&index| sizes[index].1).sum::<f32>()
+            + NODE_GAP * members.len().saturating_sub(1) as f32
+    };
+    let mut lane_height = vec![0.0f32; lane_count];
+    for layer in &layers {
+        for (lane, height) in lane_height.iter_mut().enumerate() {
+            *height = height.max(stack_height(&in_lane(layer, lane)));
+        }
+    }
+    let is_group = |lane: usize| lane_keys[lane] != usize::MAX;
+    let mut lane_top = vec![0.0f32; lane_count];
+    let mut y = MARGIN;
+    for lane in 0..lane_count {
+        let (head, foot) = if is_group(lane) {
+            (GROUP_PAD + GROUP_LABEL, GROUP_PAD)
+        } else {
+            (0.0, 0.0)
+        };
+        lane_top[lane] = y + head;
+        y = lane_top[lane] + lane_height[lane] + foot + NODE_GAP;
+    }
+    let mut height = y - NODE_GAP + MARGIN;
+
     let mut nodes = vec![
         PlacedNode {
             index: 0,
@@ -238,51 +280,51 @@ pub fn layout(graph: &Graph) -> Layout {
         };
         count
     ];
-    let mut x = MARGIN;
-    for (layer_index, layer) in layers.iter().enumerate() {
+    let mut x = MARGIN + GROUP_PAD;
+    for layer in &layers {
         let widest = layer
             .iter()
             .map(|&index| sizes[index].0)
             .fold(0.0, f32::max);
-        let mut y = MARGIN + GROUP_LABEL + (tallest - layer_heights[layer_index]) / 2.0;
-        for &index in layer {
-            let (w, h) = sizes[index];
-            nodes[index] = PlacedNode {
-                index,
-                x: x + (widest - w) / 2.0,
-                y,
-                w,
-                h,
-            };
-            y += h + NODE_GAP;
+        for lane in 0..lane_count {
+            let members = in_lane(layer, lane);
+            let mut top = lane_top[lane] + (lane_height[lane] - stack_height(&members)) / 2.0;
+            for index in members {
+                let (w, h) = sizes[index];
+                nodes[index] = PlacedNode {
+                    index,
+                    x: x + (widest - w) / 2.0,
+                    y: top,
+                    w,
+                    h,
+                };
+                top += h + NODE_GAP;
+            }
         }
         x += widest + LAYER_GAP;
     }
-    let mut width = x - LAYER_GAP + MARGIN;
-    let mut height = MARGIN * 2.0 + GROUP_LABEL + tallest;
+    let mut width = x - LAYER_GAP + MARGIN + GROUP_PAD;
 
-    // Groups wrap their members.
+    // Groups wrap their lane, across the width their members span.
     let mut groups = Vec::new();
-    for (index, _) in graph.groups.iter().enumerate() {
-        let members: Vec<&PlacedNode> = nodes
-            .iter()
-            .filter(|placed| group_of(placed.index) == index)
-            .collect();
-        if members.is_empty() {
+    for lane in 0..lane_count {
+        if !is_group(lane) {
             continue;
         }
+        let members: Vec<&PlacedNode> = nodes
+            .iter()
+            .filter(|placed| lane_of(placed.index) == lane)
+            .collect();
         let left = members.iter().map(|m| m.x).fold(f32::MAX, f32::min) - GROUP_PAD;
-        let top = members.iter().map(|m| m.y).fold(f32::MAX, f32::min) - GROUP_PAD - GROUP_LABEL;
         let right = members.iter().map(|m| m.x + m.w).fold(0.0, f32::max) + GROUP_PAD;
-        let bottom = members.iter().map(|m| m.y + m.h).fold(0.0, f32::max) + GROUP_PAD;
+        let top = lane_top[lane] - GROUP_PAD - GROUP_LABEL;
         width = width.max(right + MARGIN);
-        height = height.max(bottom + MARGIN);
         groups.push(PlacedGroup {
-            index,
+            index: lane_keys[lane],
             x: left,
-            y: top.max(4.0),
+            y: top,
             w: right - left,
-            h: bottom - top.max(4.0),
+            h: lane_height[lane] + GROUP_PAD * 2.0 + GROUP_LABEL,
         });
     }
 
@@ -416,6 +458,40 @@ mod tests {
         {
             assert!(node.x >= group.x && node.x + node.w <= group.x + group.w);
             assert!(node.y >= group.y && node.y + node.h <= group.y + group.h);
+        }
+    }
+
+    #[test]
+    fn groups_that_interleave_in_the_flow_still_never_overlap() {
+        let g = graph(json!({
+            "type": "component",
+            "groups": [{"id": "x", "label": "X"}, {"id": "y", "label": "Y"}],
+            "nodes": [
+                {"id": "a", "label": "A", "group": "x"}, {"id": "b", "label": "B", "group": "y"},
+                {"id": "c", "label": "C", "group": "x"}, {"id": "d", "label": "D", "group": "y"},
+                {"id": "e", "label": "E"}
+            ],
+            "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}, {"from": "c", "to": "d"}, {"from": "e", "to": "c"}]
+        }));
+        let placed = layout(&g);
+        assert_eq!(placed.groups.len(), 2);
+        let (first, second) = (&placed.groups[0], &placed.groups[1]);
+        let apart = first.y + first.h <= second.y || second.y + second.h <= first.y;
+        assert!(apart, "{first:?} runs into {second:?}");
+        for node in &placed.nodes {
+            let source = &g.nodes[node.index];
+            for group in &placed.groups {
+                let inside = node.x >= group.x
+                    && node.x + node.w <= group.x + group.w
+                    && node.y >= group.y
+                    && node.y + node.h <= group.y + group.h;
+                let belongs = source.group.as_deref() == Some(g.groups[group.index].id.as_str());
+                assert_eq!(
+                    inside, belongs,
+                    "{} and group {}",
+                    source.id, g.groups[group.index].id
+                );
+            }
         }
     }
 
