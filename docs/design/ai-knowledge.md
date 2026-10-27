@@ -389,7 +389,7 @@ Each phase ships on its own and is useful by itself.
 - Digests, risk notes, stale and blocker nudges.
 - A warm Claude Code session and reranking were both measured and gave no gain, so neither is built.
 - Text from PDFs: built for PDFs in the repository and for files attached to tasks (see below). Still to do: text
-  from images (OCR) and blueprint media. Wireframes are built (see below).
+  from scanned PDFs (OCR needs page images). Text from pictures, blueprint media and wireframes are built (see below).
 
 **PDFs in the repository.** A `.pdf` file in the repository is indexed like a document, one set of chunks for each
 page, labelled "page N", up to 20 MB, 200 pages, and 400,000 characters. Only the text layer is read, by `pdf-extract`.
@@ -400,15 +400,18 @@ the index health view lists, since reading it needs OCR. Secrets are redacted as
 **Files attached to tasks.** PDFs, `.txt` and `.md` files attached to a task are indexed the same way, as documents
 under the made-up folder `attachment/<stored name>`, with the label "file name (task: title) · page N" so an answer can
 say which task a passage came from. They are read off the interface thread when a project opens and after each attach
-or remove; an unchanged file is not read again and a removed one is forgotten. Pictures and videos have no text to read
-and are left out. Chat lists them as "Attachment: …" and does not offer to reveal them in the repository.
+or remove; an unchanged file is not read again and a removed one is forgotten. Videos have no text to read and are
+left out. Pictures (PNG, JPEG, BMP, GIF, up to 20 MB) are read with the OCR that Windows ships (`crates/knowledge/src/ocr.rs`),
+which runs on the machine and needs no download; a picture with no words, or any picture on a system without that OCR,
+is held back with the reason. Media added to a blueprint section is indexed the same way, labelled "(blueprint:
+section)". Chat lists them as "Attachment: …" and does not offer to reveal them in the repository.
 
 **Wireframes.** A wireframe is an entry in a document's `diagrams` list with `"type": "wireframe"` and a `root`
 element tree: containers `column`, `row`, `card` hold `children`; `heading`, `text`, `button`, `input`, `image`,
 `divider` hold a short `label`. At most 60 elements, 6 deep (`crates/diagram/src/wireframe.rs`); a broken one is dropped
 and counted like a broken diagram. The app draws the tree with flex layout in the theme's colours. Its text outline is
-added to the document when the blueprint is indexed, so search and chat can find what a screen holds. Not built:
-Mermaid, SVG or PNG export for wireframes, and linking elements to files or issues.
+added to the document when the blueprint is indexed, so search and chat can find what a screen holds. Each wireframe saves as
+SVG or PNG from its own buttons. Not built: linking elements to files or issues, and Mermaid (it has no wireframe form).
 
 ## Phase 1 status
 

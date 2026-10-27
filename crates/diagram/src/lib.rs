@@ -7,7 +7,7 @@ mod graph;
 mod layout;
 mod wireframe;
 
-pub use export::{to_mermaid, to_png, to_svg};
+pub use export::{svg_to_png, to_mermaid, to_png, to_svg};
 pub use graph::{Edge, EdgeStyle, Graph, GraphKind, Group, Link, Node, parse_graph};
 pub use layout::{Layout, PlacedGroup, PlacedNode, Route, layout};
 pub use wireframe::{Element, ElementKind, Wireframe, is_wireframe, parse_wireframe};

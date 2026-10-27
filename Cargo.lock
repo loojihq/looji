@@ -3312,6 +3312,7 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "thiserror",
+ "windows 0.62.2",
 ]
 
 [[package]]
