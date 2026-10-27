@@ -242,6 +242,22 @@ pub trait BlueprintRepository {
         project: crate::ids::ProjectId,
         version: u32,
     ) -> RepoResult<Vec<crate::blueprint::BlueprintDoc>>;
+    /// The files kept with the blueprint's sections, oldest first.
+    fn blueprint_media(
+        &self,
+        project: crate::ids::ProjectId,
+    ) -> RepoResult<Vec<crate::blueprint::BlueprintMedia>>;
+    fn add_blueprint_media(
+        &self,
+        project: crate::ids::ProjectId,
+        media: &crate::blueprint::BlueprintMedia,
+    ) -> RepoResult<()>;
+    fn remove_blueprint_media(
+        &self,
+        project: crate::ids::ProjectId,
+        doc_kind: &str,
+        stored_name: &str,
+    ) -> RepoResult<()>;
     /// Replaces the project's blueprint with these documents as the next version. The one it replaces goes to the
     /// history.
     fn replace_blueprint(

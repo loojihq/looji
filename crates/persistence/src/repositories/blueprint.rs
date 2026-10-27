@@ -2,7 +2,8 @@
 //! replaces into `blueprint_history` and numbers the new set one higher.
 
 use looji_domain::{
-    BlueprintDoc, BlueprintRepository, ProjectId, RepoError, RepoResult, Timestamp,
+    BlueprintDoc, BlueprintMedia, BlueprintRepository, DomainError, MediaKind, ProjectId,
+    RepoError, RepoResult, Timestamp,
 };
 use rusqlite::params;
 
@@ -79,6 +80,58 @@ impl BlueprintRepository for SqliteStore {
             params![key, version],
             read,
         )
+    }
+
+    fn blueprint_media(&self, project: ProjectId) -> RepoResult<Vec<BlueprintMedia>> {
+        query_all(
+            &self.connection,
+            "SELECT doc_kind, stored_name, file_name, kind, created_at FROM blueprint_media
+             WHERE project_id = ?1 ORDER BY created_at, rowid",
+            params![id_text(project.as_uuid())],
+            |row| {
+                let kind: String = get(row, 3)?;
+                Ok(BlueprintMedia {
+                    doc_kind: get(row, 0)?,
+                    stored_name: get(row, 1)?,
+                    file_name: get(row, 2)?,
+                    kind: MediaKind::from_stored(&kind).ok_or(DomainError::InvalidId(kind))?,
+                    created_at: read_timestamp(row, 4)?,
+                })
+            },
+        )
+    }
+
+    fn add_blueprint_media(&self, project: ProjectId, media: &BlueprintMedia) -> RepoResult<()> {
+        self.connection
+            .execute(
+                "INSERT INTO blueprint_media (project_id, doc_kind, stored_name, file_name, kind, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id_text(project.as_uuid()),
+                    media.doc_kind,
+                    media.stored_name,
+                    media.file_name,
+                    media.kind.stored(),
+                    media.created_at.unix_millis(),
+                ],
+            )
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    fn remove_blueprint_media(
+        &self,
+        project: ProjectId,
+        doc_kind: &str,
+        stored_name: &str,
+    ) -> RepoResult<()> {
+        self.connection
+            .execute(
+                "DELETE FROM blueprint_media WHERE project_id = ?1 AND doc_kind = ?2 AND stored_name = ?3",
+                params![id_text(project.as_uuid()), doc_kind, stored_name],
+            )
+            .map_err(storage)?;
+        Ok(())
     }
 
     fn replace_blueprint(

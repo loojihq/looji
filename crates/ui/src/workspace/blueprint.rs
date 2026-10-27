@@ -21,8 +21,11 @@ use looji_ai::{
 use looji_diagram::{
     Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_png, to_svg,
 };
-use looji_domain::{BlueprintDoc, BlueprintRepository, CodeSourceRepository, Timestamp};
+use looji_domain::{
+    BlueprintDoc, BlueprintMedia, BlueprintRepository, CodeSourceRepository, MediaKind, Timestamp,
+};
 use looji_knowledge::drift::{Drift, Planned, PlannedNode, actual_units, compare};
+use looji_persistence::attachments::{import_attachment, remove_attachment};
 
 use super::{WorkspaceView, markdown_view, store, task_dialog::button};
 use crate::{database::AppDatabase, text_edit::TextEdit, theme::Theme};
@@ -83,6 +86,8 @@ pub(super) struct BlueprintState {
     scroll: ScrollHandle,
     /// The design compared with the code, when the project has a repository with units of code.
     drift: Option<Drift>,
+    /// Images and files kept with the sections, which stay across versions.
+    media: Vec<BlueprintMedia>,
     /// The outline waiting for the user's say, each document with whether it stays.
     outline: Option<Vec<(OutlineItem, bool)>>,
     /// Every version the blueprint has had, newest first.
@@ -116,6 +121,7 @@ impl WorkspaceView {
             copied: None,
             scroll: ScrollHandle::new(),
             drift: None,
+            media: store(cx).blueprint_media(id).unwrap_or_default(),
             outline: None,
             versions: Vec::new(),
             viewing: None,
@@ -509,6 +515,93 @@ impl WorkspaceView {
         if let Err(err) = outcome {
             eprintln!("looji: the blueprint could not be indexed: {err}");
         }
+    }
+
+    /// Asks for files, then copies each into the attachments folder and keeps it with the section.
+    fn add_section_media(&mut self, doc_kind: String, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Add to this section".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let dir = cx.update(|cx| cx.global::<AppDatabase>().attachments_dir.clone());
+            for source in paths {
+                let dir = dir.clone();
+                let imported = cx
+                    .background_executor()
+                    .spawn(async move { import_attachment(&source, &dir) })
+                    .await;
+                let doc_kind = doc_kind.clone();
+                let _ = this.update(cx, |view, cx| {
+                    let Some(state) = view.blueprint.as_mut() else {
+                        return;
+                    };
+                    match imported {
+                        Ok(file) => {
+                            let media = BlueprintMedia {
+                                doc_kind,
+                                kind: MediaKind::from_file_name(&file.file_name),
+                                stored_name: file.stored_name.clone(),
+                                file_name: file.file_name,
+                                created_at: Timestamp::now(),
+                            };
+                            match store(cx).add_blueprint_media(project, &media) {
+                                Ok(()) => state.media.push(media),
+                                Err(err) => {
+                                    let _ = remove_attachment(
+                                        &cx.global::<AppDatabase>().attachments_dir,
+                                        &file.stored_name,
+                                    );
+                                    state.error = Some(format!("Could not add that file: {err}"));
+                                }
+                            }
+                        }
+                        Err(err) => state.error = Some(format!("Could not add that file: {err}")),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Removes a file from a section and deletes its copy.
+    fn remove_section_media(
+        &mut self,
+        doc_kind: String,
+        stored_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        match store(cx).remove_blueprint_media(project, &doc_kind, &stored_name) {
+            Ok(()) => {
+                let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+                if let Err(err) = remove_attachment(&dir, &stored_name) {
+                    eprintln!("could not delete the file of removed media: {err}");
+                }
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.media.retain(|item| {
+                        !(item.doc_kind == doc_kind && item.stored_name == stored_name)
+                    });
+                }
+            }
+            Err(err) => {
+                if let Some(state) = self.blueprint.as_mut() {
+                    state.error = Some(format!("Could not remove the file: {err}"));
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// Opens the planner with the milestones written in as the goal, so each can be broken into tasks that name the
@@ -1042,6 +1135,7 @@ pub(super) fn panel(
             ))
             .into_any_element(),
         Some(doc) => {
+            let kind = doc.doc.kind.clone();
             let mut column = div()
                 .id("blueprint-document")
                 .flex()
@@ -1112,6 +1206,7 @@ pub(super) fn panel(
                 );
             }
             column = column.child(markdown_view::view(&doc.doc.body, theme));
+            column = column.child(section_media(state, &kind, theme, cx));
             if doc.doc.kind == "milestones" && state.viewing.is_none() {
                 column = column.child(div().flex().flex_row().child(
                     button("blueprint-plan", "Plan these as tasks", true, theme).on_click(
@@ -1163,6 +1258,95 @@ pub(super) fn panel(
             )
             .into_any_element(),
     )
+}
+
+/// The images and files kept with a section, and the button that adds more.
+fn section_media(
+    state: &BlueprintState,
+    doc_kind: &str,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+    let mut tiles = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(theme.spacing.sm)
+        .items_center();
+    for (index, item) in state
+        .media
+        .iter()
+        .filter(|item| item.doc_kind == doc_kind)
+        .enumerate()
+    {
+        let path = dir.join(&item.stored_name);
+        let body = match item.kind {
+            MediaKind::Image => div()
+                .w(px(180.))
+                .h(px(120.))
+                .rounded(theme.radius.md)
+                .overflow_hidden()
+                .border_1()
+                .border_color(theme.palette.border)
+                .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover))
+                .into_any_element(),
+            _ => div()
+                .px(theme.spacing.sm)
+                .py(theme.spacing.xs)
+                .pr(px(30.))
+                .rounded(theme.radius.md)
+                .border_1()
+                .border_color(theme.palette.border)
+                .bg(theme.palette.surface)
+                .text_size(theme.typography.caption)
+                .child(item.file_name.clone())
+                .into_any_element(),
+        };
+        let (remove_kind, remove_name, open) =
+            (item.doc_kind.clone(), item.stored_name.clone(), path);
+        tiles = tiles.child(
+            div()
+                .id(("section-media", index))
+                .relative()
+                .cursor_pointer()
+                .child(body)
+                .child(
+                    div().absolute().top(px(4.)).right(px(4.)).child(
+                        crate::components::icon_button(("section-media-remove", index), "x", theme)
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.remove_section_media(
+                                    remove_kind.clone(),
+                                    remove_name.clone(),
+                                    cx,
+                                )
+                            })),
+                    ),
+                )
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_with_system(&open))),
+        );
+    }
+    let kind = doc_kind.to_string();
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .child(tiles)
+        .child(
+            div().flex().flex_row().child(
+                crate::components::button(
+                    "section-media-add",
+                    "Add an image or file",
+                    crate::components::Variant::Ghost,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.add_section_media(kind.clone(), cx)
+                })),
+            ),
+        )
+        .into_any_element()
 }
 
 /// One diagram with its title and the copy buttons.
