@@ -16,11 +16,12 @@ use std::{
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId, Task, TaskId,
-    pack_hunks,
+    AttachmentRepository, CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId,
+    Task, TaskId, pack_hunks,
 };
 use looji_knowledge::{
-    Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, watch::RepoWatcher,
+    Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, sync::AttachedFile,
+    watch::RepoWatcher,
 };
 
 use super::{WorkspaceView, board::status_label, members, store};
@@ -360,6 +361,7 @@ impl WorkspaceView {
                 let issues = issue_docs(&self.board, &self.members);
                 let fingerprint = fingerprint(&self.board);
                 self.knowledge = Some(Service::start(project, root, database, issues, fingerprint));
+                self.index_attachments(cx);
             }
             cx.notify();
             return;
@@ -378,6 +380,38 @@ impl WorkspaceView {
         if self.project_settings_open {
             cx.notify();
         }
+    }
+
+    /// Puts the text of the project's task attachments (PDFs, text and markdown files) into its knowledge, so
+    /// searches and chat can find it. Reading a PDF takes a moment, so it happens off the interface.
+    pub(super) fn index_attachments(&self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+        let mut files = Vec::new();
+        for task in &self.board {
+            for attachment in store(cx).list_for_task(task.id()).unwrap_or_default() {
+                files.push(AttachedFile {
+                    path: dir.join(&attachment.stored_name),
+                    stored_name: attachment.stored_name,
+                    file_name: attachment.file_name,
+                    task_title: task.title().to_string(),
+                });
+            }
+        }
+        let database = cx.global::<AppDatabase>().knowledge_path.clone();
+        let key = project.as_uuid().to_string();
+        cx.background_executor()
+            .spawn(async move {
+                let outcome = KnowledgeStore::open(&database).and_then(|mut knowledge| {
+                    Syncer::new()?.sync_attachments(&mut knowledge, &key, &files)
+                });
+                if let Err(err) = outcome {
+                    eprintln!("looji: attachments could not be indexed: {err}");
+                }
+            })
+            .detach();
     }
 
     /// Reads the project again from the start, for when the index looks wrong.

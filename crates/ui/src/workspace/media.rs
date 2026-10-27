@@ -234,6 +234,7 @@ impl WorkspaceView {
                     self.expanded_media.push(attachment);
                 }
                 self.status = None;
+                self.index_attachments(cx);
             }
             Err(err) => {
                 let _ = remove_attachment(&dir, &attachment.stored_name);
@@ -269,6 +270,7 @@ impl WorkspaceView {
                     dialog.media.retain(|item| item.stored_name != stored_name);
                 }
                 self.status = None;
+                self.index_attachments(cx);
             }
             Err(err) => self.status = Some(format!("Could not remove the file: {err}")),
         }

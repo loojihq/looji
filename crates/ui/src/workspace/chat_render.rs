@@ -221,7 +221,11 @@ fn sources_used(
         let design = source
             .reference
             .starts_with(looji_knowledge::sync::BLUEPRINT_PREFIX);
+        let attachment = source
+            .reference
+            .starts_with(looji_knowledge::sync::ATTACHMENT_PREFIX);
         let text = match source.kind.as_str() {
+            "doc" if attachment => format!("Attachment: {}", source.label),
             // The blueprint is not a file, so it is named for what it is.
             "doc" if design => format!(
                 "Blueprint: {}",
@@ -249,7 +253,7 @@ fn sources_used(
             .text_color(theme.palette.accent)
             .child(text);
         list = list.child(
-            if matches!(source.kind.as_str(), "code" | "doc") && !design {
+            if matches!(source.kind.as_str(), "code" | "doc") && !design && !attachment {
                 let reference = source.reference.clone();
                 row.cursor_pointer()
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {

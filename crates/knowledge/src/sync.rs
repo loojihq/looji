@@ -60,6 +60,31 @@ enum Outcome {
 /// source list can tell it apart from a file.
 pub const BLUEPRINT_PREFIX: &str = "blueprint/";
 
+/// Files attached to tasks are indexed as documents under this made-up folder, named by their stored name.
+pub const ATTACHMENT_PREFIX: &str = "attachment/";
+
+/// A file attached to a task, as the knowledge base is told about it.
+#[derive(Debug, Clone)]
+pub struct AttachedFile {
+    /// The name the file has in the attachments folder.
+    pub stored_name: String,
+    /// The name the user knows it by.
+    pub file_name: String,
+    pub task_title: String,
+    /// Where the file is.
+    pub path: std::path::PathBuf,
+}
+
+/// Puts `title` in front of each chunk's label, so a passage says which attachment it came from.
+fn titled(chunks: &mut [Chunk], title: &str) {
+    for chunk in chunks {
+        chunk.label = Some(match chunk.label.take() {
+            Some(label) => format!("{title} · {label}"),
+            None => title.to_string(),
+        });
+    }
+}
+
 pub struct Syncer {
     extractor: Extractor,
 }
@@ -96,8 +121,9 @@ impl Syncer {
         for kind in [SourceKind::Code, SourceKind::Doc] {
             for reference in store.source_refs(project, kind)? {
                 // Blueprint documents are not files, so a missing file is not a reason to drop them.
-                if !present.contains(reference.as_str()) && !reference.starts_with(BLUEPRINT_PREFIX)
-                {
+                let not_a_file = reference.starts_with(BLUEPRINT_PREFIX)
+                    || reference.starts_with(ATTACHMENT_PREFIX);
+                if !present.contains(reference.as_str()) && !not_a_file {
                     store.remove_source(project, kind, &reference)?;
                     report.scanned += 1;
                     report.removed += 1;
@@ -172,6 +198,7 @@ impl Syncer {
         project: &str,
         path: &str,
         bytes: &[u8],
+        title: Option<&str>,
     ) -> Result<Outcome> {
         let hash = hash_bytes(bytes);
         if store
@@ -195,7 +222,10 @@ impl Syncer {
             };
             redacted_any |= redacted;
             for mut chunk in chunk_plain(path, SourceKind::Doc, &text) {
-                chunk.label = Some(format!("page {number}"));
+                chunk.label = Some(match title {
+                    Some(title) => format!("{title} · page {number}"),
+                    None => format!("page {number}"),
+                });
                 chunks.push(chunk);
             }
         }
@@ -255,7 +285,7 @@ impl Syncer {
                 return self.hold_back(store, project, path, "held back: larger than 20 MB");
             }
             let bytes = fs::read(&full).map_err(|err| Error::Io(err.to_string()))?;
-            return self.index_pdf(store, project, path, &bytes);
+            return self.index_pdf(store, project, path, &bytes, None);
         }
         if metadata.len() > MAX_FILE_BYTES {
             return self.hold_back(store, project, path, "held back: larger than 1 MB");
@@ -346,6 +376,94 @@ impl Syncer {
             }
         }
         Ok(report)
+    }
+
+    /// Indexes the text of files attached to tasks: PDFs by page, and text and markdown files. Pictures, videos and
+    /// other files have no text to read and are left out. An attachment that is gone is forgotten.
+    pub fn sync_attachments(
+        &mut self,
+        store: &mut KnowledgeStore,
+        project: &str,
+        files: &[AttachedFile],
+    ) -> Result<SyncReport> {
+        let mut report = SyncReport::default();
+        let mut present: HashSet<String> = HashSet::new();
+        for file in files {
+            let class = safety::classify(&file.file_name);
+            if !matches!(class, FileClass::Doc | FileClass::Pdf) {
+                continue;
+            }
+            let reference = format!("{ATTACHMENT_PREFIX}{}", file.stored_name);
+            let Ok(metadata) = fs::metadata(&file.path) else {
+                continue;
+            };
+            present.insert(reference.clone());
+            let title = format!("{} (task: {})", file.file_name, file.task_title);
+            let outcome = if class == FileClass::Pdf {
+                if metadata.len() > MAX_PDF_BYTES {
+                    self.hold_back(store, project, &reference, "held back: larger than 20 MB")?
+                } else {
+                    let bytes = fs::read(&file.path).map_err(|err| Error::Io(err.to_string()))?;
+                    self.index_pdf(store, project, &reference, &bytes, Some(&title))?
+                }
+            } else if metadata.len() > MAX_FILE_BYTES {
+                self.hold_back(store, project, &reference, "held back: larger than 1 MB")?
+            } else {
+                let bytes = fs::read(&file.path).map_err(|err| Error::Io(err.to_string()))?;
+                self.index_text(store, project, &reference, &bytes, &title)?
+            };
+            report.absorb(outcome);
+        }
+        for reference in store.source_refs(project, SourceKind::Doc)? {
+            if reference.starts_with(ATTACHMENT_PREFIX) && !present.contains(&reference) {
+                store.remove_source(project, SourceKind::Doc, &reference)?;
+                report.scanned += 1;
+                report.removed += 1;
+            }
+        }
+        Ok(report)
+    }
+
+    /// Reads an attached text file as a document, with its title in front of each passage's label.
+    fn index_text(
+        &mut self,
+        store: &mut KnowledgeStore,
+        project: &str,
+        reference: &str,
+        bytes: &[u8],
+        title: &str,
+    ) -> Result<Outcome> {
+        if !safety::looks_like_text(bytes) {
+            return self.hold_back(store, project, reference, "held back: not a text file");
+        }
+        let hash = hash_bytes(bytes);
+        if store
+            .source_hash(project, SourceKind::Doc, reference)?
+            .as_deref()
+            == Some(hash.as_str())
+        {
+            return Ok(Outcome::Unchanged);
+        }
+        let text = String::from_utf8_lossy(bytes);
+        let Some((text, redacted)) = safety::redact(&text) else {
+            return self.hold_back(
+                store,
+                project,
+                reference,
+                "held back: contains a private key",
+            );
+        };
+        let mut chunks = chunk_markdown(reference, &text);
+        titled(&mut chunks, title);
+        let note = redacted.then_some("secret text was taken out before it was indexed");
+        store.replace_source(
+            project,
+            SourceKind::Doc,
+            reference,
+            &SourceMeta::new(&hash, bytes.len() as u64, note),
+            &chunks,
+        )?;
+        Ok(Outcome::Indexed)
     }
 
     pub fn sync_issues(
@@ -757,6 +875,67 @@ mod tests {
         // Reading it again changes nothing.
         let report = syncer.sync_repo(&mut store, "p", dir.path()).unwrap();
         assert_eq!(report.indexed, 0);
+    }
+
+    #[test]
+    fn files_attached_to_tasks_are_searchable_with_their_task_and_forgotten_when_removed() {
+        let (dir, mut store, mut syncer) = setup();
+        let attached = |stored: &str, name: &str, bytes: Vec<u8>| {
+            fs::write(dir.path().join(stored), bytes).unwrap();
+            AttachedFile {
+                stored_name: stored.to_string(),
+                file_name: name.to_string(),
+                task_title: "Fix refunds".to_string(),
+                path: dir.path().join(stored),
+            }
+        };
+        let files = vec![
+            attached(
+                "a.pdf",
+                "Policy.pdf",
+                crate::pdf::fixtures::pdf(&["Quokkaglow refund window"]),
+            ),
+            attached(
+                "b.txt",
+                "notes.txt",
+                b"# Call notes\nThe wombatspring client wants invoices monthly.".to_vec(),
+            ),
+            attached("c.png", "shot.png", vec![1, 2, 3]),
+        ];
+        let first = syncer.sync_attachments(&mut store, "p", &files).unwrap();
+        assert_eq!(first.indexed, 2);
+
+        let pdf = store.search("p", &query("quokkaglow")).unwrap();
+        assert_eq!(pdf[0].path.as_deref(), Some("attachment/a.pdf"));
+        assert_eq!(
+            pdf[0].label.as_deref(),
+            Some("Policy.pdf (task: Fix refunds) · page 1")
+        );
+        let text = store.search("p", &query("wombatspring")).unwrap();
+        assert!(
+            text[0]
+                .label
+                .as_deref()
+                .is_some_and(|label| label.starts_with("notes.txt (task: Fix refunds)")),
+            "{:?}",
+            text[0].label
+        );
+
+        // Nothing changed, nothing is read again. A repository sync leaves attachments alone.
+        let again = syncer.sync_attachments(&mut store, "p", &files).unwrap();
+        assert_eq!(again.indexed, 0);
+        let repo = TempDir::new().unwrap();
+        write(repo.path(), "README.md", "Nothing about it here.");
+        syncer.sync_repo(&mut store, "p", repo.path()).unwrap();
+        assert_eq!(store.search("p", &query("quokkaglow")).unwrap().len(), 1);
+
+        // A removed attachment is forgotten.
+        let report = syncer
+            .sync_attachments(&mut store, "p", &files[1..])
+            .unwrap();
+        assert_eq!(report.removed, 1);
+        assert!(store.search("p", &query("quokkaglow")).unwrap().is_empty());
+        assert_eq!(store.search("p", &query("wombatspring")).unwrap().len(), 1);
     }
 
     #[test]
