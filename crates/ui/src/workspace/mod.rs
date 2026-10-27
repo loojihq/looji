@@ -60,6 +60,7 @@ mod team_dialog;
 mod time_settings;
 mod tour;
 mod updates;
+mod wireframe_view;
 mod workload_view;
 mod workspace_setup;
 

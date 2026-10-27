@@ -226,6 +226,14 @@ pub trait ReviewNoteRepository {
     fn notes(&self, task: TaskId) -> RepoResult<Vec<crate::review_note::ReviewNote>>;
 }
 
+/// Every review a task has had. Reviews are added and never changed.
+pub trait ReviewHistoryRepository {
+    fn add_review(&self, task: TaskId, record: &crate::review_note::ReviewRecord)
+    -> RepoResult<()>;
+    /// The task's reviews, newest first.
+    fn reviews(&self, task: TaskId) -> RepoResult<Vec<crate::review_note::ReviewRecord>>;
+}
+
 /// The documents of a project's blueprint. Writing a blueprint replaces the whole set, and keeps the old one.
 pub trait BlueprintRepository {
     /// The project's current documents, in order. Empty before a blueprint has been written.

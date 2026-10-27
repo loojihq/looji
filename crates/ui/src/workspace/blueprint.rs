@@ -19,7 +19,8 @@ use looji_ai::{
     generation::{Update, run_with},
 };
 use looji_diagram::{
-    Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_png, to_svg,
+    Graph, GraphKind, Layout, Link, Wireframe, is_wireframe, layout, parse_graph, parse_wireframe,
+    to_mermaid, to_png, to_svg,
 };
 use looji_domain::{
     BlueprintDoc, BlueprintMedia, BlueprintRepository, CodeSourceRepository, MediaKind, Timestamp,
@@ -43,6 +44,17 @@ pub(super) struct DiagramView {
 pub(super) struct DocView {
     doc: BlueprintDoc,
     diagrams: Vec<DiagramView>,
+    wireframes: Vec<Wireframe>,
+}
+
+/// The wireframes a document's stored diagrams hold.
+fn wireframes_of(diagrams: &str) -> Vec<Wireframe> {
+    serde_json::from_str::<Vec<serde_json::Value>>(diagrams)
+        .unwrap_or_default()
+        .iter()
+        .filter(|json| is_wireframe(json))
+        .filter_map(|json| parse_wireframe(json).ok())
+        .collect()
 }
 
 fn doc_view(doc: BlueprintDoc) -> DocView {
@@ -55,7 +67,12 @@ fn doc_view(doc: BlueprintDoc) -> DocView {
             graph,
         })
         .collect();
-    DocView { doc, diagrams }
+    let wireframes = wireframes_of(&doc.diagrams);
+    DocView {
+        doc,
+        diagrams,
+        wireframes,
+    }
 }
 
 /// A generation in progress.
@@ -505,7 +522,15 @@ impl WorkspaceView {
             .blueprint(project)
             .unwrap_or_default()
             .into_iter()
-            .map(|doc| (doc.kind, doc.title, doc.body))
+            .map(|doc| {
+                // A wireframe has no words of its own in the body, so its outline is added for search to find.
+                let mut body = doc.body;
+                for wireframe in wireframes_of(&doc.diagrams) {
+                    body.push_str("\n\n");
+                    body.push_str(&wireframe.outline());
+                }
+                (doc.kind, doc.title, body)
+            })
             .collect();
         let path = cx.global::<AppDatabase>().knowledge_path.clone();
         let key = project.as_uuid().to_string();
@@ -839,14 +864,35 @@ Components: {}.",
 
 /// The design's component diagrams as one planned graph. Nodes keep the order they were drawn in.
 fn planned_from(docs: &[DocView]) -> Planned {
-    let mut planned = Planned::default();
-    for diagram in docs
+    planned_from_graphs(docs.iter().flat_map(|doc| &doc.diagrams).map(|d| &d.graph))
+}
+
+/// What a review should know about the code and the design disagreeing: the saved blueprint's component diagrams
+/// against the repository's own crates and packages. `None` when there is no blueprint, no code to compare, or
+/// nothing disagrees. This reads the repository, so it is not for the UI thread.
+pub(super) fn review_drift(root: &Path, docs: &[BlueprintDoc]) -> Option<String> {
+    let graphs: Vec<Graph> = docs
         .iter()
-        .flat_map(|doc| &doc.diagrams)
-        .filter(|diagram| diagram.graph.kind == GraphKind::Component)
-    {
+        .flat_map(|doc| {
+            serde_json::from_str::<Vec<serde_json::Value>>(&doc.diagrams).unwrap_or_default()
+        })
+        .filter_map(|json| parse_graph(&json).ok())
+        .collect();
+    let planned = planned_from_graphs(graphs.iter());
+    if planned.nodes.is_empty() {
+        return None;
+    }
+    let units = actual_units(root);
+    if units.is_empty() {
+        return None;
+    }
+    compare(&planned, &units, root).report()
+}
+
+fn planned_from_graphs<'a>(graphs: impl Iterator<Item = &'a Graph>) -> Planned {
+    let mut planned = Planned::default();
+    for graph in graphs.filter(|graph| graph.kind == GraphKind::Component) {
         let base = planned.nodes.len();
-        let graph = &diagram.graph;
         planned
             .nodes
             .extend(graph.nodes.iter().map(|node| PlannedNode {
@@ -1226,6 +1272,9 @@ pub(super) fn panel(
                     cx,
                 ));
             }
+            for wireframe in &doc.wireframes {
+                column = column.child(super::wireframe_view::block(wireframe, theme));
+            }
             if doc.doc.kind == "architecture"
                 && state.viewing.is_none()
                 && let Some(drift) = &state.drift
@@ -1575,4 +1624,46 @@ fn draw(diagram: &DiagramView, theme: &Theme, cx: &mut Context<WorkspaceView>) -
         surface = surface.child(inner);
     }
     surface.into_any_element()
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::review_drift;
+    use looji_domain::BlueprintDoc;
+
+    fn architecture(nodes: &str) -> BlueprintDoc {
+        let diagram =
+            format!(r#"[{{"type":"component","title":"Overview","nodes":[{nodes}],"edges":[]}}]"#);
+        BlueprintDoc::new("architecture", "Architecture", "Body.", &diagram)
+    }
+
+    fn repository(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("looji-drift-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"shop\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_review_hears_about_parts_without_code_and_code_without_parts() {
+        let root = repository("disagree");
+        let docs = [architecture(r#"{"id":"b","label":"Billing"}"#)];
+        let report = review_drift(&root, &docs).expect("they disagree");
+        assert!(report.contains("Billing"), "{report}");
+        assert!(report.contains("shop"), "{report}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nothing_is_reported_without_a_blueprint_or_when_they_agree() {
+        let root = repository("agree");
+        assert_eq!(review_drift(&root, &[]), None);
+        let docs = [architecture(r#"{"id":"s","label":"Shop"}"#)];
+        assert_eq!(review_drift(&root, &docs), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

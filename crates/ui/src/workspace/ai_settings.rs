@@ -61,6 +61,15 @@ pub(super) fn project_provider_choice(cx: &gpui::App, project: ProjectId) -> Opt
         .and_then(Provider::from_stored)
 }
 
+/// The project's own choice of a test command for reviews. Unset means reviews never run the project's code.
+pub(super) const PROJECT_TESTS: &str = "review_tests";
+
+/// The test command a project's reviews run, if the project turned it on. Only a known command counts.
+pub(super) fn tests_for(cx: &gpui::App, project: ProjectId) -> Option<String> {
+    project_setting(cx, project, PROJECT_TESTS)
+        .filter(|command| looji_ai::review::testrun::is_preset(command))
+}
+
 /// The project's own model, if it has one.
 pub(super) fn project_model_choice(cx: &gpui::App, project: ProjectId) -> Option<String> {
     project_setting(cx, project, PROJECT_MODEL)

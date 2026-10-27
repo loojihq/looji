@@ -53,6 +53,10 @@ pub(super) struct PanelState {
     pub related: Vec<looji_knowledge::related::RelatedIssue>,
     /// What similar finished tasks suggest for this one.
     pub hints: looji_knowledge::hints::Hints,
+    /// Quiet risk notes: stale, overdue, or due soon with nothing committed.
+    pub risks: Vec<looji_knowledge::risk::Note>,
+    /// The task's reviews, newest first.
+    pub review_history: Vec<looji_domain::ReviewRecord>,
 }
 
 /// What a history entry says, in words.
@@ -132,6 +136,14 @@ impl WorkspaceView {
             Vec::new()
         });
         self.load_review(task, cx);
+        let review_history = looji_domain::ReviewHistoryRepository::reviews(store(cx), task)
+            .unwrap_or_else(|err| {
+                eprintln!(
+                    "could not load the reviews of task {}: {err}",
+                    task.as_uuid()
+                );
+                Vec::new()
+            });
         let related = match (
             self.projects.active_id(),
             self.board.iter().find(|t| t.id() == task),
@@ -146,6 +158,18 @@ impl WorkspaceView {
             _ => Vec::new(),
         };
         let hints = hints_for(&related, &self.board);
+        let risks = match (
+            self.projects.active_id(),
+            self.board.iter().find(|t| t.id() == task),
+        ) {
+            (Some(project), Some(found)) => super::knowledge::risks_for(
+                &cx.global::<crate::database::AppDatabase>().knowledge_path,
+                project,
+                found,
+                &self.board,
+            ),
+            _ => Vec::new(),
+        };
         let already_open = self.panel.is_some();
         self.panel = Some(PanelState {
             task,
@@ -156,6 +180,8 @@ impl WorkspaceView {
             notice: None,
             hints,
             related,
+            risks,
+            review_history,
         });
         // The task opens in its own window. One that is already open follows the new task.
         if !already_open {
@@ -544,7 +570,11 @@ fn related_section(
         .map(TeamMemberId::from_uuid)
         .filter(|_| task.assignee_id().is_none())
         .and_then(|id| view.members.iter().find(|member| member.id() == id));
-    if panel.related.is_empty() && estimate_hint.is_none() && assignee_hint.is_none() {
+    if panel.related.is_empty()
+        && estimate_hint.is_none()
+        && assignee_hint.is_none()
+        && panel.risks.is_empty()
+    {
         return None;
     }
     let mut column = div()
@@ -594,6 +624,14 @@ fn related_section(
             .text_color(theme.palette.text_secondary)
             .child(text)
     };
+    for risk in &panel.risks {
+        column = column.child(
+            div()
+                .text_size(theme.typography.caption)
+                .text_color(theme.palette.danger)
+                .child(risk.text()),
+        );
+    }
     if let Some(minutes) = estimate_hint {
         let task_id = panel.task;
         column = column.child(

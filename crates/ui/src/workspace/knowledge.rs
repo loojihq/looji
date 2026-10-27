@@ -16,11 +16,12 @@ use std::{
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId, Task, TaskId,
-    pack_hunks,
+    AttachmentRepository, CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId,
+    Task, TaskId, pack_hunks,
 };
 use looji_knowledge::{
-    Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, watch::RepoWatcher,
+    Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, sync::AttachedFile,
+    watch::RepoWatcher,
 };
 
 use super::{WorkspaceView, board::status_label, members, store};
@@ -360,6 +361,7 @@ impl WorkspaceView {
                 let issues = issue_docs(&self.board, &self.members);
                 let fingerprint = fingerprint(&self.board);
                 self.knowledge = Some(Service::start(project, root, database, issues, fingerprint));
+                self.index_attachments(cx);
             }
             cx.notify();
             return;
@@ -378,6 +380,38 @@ impl WorkspaceView {
         if self.project_settings_open {
             cx.notify();
         }
+    }
+
+    /// Puts the text of the project's task attachments (PDFs, text and markdown files) into its knowledge, so
+    /// searches and chat can find it. Reading a PDF takes a moment, so it happens off the interface.
+    pub(super) fn index_attachments(&self, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.active_id() else {
+            return;
+        };
+        let dir = cx.global::<AppDatabase>().attachments_dir.clone();
+        let mut files = Vec::new();
+        for task in &self.board {
+            for attachment in store(cx).list_for_task(task.id()).unwrap_or_default() {
+                files.push(AttachedFile {
+                    path: dir.join(&attachment.stored_name),
+                    stored_name: attachment.stored_name,
+                    file_name: attachment.file_name,
+                    task_title: task.title().to_string(),
+                });
+            }
+        }
+        let database = cx.global::<AppDatabase>().knowledge_path.clone();
+        let key = project.as_uuid().to_string();
+        cx.background_executor()
+            .spawn(async move {
+                let outcome = KnowledgeStore::open(&database).and_then(|mut knowledge| {
+                    Syncer::new()?.sync_attachments(&mut knowledge, &key, &files)
+                });
+                if let Err(err) = outcome {
+                    eprintln!("looji: attachments could not be indexed: {err}");
+                }
+            })
+            .detach();
     }
 
     /// Reads the project again from the start, for when the index looks wrong.
@@ -412,6 +446,71 @@ pub(super) fn related_for(
             8,
         )
         .unwrap_or_default()
+}
+
+/// Quiet risk notes for a task: stale, overdue, or due soon with no commit about it. Commits come from the knowledge
+/// base. Until the project's commits are indexed their count is unknown, and the note that needs it stays quiet.
+pub(super) fn risks_for(
+    knowledge_path: &Path,
+    project: ProjectId,
+    task: &Task,
+    board: &[Task],
+) -> Vec<looji_knowledge::risk::Note> {
+    use looji_knowledge::risk::{Other, Stage, TaskState, notes, waiting_notes};
+    const DAY_MILLIS: i64 = 86_400_000;
+    let today = looji_domain::Timestamp::now().unix_millis() / DAY_MILLIS;
+    let stage = match task.status() {
+        looji_domain::Status::Done => Stage::Done,
+        looji_domain::Status::InProgress | looji_domain::Status::InReview => Stage::Active,
+        _ => Stage::NotStarted,
+    };
+    let key = project.as_uuid().to_string();
+    let linked_commits = KnowledgeStore::open(knowledge_path)
+        .ok()
+        .filter(|store| {
+            store
+                .health(&key)
+                .is_ok_and(|health| health.commit_chunks > 0)
+        })
+        .map(|store| {
+            let issue = IssueDoc {
+                id: task.id().as_uuid().to_string(),
+                title: task.title().to_string(),
+                description: String::new(),
+                status: String::new(),
+                priority: None,
+                assignee: None,
+                tags: Vec::new(),
+            };
+            store
+                .commits(&key, None, 500)
+                .unwrap_or_default()
+                .iter()
+                .filter(|commit| {
+                    !git::issues_for_commit(commit, std::slice::from_ref(&issue)).is_empty()
+                })
+                .count()
+        });
+    let mut found = notes(&TaskState {
+        stage,
+        idle_days: (today - task.updated_at().unix_millis() / DAY_MILLIS).max(0),
+        due_in_days: task.due_on().map(|due| due.day_number() - today),
+        linked_commits: linked_commits.unwrap_or(usize::MAX),
+    });
+    if stage != Stage::Done {
+        let others: Vec<Other> = board
+            .iter()
+            .filter(|other| other.id() != task.id())
+            .map(|other| Other {
+                title: other.title().to_string(),
+                short_id: other.id().as_uuid().to_string().chars().take(8).collect(),
+                done: other.status() == looji_domain::Status::Done,
+                idle_days: (today - other.updated_at().unix_millis() / DAY_MILLIS).max(0),
+            })
+            .collect();
+        found.extend(waiting_notes(task.description(), &others));
+    }
+    found
 }
 
 pub(super) fn search_hunks(

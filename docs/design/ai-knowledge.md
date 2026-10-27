@@ -135,8 +135,13 @@ end_line, content, content_hash, updated_at)`.
   - Recently changed files.
   - Files owned (by blame) by the issue's assignee.
   - Chunks that open issues link to.
-- **Rerank (optional).** A cheap model pass over the top 30 ("rank these by relevance to the question"), used only
-  when the question is broad. This is phase 4, behind measurement.
+- **Rerank: measured, not built.** The idea was a model pass over the top results, used when the question is broad.
+  Measured on 2026-10-27 with `crates/embed/tests/rerank_eval.rs`, which reorders the top 20 hybrid results with the
+  `jina-reranker-v1-turbo-en` cross-encoder on the sample repository's questions. Identifier and docs questions were
+  already at recall 1.00 and mean reciprocal rank 1.00 and stayed there. Paraphrase questions got worse, from a mean
+  reciprocal rank of 0.81 to 0.70, at about 46 ms per question in a debug build. The set is small (20 questions over
+  six files) and covers one reranker, so this says "not now", not "never". Run the eval again on a larger repository,
+  or with another reranker, before building it.
 - **Packing.** Dedupe overlapping ranges, merge neighbours in the same file, expand to whole symbols, and fit a token
   budget. This keeps today's `pack_hunks` idea.
 
@@ -336,8 +341,14 @@ How:
 - **Prefetch.** When a card expands, its retrieval runs in the background, so Explain issue starts with its context
   ready. When a review is likely (a card is dragged toward In review), its diff is gathered ahead of time.
 - **Parallel tool calls** in the agent loop, and streaming for every step and answer.
-- **A warm Claude Code session.** CLI start-up costs seconds per call. Keep one session per project alive through
-  the Agent SDK's streaming mode, or reuse a session id, so follow-ups don't pay start-up again.
+- **A warm Claude Code session: measured, not built.** The idea was that CLI start-up costs seconds per call, so one
+  session per project could stay alive through streaming input. Measured on 2026-10-27 with a one-word prompt: a cold
+  `claude -p` took 6.6 to 8.3 seconds, and the second and third turns of a session kept alive in streaming mode took
+  7.0 and 5.4 seconds, so there was no gain. With `--bare`, which skips start-up work but needs an API key, a call
+  failed in about 1 second, so the process itself starts in about that long and the rest is the model call. A warm
+  process would also carry earlier turns and break the per-request tool limits. Speed comes from fewer turns, from
+  prefetching retrieval, and from the Anthropic API path (prompt caching), not from keeping the CLI alive. Measure
+  again if the CLI's start-up changes.
 
 ## Phasing
 
@@ -376,8 +387,28 @@ Each phase ships on its own and is useful by itself.
 **Phase 4: proactive and deeper reviews (ongoing)**
 - Opt-in test runs in reviews. Architecture drift findings in reviews.
 - Digests, risk notes, stale and blocker nudges.
-- A warm Claude Code session. Rerank where measurement says it helps.
-- Wireframes, and text from PDFs and images.
+- A warm Claude Code session and reranking were both measured and gave no gain, so neither is built.
+- Text from PDFs: built for PDFs in the repository and for files attached to tasks (see below). Still to do: text
+  from images (OCR) and blueprint media. Wireframes are built (see below).
+
+**PDFs in the repository.** A `.pdf` file in the repository is indexed like a document, one set of chunks for each
+page, labelled "page N", up to 20 MB, 200 pages, and 400,000 characters. Only the text layer is read, by `pdf-extract`.
+`lopdf` alone was tried first and wrote "Identity-H Unimplemented" in place of the text of a PDF made by our own
+report export, so it was dropped for reading. A scanned PDF has no text layer and is held back with that reason, which
+the index health view lists, since reading it needs OCR. Secrets are redacted as in any other text.
+
+**Files attached to tasks.** PDFs, `.txt` and `.md` files attached to a task are indexed the same way, as documents
+under the made-up folder `attachment/<stored name>`, with the label "file name (task: title) · page N" so an answer can
+say which task a passage came from. They are read off the interface thread when a project opens and after each attach
+or remove; an unchanged file is not read again and a removed one is forgotten. Pictures and videos have no text to read
+and are left out. Chat lists them as "Attachment: …" and does not offer to reveal them in the repository.
+
+**Wireframes.** A wireframe is an entry in a document's `diagrams` list with `"type": "wireframe"` and a `root`
+element tree: containers `column`, `row`, `card` hold `children`; `heading`, `text`, `button`, `input`, `image`,
+`divider` hold a short `label`. At most 60 elements, 6 deep (`crates/diagram/src/wireframe.rs`); a broken one is dropped
+and counted like a broken diagram. The app draws the tree with flex layout in the theme's colours. Its text outline is
+added to the document when the blueprint is indexed, so search and chat can find what a screen holds. Not built:
+Mermaid, SVG or PNG export for wireframes, and linking elements to files or issues.
 
 ## Phase 1 status
 

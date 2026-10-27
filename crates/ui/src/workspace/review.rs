@@ -14,12 +14,16 @@ use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken,
     generation::{Update, run_with},
+    review::testrun,
     review::verdict::{
         MAX_CHANGES_CHARS, Outcome, Rating, TaskReview, build_review_request, done_when,
         parse_review,
     },
 };
-use looji_domain::{CodeSourceRepository, ProjectId, SettingsRepository, Status, TaskId};
+use looji_domain::{
+    BlueprintRepository, CodeSourceRepository, ProjectId, ReviewHistoryRepository, ReviewRecord,
+    SettingsRepository, Status, TaskId,
+};
 
 use super::{WorkspaceView, store, task_dialog::button};
 use crate::{database::AppDatabase, theme::Theme};
@@ -91,6 +95,8 @@ impl WorkspaceView {
         let provider = super::ai_settings::provider_for(cx, Some(project));
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
         let (title, description) = (task.title().to_string(), task.description().to_string());
+        let test_command = super::ai_settings::tests_for(cx, project);
+        let blueprint = store(cx).blueprint(project).unwrap_or_default();
 
         let cancel = CancellationToken::new();
         let queue: Arc<Mutex<Vec<Update>>> = Arc::new(Mutex::new(Vec::new()));
@@ -127,6 +133,8 @@ impl WorkspaceView {
                 title,
                 description,
                 criteria,
+                test_command,
+                blueprint,
             },
             cancel,
             queue,
@@ -171,6 +179,22 @@ impl WorkspaceView {
                         task.as_uuid()
                     );
                 }
+                let record = ReviewRecord {
+                    outcome: review.outcome.stored().to_string(),
+                    summary: review.summary.clone(),
+                    review_json: review.to_json(),
+                    model: Some(super::ai_settings::model_for(cx, self.projects.active_id())),
+                    created_at: looji_domain::Timestamp::now(),
+                };
+                if let Err(err) = store(cx).add_review(task, &record) {
+                    eprintln!(
+                        "could not keep the review of task {} in its history: {err}",
+                        task.as_uuid()
+                    );
+                }
+                if let Some(panel) = self.panel.as_mut().filter(|panel| panel.task == task) {
+                    panel.review_history = store(cx).reviews(task).unwrap_or_default();
+                }
                 self.reviews.insert(task, ReviewRun::Ready(review));
             }
             Err(message) => {
@@ -202,6 +226,10 @@ struct ReviewJob {
     title: String,
     description: String,
     criteria: Vec<String>,
+    /// The test command to run first, when the project turned that on.
+    test_command: Option<String>,
+    /// The project's blueprint, to compare with the code.
+    blueprint: Vec<looji_domain::BlueprintDoc>,
 }
 
 fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<Update>>>) {
@@ -219,12 +247,38 @@ fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<
             })
             .await
             .unwrap_or_default();
+        let tests = match job.test_command.clone() {
+            Some(command) => {
+                push(Update::Step(format!("Running {command}")));
+                let root = job.root.clone();
+                looji_ai::runtime()
+                    .spawn_blocking(move || {
+                        testrun::run(Path::new(&root), &command, testrun::TIMEOUT).report()
+                    })
+                    .await
+                    .ok()
+            }
+            None => None,
+        };
+        if cancel.is_cancelled() {
+            return;
+        }
+        let drift = {
+            let (root, docs) = (job.root.clone(), job.blueprint.clone());
+            looji_ai::runtime()
+                .spawn_blocking(move || super::blueprint::review_drift(Path::new(&root), &docs))
+                .await
+                .ok()
+                .flatten()
+        };
         let request = build_review_request(
             &job.model,
             &job.title,
             &job.description,
             &job.criteria,
             &changes,
+            tests.as_deref(),
+            drift.as_deref(),
         );
         match super::agent::agent_for(
             job.provider,
@@ -398,5 +452,42 @@ pub(super) fn section(
             column = actions(column, true, cx);
         }
     }
+    // Reviews before the one shown, newest first. The record of the review shown above is left out, found by its
+    // content, so a review that could not be kept in the history never hides an earlier one.
+    if let Some(panel) = view.panel.as_ref().filter(|panel| panel.task == task) {
+        let shown = match run {
+            Some(ReviewRun::Ready(review)) => Some(review.to_json()),
+            _ => None,
+        };
+        let earlier: Vec<&ReviewRecord> = panel
+            .review_history
+            .iter()
+            .enumerate()
+            .filter(|(index, record)| {
+                !(*index == 0 && shown.as_deref() == Some(record.review_json.as_str()))
+            })
+            .map(|(_, record)| record)
+            .take(MAX_EARLIER)
+            .collect();
+        if !earlier.is_empty() {
+            column = column.child(crate::components::section_label("Earlier reviews", theme));
+            for record in earlier {
+                let verdict =
+                    Outcome::from_stored(&record.outcome).map_or("Review", Outcome::label);
+                column = column.child(caption(format!(
+                    "{} \u{00b7} {verdict}{}",
+                    super::panel::format_time(record.created_at),
+                    if record.summary.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" \u{2014} {}", record.summary)
+                    }
+                )));
+            }
+        }
+    }
     Some(column.into_any_element())
 }
+
+/// How many earlier reviews the task window lists.
+const MAX_EARLIER: usize = 5;
