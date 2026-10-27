@@ -89,6 +89,51 @@ pub fn build_blueprint_request(
     }
 }
 
+/// The request that asks an agent to change one document. The reply has the same shape as a whole blueprint, with one
+/// document in it, so it is read the same way.
+pub fn build_revision_request(
+    model: &str,
+    project: &str,
+    document: (&str, &str, &str, &str),
+    instruction: &str,
+    has_repository: bool,
+) -> ChatRequest {
+    let (kind, title, body, diagrams) = document;
+    let system = format!(
+        "{INSTRUCTIONS}
+
+You are not writing a whole blueprint now. You are changing one document of it,          as the user asks. Keep everything the user did not ask you to change, in the same words. Reply with the          JSON object as above, holding only that one document, complete, with its diagrams."
+    );
+    let mut message = format!(
+        "Project: {project}
+
+The document, kind \"{kind}\", titled \"{title}\":
+
+{body}
+
+Its diagrams, as JSON:
+{diagrams}
+
+Change to make:
+{}
+",
+        instruction.trim()
+    );
+    message.push_str(if has_repository {
+        "
+The project has a repository. Look at it if the change depends on what the code does."
+    } else {
+        "
+The project has no repository."
+    });
+    ChatRequest {
+        model: model.to_string(),
+        system: Some(system),
+        messages: vec![ChatMessage::user(message)],
+        max_tokens: 8_000,
+    }
+}
+
 fn clean_body(text: &str) -> String {
     let body = text.trim();
     if body.chars().count() <= MAX_BODY_CHARS {
@@ -194,6 +239,26 @@ mod tests {
         assert!(parse_blueprint("Sure, here you go.").is_err());
         assert!(parse_blueprint("{\"documents\": []}").is_err());
         assert!(parse_blueprint("{\"documents\": [{\"title\": \"x\"}]}").is_err());
+    }
+
+    #[test]
+    fn a_revision_request_carries_the_document_and_the_change_asked_for() {
+        let request = build_revision_request(
+            "m",
+            "Shop",
+            ("risks", "Risks", "Old risks.", "[]"),
+            "Add a risk about payments",
+            false,
+        );
+        let text = &request.messages[0].content;
+        assert!(text.contains("Old risks.") && text.contains("Add a risk about payments"));
+        assert!(
+            request
+                .system
+                .as_deref()
+                .unwrap()
+                .contains("only that one document")
+        );
     }
 
     #[test]

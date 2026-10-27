@@ -12,7 +12,7 @@ use std::{
 use gpui::{prelude::*, *};
 use looji_ai::{
     CancellationToken,
-    blueprint::{build_blueprint_request, parse_blueprint},
+    blueprint::{build_blueprint_request, build_revision_request, parse_blueprint},
     generation::{Update, run_with},
 };
 use looji_diagram::{Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_svg};
@@ -52,6 +52,8 @@ fn doc_view(doc: BlueprintDoc) -> DocView {
 
 /// A generation in progress.
 struct Run {
+    /// The document being changed, when this is a revision and not a new blueprint.
+    revising: Option<usize>,
     steps: Vec<String>,
     queue: Arc<Mutex<Vec<Update>>>,
     cancel: CancellationToken,
@@ -62,6 +64,10 @@ pub(super) struct BlueprintState {
     docs: Vec<DocView>,
     selected: usize,
     idea: TextEdit,
+    /// What to change in the open document.
+    revise: TextEdit,
+    /// Whether typing goes to the revision box. Otherwise it goes to the idea box.
+    revise_focused: bool,
     running: Option<Run>,
     notice: Option<String>,
     error: Option<String>,
@@ -93,6 +99,8 @@ impl WorkspaceView {
             docs,
             selected: 0,
             idea: TextEdit::new(&description),
+            revise: TextEdit::default(),
+            revise_focused: false,
             running: None,
             notice: None,
             error: None,
@@ -130,6 +138,23 @@ impl WorkspaceView {
 
     /// Starts writing a blueprint from the idea in the box.
     pub(super) fn generate_blueprint(&mut self, cx: &mut Context<Self>) {
+        self.start_run(None, cx);
+    }
+
+    /// Asks for a change to the open document, written as a new version of the blueprint.
+    pub(super) fn revise_document(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.blueprint.as_ref() else {
+            return;
+        };
+        if state.viewing.is_some() || state.revise.trim().is_empty() {
+            return;
+        }
+        let index = state.selected;
+        self.start_run(Some(index), cx);
+    }
+
+    /// Starts an agent: on the whole blueprint, or on one document of it.
+    fn start_run(&mut self, revising: Option<usize>, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active() else {
             return;
         };
@@ -145,13 +170,36 @@ impl WorkspaceView {
             return;
         }
         let idea = state.idea.trim().to_string();
+        let change = state.revise.trim().to_string();
+        let document = revising
+            .and_then(|index| state.docs.get(index))
+            .map(|view| {
+                (
+                    view.doc.kind.clone(),
+                    view.doc.title.clone(),
+                    view.doc.body.clone(),
+                    view.doc.diagrams.clone(),
+                )
+            });
+        if revising.is_some() && document.is_none() {
+            return;
+        }
         state.error = None;
         state.notice = None;
         let root = store(cx).load_path(id).ok().flatten();
         let model = super::ai_settings::model_for(cx, Some(id));
         let provider = super::ai_settings::provider_for(cx, Some(id));
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
-        let request = build_blueprint_request(&model, &name, &description, &idea, root.is_some());
+        let request = match &document {
+            Some((kind, title, body, diagrams)) => build_revision_request(
+                &model,
+                &name,
+                (kind, title, body, diagrams),
+                &change,
+                root.is_some(),
+            ),
+            None => build_blueprint_request(&model, &name, &description, &idea, root.is_some()),
+        };
 
         let cancel = CancellationToken::new();
         let queue: Arc<Mutex<Vec<Update>>> = Arc::new(Mutex::new(Vec::new()));
@@ -168,6 +216,7 @@ impl WorkspaceView {
         });
         if let Some(state) = self.blueprint.as_mut() {
             state.running = Some(Run {
+                revising,
                 steps: Vec::new(),
                 queue: Arc::clone(&queue),
                 cancel: cancel.clone(),
@@ -208,6 +257,7 @@ impl WorkspaceView {
         let Some(run) = state.running.as_mut() else {
             return false;
         };
+        let revising = run.revising;
         let updates = match run.queue.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
@@ -229,18 +279,33 @@ impl WorkspaceView {
         let mut refresh = false;
         match outcome {
             Ok(parsed) => {
-                let docs: Vec<BlueprintDoc> = parsed
-                    .docs
-                    .iter()
-                    .map(|doc| {
-                        BlueprintDoc::new(
-                            &doc.kind,
-                            &doc.title,
-                            &doc.body,
-                            &serde_json::Value::Array(doc.diagrams.clone()).to_string(),
-                        )
-                    })
-                    .collect();
+                let made = |doc: &looji_ai::blueprint::ParsedDoc, kind: &str| {
+                    BlueprintDoc::new(
+                        kind,
+                        &doc.title,
+                        &doc.body,
+                        &serde_json::Value::Array(doc.diagrams.clone()).to_string(),
+                    )
+                };
+                let docs: Vec<BlueprintDoc> = match (revising, parsed.docs.first()) {
+                    // A revision replaces the one document and keeps the rest as they are.
+                    (Some(index), Some(changed)) => {
+                        let state = self.blueprint.as_ref().expect("the blueprint is open");
+                        state
+                            .docs
+                            .iter()
+                            .enumerate()
+                            .map(|(position, view)| {
+                                if position == index {
+                                    made(changed, &view.doc.kind)
+                                } else {
+                                    view.doc.clone()
+                                }
+                            })
+                            .collect()
+                    }
+                    _ => parsed.docs.iter().map(|doc| made(doc, &doc.kind)).collect(),
+                };
                 let project = self.projects.active_id();
                 let saved = project
                     .map(|project| store(cx).replace_blueprint(project, &docs, Timestamp::now()));
@@ -254,7 +319,8 @@ impl WorkspaceView {
                             .into_iter()
                             .map(doc_view)
                             .collect();
-                        state.selected = 0;
+                        state.selected = revising.unwrap_or(0);
+                        state.revise = TextEdit::default();
                         refresh = true;
                         state.notice = Some(if parsed.diagrams_dropped > 0 {
                             format!(
@@ -505,9 +571,15 @@ impl WorkspaceView {
         }
         if let Some(state) = self.blueprint.as_mut()
             && state.running.is_none()
-            && state.idea.handle_key(&event.keystroke)
         {
-            cx.notify();
+            let field = if state.revise_focused {
+                &mut state.revise
+            } else {
+                &mut state.idea
+            };
+            if field.handle_key(&event.keystroke) {
+                cx.notify();
+            }
         }
     }
 }
@@ -650,12 +722,25 @@ pub(super) fn panel(
     let mut generator = div().flex().flex_col().gap(theme.spacing.sm).child(caption(
         "What should the blueprint cover? It researches the repository first when one is connected.".to_string(),
     ));
-    generator = generator.child(crate::components::edit_box(
-        &state.idea,
-        "Describe the system",
-        state.running.is_none(),
-        theme,
-    ));
+    generator = generator.child(
+        div()
+            .id("blueprint-idea")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    if let Some(state) = this.blueprint.as_mut() {
+                        state.revise_focused = false;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(crate::components::edit_box(
+                &state.idea,
+                "Describe the system",
+                state.running.is_none() && !state.revise_focused,
+                theme,
+            )),
+    );
     let action = match &state.running {
         None => button(
             "blueprint-generate",
@@ -774,14 +859,49 @@ pub(super) fn panel(
                         ),
                 );
             }
-            column = column
-                .child(
+            column = column.child(
+                div()
+                    .text_size(theme.typography.title)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(doc.doc.title.clone()),
+            );
+            if state.viewing.is_none() {
+                // Asking for a change to just this document.
+                column = column.child(
                     div()
-                        .text_size(theme.typography.title)
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(doc.doc.title.clone()),
-                )
-                .child(markdown_view::view(&doc.doc.body, theme));
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.spacing.sm)
+                        .child(
+                            div()
+                                .id("blueprint-revise")
+                                .flex_1()
+                                .min_w_0()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                        if let Some(state) = this.blueprint.as_mut() {
+                                            state.revise_focused = true;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(crate::components::edit_box(
+                                    &state.revise,
+                                    "Ask for a change to this document",
+                                    state.running.is_none() && state.revise_focused,
+                                    theme,
+                                )),
+                        )
+                        .child(
+                            button("blueprint-revise-go", "Revise", false, theme).on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.revise_document(cx)),
+                            ),
+                        ),
+                );
+            }
+            column = column.child(markdown_view::view(&doc.doc.body, theme));
             for (index, diagram) in doc.diagrams.iter().enumerate() {
                 column = column.child(diagram_block(
                     state,
