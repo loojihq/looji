@@ -17,6 +17,7 @@ use looji_ai::{
 };
 use looji_diagram::{Graph, GraphKind, Layout, Link, layout, parse_graph, to_mermaid, to_svg};
 use looji_domain::{BlueprintDoc, BlueprintRepository, CodeSourceRepository, Timestamp};
+use looji_knowledge::drift::{Drift, Planned, PlannedNode, actual_units, compare};
 
 use super::{WorkspaceView, markdown_view, store, task_dialog::button};
 use crate::{database::AppDatabase, text_edit::TextEdit, theme::Theme};
@@ -67,6 +68,8 @@ pub(super) struct BlueprintState {
     /// The diagram whose copy button last said "Copied": the document, the diagram, and which format.
     copied: Option<(usize, usize, &'static str)>,
     scroll: ScrollHandle,
+    /// The design compared with the code, when the project has a repository with units of code.
+    drift: Option<Drift>,
 }
 
 impl WorkspaceView {
@@ -91,7 +94,9 @@ impl WorkspaceView {
             error: None,
             copied: None,
             scroll: ScrollHandle::new(),
+            drift: None,
         });
+        self.refresh_drift(cx);
         let main = cx.entity();
         cx.defer(move |cx| {
             super::dialog_window::open(cx, main, super::dialog_window::Kind::Blueprint)
@@ -213,6 +218,7 @@ impl WorkspaceView {
             return true;
         };
         state.running = None;
+        let mut refresh = false;
         match outcome {
             Ok(parsed) => {
                 let docs: Vec<BlueprintDoc> = parsed
@@ -241,6 +247,7 @@ impl WorkspaceView {
                             .map(doc_view)
                             .collect();
                         state.selected = 0;
+                        refresh = true;
                         state.notice = Some(if parsed.diagrams_dropped > 0 {
                             format!(
                                 "Version {version} written. {} diagram(s) were left out because they could not be drawn.",
@@ -258,8 +265,32 @@ impl WorkspaceView {
             }
             Err(message) => state.error = Some(message),
         }
+        if refresh {
+            self.refresh_drift(cx);
+        }
         cx.notify();
         false
+    }
+
+    /// Compares the design's component diagrams with the repository's units of code.
+    pub(super) fn refresh_drift(&mut self, cx: &mut Context<Self>) {
+        let root = self
+            .projects
+            .active_id()
+            .and_then(|project| store(cx).load_path(project).ok().flatten());
+        let Some(state) = self.blueprint.as_mut() else {
+            return;
+        };
+        state.drift = root.and_then(|root| {
+            let root = Path::new(&root);
+            let units = actual_units(root);
+            if units.is_empty() {
+                return None;
+            }
+            let planned = planned_from(&state.docs);
+            (!planned.nodes.is_empty()).then(|| compare(&planned, &units, root))
+        });
+        cx.notify();
     }
 
     pub(super) fn stop_blueprint_run(&mut self, cx: &mut Context<Self>) {
@@ -376,6 +407,101 @@ impl WorkspaceView {
             cx.notify();
         }
     }
+}
+
+/// The design's component diagrams as one planned graph. Nodes keep the order they were drawn in.
+fn planned_from(docs: &[DocView]) -> Planned {
+    let mut planned = Planned::default();
+    for diagram in docs
+        .iter()
+        .flat_map(|doc| &doc.diagrams)
+        .filter(|diagram| diagram.graph.kind == GraphKind::Component)
+    {
+        let base = planned.nodes.len();
+        let graph = &diagram.graph;
+        planned
+            .nodes
+            .extend(graph.nodes.iter().map(|node| PlannedNode {
+                label: node.label.clone(),
+                kind: node.kind.clone(),
+                file: match &node.link {
+                    Some(Link::File(path)) => Some(path.clone()),
+                    _ => None,
+                },
+            }));
+        for edge in &graph.edges {
+            let find = |id: &str| graph.nodes.iter().position(|node| node.id == id);
+            if let (Some(from), Some(to)) = (find(&edge.from), find(&edge.to)) {
+                planned.edges.push((base + from, base + to));
+            }
+        }
+    }
+    planned
+}
+
+/// What the code and the design disagree about, under the architecture document.
+fn drift_block(drift: &Drift, theme: &Theme, cx: &mut Context<WorkspaceView>) -> AnyElement {
+    let line = |text: String| {
+        div()
+            .text_size(theme.typography.caption)
+            .text_color(theme.palette.text_secondary)
+            .child(text)
+    };
+    let mut block = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.xs)
+        .p(theme.spacing.md)
+        .rounded(theme.radius.md)
+        .border_1()
+        .border_color(theme.palette.border)
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Planned vs actual"),
+        );
+    if drift.is_clean() {
+        block = block.child(line(format!(
+            "The code and the design agree. {} parts of the design match code.",
+            drift.matched
+        )));
+    }
+    if !drift.missing.is_empty() {
+        block = block.child(line(format!(
+            "In the design, with no code behind it: {}.",
+            drift.missing.join(", ")
+        )));
+    }
+    if !drift.unclaimed.is_empty() {
+        block = block.child(line(format!(
+            "In the code, not in the design: {}.",
+            drift.unclaimed.join(", ")
+        )));
+    }
+    if !drift.unplanned.is_empty() {
+        let pairs: Vec<String> = drift
+            .unplanned
+            .iter()
+            .map(|(from, to)| format!("{from} depends on {to}"))
+            .collect();
+        block = block.child(line(format!(
+            "In the code, but not drawn in the design: {}.",
+            pairs.join(", ")
+        )));
+    }
+    block
+        .child(
+            div().flex().flex_row().child(
+                crate::components::button(
+                    "drift-check",
+                    "Check again",
+                    crate::components::Variant::Ghost,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh_drift(cx))),
+            ),
+        )
+        .into_any_element()
 }
 
 /// The button in the project header that opens the blueprint.
@@ -526,6 +652,11 @@ pub(super) fn panel(
                     theme,
                     cx,
                 ));
+            }
+            if doc.doc.kind == "architecture"
+                && let Some(drift) = &state.drift
+            {
+                column = column.child(drift_block(drift, theme, cx));
             }
             column.into_any_element()
         }
