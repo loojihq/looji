@@ -54,6 +54,49 @@ impl Drift {
     pub fn is_clean(&self) -> bool {
         self.missing.is_empty() && self.unclaimed.is_empty() && self.unplanned.is_empty()
     }
+
+    /// The disagreements as a reviewer reads them, or `None` when the code and the design agree. Each list is cut
+    /// short, since the point is what to look out for and not a full audit.
+    pub fn report(&self) -> Option<String> {
+        const MAX: usize = 8;
+        if self.is_clean() {
+            return None;
+        }
+        let list = |items: &[String]| {
+            let shown: Vec<&str> = items.iter().take(MAX).map(String::as_str).collect();
+            let more = items.len().saturating_sub(MAX);
+            if more > 0 {
+                format!("{} and {more} more", shown.join(", "))
+            } else {
+                shown.join(", ")
+            }
+        };
+        let mut text = String::new();
+        if !self.unplanned.is_empty() {
+            let pairs: Vec<String> = self
+                .unplanned
+                .iter()
+                .map(|(from, to)| format!("{from} -> {to}"))
+                .collect();
+            text.push_str(&format!(
+                "- Dependencies in the code that the design never drew: {}.\n",
+                list(&pairs)
+            ));
+        }
+        if !self.unclaimed.is_empty() {
+            text.push_str(&format!(
+                "- In the code, not in the design: {}.\n",
+                list(&self.unclaimed)
+            ));
+        }
+        if !self.missing.is_empty() {
+            text.push_str(&format!(
+                "- In the design, with no code behind it: {}.\n",
+                list(&self.missing)
+            ));
+        }
+        Some(text.trim_end().to_string())
+    }
 }
 
 /// Node kinds that stand for something outside the code, so they are not expected to have any.
@@ -273,6 +316,35 @@ pub fn compare(planned: &Planned, units: &[Unit], root: &Path) -> Drift {
         }
     }
     drift
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::Drift;
+
+    #[test]
+    fn agreement_has_no_report() {
+        let drift = Drift {
+            matched: 3,
+            ..Drift::default()
+        };
+        assert_eq!(drift.report(), None);
+    }
+
+    #[test]
+    fn each_kind_of_disagreement_is_listed_and_long_lists_are_cut() {
+        let drift = Drift {
+            matched: 1,
+            missing: vec!["Search".into()],
+            unclaimed: (0..10).map(|n| format!("tool{n}")).collect(),
+            unplanned: vec![("ui".into(), "db".into())],
+        };
+        let report = drift.report().unwrap();
+        assert!(report.contains("never drew: ui -> db."));
+        assert!(report.contains("tool7 and 2 more"));
+        assert!(!report.contains("tool8,"));
+        assert!(report.contains("no code behind it: Search."));
+    }
 }
 
 #[cfg(test)]

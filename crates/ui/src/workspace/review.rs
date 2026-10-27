@@ -20,7 +20,9 @@ use looji_ai::{
         parse_review,
     },
 };
-use looji_domain::{CodeSourceRepository, ProjectId, SettingsRepository, Status, TaskId};
+use looji_domain::{
+    BlueprintRepository, CodeSourceRepository, ProjectId, SettingsRepository, Status, TaskId,
+};
 
 use super::{WorkspaceView, store, task_dialog::button};
 use crate::{database::AppDatabase, theme::Theme};
@@ -93,6 +95,7 @@ impl WorkspaceView {
         let knowledge_path = cx.global::<AppDatabase>().knowledge_path.clone();
         let (title, description) = (task.title().to_string(), task.description().to_string());
         let test_command = super::ai_settings::tests_for(cx, project);
+        let blueprint = store(cx).blueprint(project).unwrap_or_default();
 
         let cancel = CancellationToken::new();
         let queue: Arc<Mutex<Vec<Update>>> = Arc::new(Mutex::new(Vec::new()));
@@ -130,6 +133,7 @@ impl WorkspaceView {
                 description,
                 criteria,
                 test_command,
+                blueprint,
             },
             cancel,
             queue,
@@ -207,6 +211,8 @@ struct ReviewJob {
     criteria: Vec<String>,
     /// The test command to run first, when the project turned that on.
     test_command: Option<String>,
+    /// The project's blueprint, to compare with the code.
+    blueprint: Vec<looji_domain::BlueprintDoc>,
 }
 
 fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<Update>>>) {
@@ -240,6 +246,14 @@ fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<
         if cancel.is_cancelled() {
             return;
         }
+        let drift = {
+            let (root, docs) = (job.root.clone(), job.blueprint.clone());
+            looji_ai::runtime()
+                .spawn_blocking(move || super::blueprint::review_drift(Path::new(&root), &docs))
+                .await
+                .ok()
+                .flatten()
+        };
         let request = build_review_request(
             &job.model,
             &job.title,
@@ -247,6 +261,7 @@ fn spawn_review(job: ReviewJob, cancel: CancellationToken, queue: Arc<Mutex<Vec<
             &job.criteria,
             &changes,
             tests.as_deref(),
+            drift.as_deref(),
         );
         match super::agent::agent_for(
             job.provider,
