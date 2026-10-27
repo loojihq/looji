@@ -315,7 +315,16 @@ impl WorkspaceView {
                     return;
                 };
                 if let Ok(Some(root)) = store(cx).load_path(project) {
-                    cx.reveal_path(&Path::new(&root).join(path));
+                    // Built piece by piece, so the separators are the system's own, and a target can't climb out of
+                    // the repository.
+                    let mut full = Path::new(&root).to_path_buf();
+                    for part in path.split(['/', '\\']).filter(|part| !part.is_empty()) {
+                        if part == ".." || part.contains(':') {
+                            return;
+                        }
+                        full.push(part);
+                    }
+                    cx.reveal_path(&full);
                 }
             }
             Link::Section(title) => {
