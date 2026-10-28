@@ -20,7 +20,7 @@ looji keeps your workspaces, projects, and tasks on boards you can drag around. 
 about a single task with the code it touches, and export a project as a PDF. Everything is stored in one folder on your
 computer.
 
-![A project board in looji, with five columns and tasks in each](docs/screenshots/board.png)
+![The Website redesign board in looji, with its columns, tasks, and an unfinished AI plan](docs/screenshots/board.png)
 
 ## Features
 
@@ -46,12 +46,12 @@ computer.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/task.png" alt="A task window with its status, priority, assignee, estimate, due date, tags, and history"></td>
-    <td width="50%"><img src="docs/screenshots/project-settings-hours.png" alt="Project settings: working hours, with workdays and start and end times"></td>
+    <td width="50%"><img src="docs/screenshots/task.png" alt="A task window with its status, priority, assignee, estimate, due date, description, attachments, and tags"></td>
+    <td width="50%"><img src="docs/screenshots/blueprint.png" alt="A project blueprint with a wireframe of a sign-in screen, drawn from its element tree"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/project-settings-time.png" alt="Project settings: the clock and time zone for this project, or the Preferences choice"></td>
-    <td width="50%"><img src="docs/screenshots/preferences.png" alt="Preferences: the AI provider and model, and the app's clock and time zone"></td>
+    <td width="50%"><img src="docs/screenshots/project-settings-hours.png" alt="Project settings: working days and start and end times, with a preview of when a sample task is due"></td>
+    <td width="50%"><img src="docs/screenshots/preferences.png" alt="Preferences: the AI provider and model, and the clock and time zone"></td>
   </tr>
 </table>
 
@@ -61,16 +61,30 @@ New here? Read the [user guide](docs/user-guide.md). It starts with a first task
 
 ## Install
 
-Download `looji-<version>-windows-x64-setup.exe` from the [latest release](https://github.com/loojihq/looji/releases/latest)
-and run it. It installs for your own account and doesn't need administrator rights.
+Download the file for your system from the [v0.1.0 release](https://github.com/loojihq/looji/releases/tag/v0.1.0), or
+from the [latest release](https://github.com/loojihq/looji/releases/latest) for a newer version.
 
-Releases are not yet code-signed, so Windows may show an "unknown publisher" warning. Choose **More info**, then **Run
-anyway**. Each release includes a `SHA256SUMS.txt` so you can check your download.
+| System | Download | Size |
+| --- | --- | --- |
+| Windows 10 or 11, 64-bit | [looji-0.1.0-windows-x64-setup.exe](https://github.com/loojihq/looji/releases/download/v0.1.0/looji-0.1.0-windows-x64-setup.exe) | 15.7 MB |
+| Linux, glibc 2.39 or newer | [looji-0.1.0-linux-x64.AppImage](https://github.com/loojihq/looji/releases/download/v0.1.0/looji-0.1.0-linux-x64.AppImage) | 25.5 MB |
 
-On Linux, download `looji-<version>-linux-x64.AppImage` from the same release, make it executable, and run it. It uses
-the Vulkan, fontconfig, and Wayland or X11 libraries already on your computer. The interface is developed and tested on
-Windows; the AppImage is built but not yet tested on Linux. It doesn't update itself, so download a new one for each
-release.
+**Windows:** run the installer. It installs for your own account and doesn't need administrator rights. Releases are not
+yet code-signed, so Windows may show an "unknown publisher" warning. Choose **More info**, then **Run anyway**.
+
+**Linux:** make the AppImage executable and run it:
+
+```bash
+chmod +x looji-0.1.0-linux-x64.AppImage
+./looji-0.1.0-linux-x64.AppImage
+```
+
+It uses the Vulkan, fontconfig, and Wayland or X11 libraries already on your computer. The interface is developed and
+tested on Windows, and the AppImage has not yet been tested on Linux. It doesn't update itself, so download a new one for
+each release.
+
+Every release includes a [`SHA256SUMS.txt`](https://github.com/loojihq/looji/releases/download/v0.1.0/SHA256SUMS.txt) so
+you can check your download.
 
 ## AI providers
 
