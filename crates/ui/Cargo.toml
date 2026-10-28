@@ -4,8 +4,7 @@ description = "GPUI views and the looji application entry point."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-# No licence has been chosen yet. UNLICENSED means no one may use, copy, or distribute it beyond this project.
-license = "UNLICENSED"
+license = "MIT OR Apache-2.0"
 
 [[bin]]
 name = "looji"

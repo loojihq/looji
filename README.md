@@ -145,3 +145,7 @@ hand with **dry run** turned on.
 ## Documentation
 
 - [User guide](docs/user-guide.md): the board, planning, chat, repositories, reports, updates, your data, and troubleshooting.
+
+## License
+
+looji is licensed under either of the [MIT license](LICENSE-MIT) or the [Apache License, Version 2.0](LICENSE-APACHE), at your option.
