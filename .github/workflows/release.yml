@@ -105,8 +105,9 @@ jobs:
 
   linux:
     name: Build the Linux AppImage
-    # An older Ubuntu links against an older C library, so the AppImage runs on more Linux systems.
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04 is the oldest runner whose C library has the symbols the prebuilt ONNX Runtime needs to link. The
+    # AppImage therefore needs glibc 2.39 or newer; the build script prints the exact version.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
       run:
