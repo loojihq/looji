@@ -20,11 +20,11 @@ gpui_platform.workspace = true
 unicode-segmentation = "1.13.3"
 uuid = "1.28.0"
 pulldown-cmark = "0.13.4"
-looji-report = { version = "0.0.1", path = "../report" }
-looji-updates = { version = "0.0.1", path = "../updates" }
-looji-knowledge = { version = "0.0.1", path = "../knowledge" }
-looji-embed = { version = "0.0.1", path = "../embed" }
-looji-diagram = { version = "0.0.1", path = "../diagram" }
+looji-report = { version = "0.1.0", path = "../report" }
+looji-updates = { version = "0.1.0", path = "../updates" }
+looji-knowledge = { version = "0.1.0", path = "../knowledge" }
+looji-embed = { version = "0.1.0", path = "../embed" }
+looji-diagram = { version = "0.1.0", path = "../diagram" }
 serde_json = { version = "1", features = ["raw_value"] }
 
 [build-dependencies]
@@ -37,26 +37,3 @@ windows = { version = "0.61.3", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }
-
-[package.metadata.deb]
-name = "looji"
-maintainer = "looji <https://github.com/loojihq/looji>"
-copyright = "looji contributors"
-extended-description = "A desktop board for planning and tracking work, with AI planning, task chat, repository awareness, and PDF reports."
-section = "utils"
-priority = "optional"
-depends = "$auto"
-assets = [
-    ["target/release/looji", "usr/bin/", "755"],
-    ["../../packaging/linux/looji.desktop", "usr/share/applications/", "644"],
-    ["../../assets/branding/app-icon-512.png", "usr/share/icons/hicolor/512x512/apps/looji.png", "644"],
-    ["../../README.md", "usr/share/doc/looji/", "644"],
-]
-
-[package.metadata.generate-rpm]
-assets = [
-    { source = "target/release/looji", dest = "/usr/bin/looji", mode = "755" },
-    { source = "../../packaging/linux/looji.desktop", dest = "/usr/share/applications/looji.desktop", mode = "644" },
-    { source = "../../assets/branding/app-icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/looji.png", mode = "644" },
-    { source = "../../README.md", dest = "/usr/share/doc/looji/README.md", mode = "644", doc = true },
-]

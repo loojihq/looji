@@ -3253,7 +3253,7 @@ dependencies = [
 
 [[package]]
 name = "looji-ai"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "futures-util",
  "keyring",
@@ -3272,7 +3272,7 @@ dependencies = [
 
 [[package]]
 name = "looji-diagram"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "resvg",
  "serde_json",
@@ -3280,7 +3280,7 @@ dependencies = [
 
 [[package]]
 name = "looji-domain"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "jiff",
  "thiserror",
@@ -3291,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "looji-embed"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "fastembed",
  "looji-knowledge",
@@ -3299,7 +3299,7 @@ dependencies = [
 
 [[package]]
 name = "looji-knowledge"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "ignore",
  "looji-domain",
@@ -3317,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "looji-persistence"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "directories",
  "ignore",
@@ -3334,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "looji-report"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "looji-domain",
  "lopdf 0.31.0",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "looji-symbols"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "looji-domain",
  "looji-persistence",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "looji-ui"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "embed-resource",
  "gpui",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "looji-updates"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "reqwest 0.13.5",
  "semver",
