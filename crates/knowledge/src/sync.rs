@@ -220,9 +220,20 @@ impl Syncer {
         {
             return Ok(Outcome::Unchanged);
         }
-        let pages = match crate::pdf::pages(bytes) {
-            Ok(pages) => pages,
-            Err(reason) => {
+        let mut scanned = false;
+        let pages = match crate::pdf::read(bytes) {
+            crate::pdf::Reading::Text(pages) => pages,
+            crate::pdf::Reading::NoTextLayer => match crate::ocr::pdf_pages(bytes) {
+                Ok(pages) => {
+                    scanned = true;
+                    pages
+                }
+                Err(reason) => {
+                    let note = format!("held back: no text layer, and {reason}");
+                    return self.hold_back(store, project, path, &note);
+                }
+            },
+            crate::pdf::Reading::Unreadable(reason) => {
                 return self.hold_back(store, project, path, &format!("held back: {reason}"));
             }
         };
@@ -241,12 +252,19 @@ impl Syncer {
                 chunks.push(chunk);
             }
         }
-        let note = redacted_any.then_some("secret text was taken out before it was indexed");
+        let mut notes = Vec::new();
+        if scanned {
+            notes.push("text read from scanned pages with OCR");
+        }
+        if redacted_any {
+            notes.push("secret text was taken out before it was indexed");
+        }
+        let note = (!notes.is_empty()).then(|| notes.join("; "));
         store.replace_source(
             project,
             SourceKind::Doc,
             path,
-            &SourceMeta::new(&hash, bytes.len() as u64, note),
+            &SourceMeta::new(&hash, bytes.len() as u64, note.as_deref()),
             &chunks,
         )?;
         Ok(Outcome::Indexed)

@@ -849,7 +849,7 @@ Components: {}.",
 
     /// Goes where a diagram node points: a file shows in the file manager, a section opens in the blueprint, and an
     /// issue opens its task.
-    fn follow_link(&mut self, link: Link, cx: &mut Context<Self>) {
+    pub(super) fn follow_link(&mut self, link: Link, cx: &mut Context<Self>) {
         match link {
             Link::File(path) => {
                 let Some(project) = self.projects.active_id() else {

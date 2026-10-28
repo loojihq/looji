@@ -4,6 +4,8 @@
 
 use serde_json::Value;
 
+use crate::graph::Link;
+
 /// The most elements a wireframe may have, counting containers.
 pub const MAX_ELEMENTS: usize = 60;
 /// How deep containers may nest.
@@ -68,6 +70,8 @@ pub struct Element {
     pub kind: ElementKind,
     /// The words shown. Empty for a container or a divider.
     pub label: String,
+    /// Where a click on the element goes: a file, a section, or an issue.
+    pub link: Option<Link>,
     pub children: Vec<Element>,
 }
 
@@ -91,6 +95,28 @@ fn label_of(json: &Value) -> String {
         .unwrap_or_default()
         .trim();
     text.chars().take(MAX_LABEL).collect()
+}
+
+/// A link on an element, read the same way a diagram node's link is. A link with no target or an unknown type is
+/// ignored.
+fn link_of(json: &Value) -> Option<Link> {
+    let link = json.get("link")?;
+    let target: String = link
+        .get("target")?
+        .as_str()?
+        .trim()
+        .chars()
+        .take(200)
+        .collect();
+    if target.is_empty() {
+        return None;
+    }
+    match link.get("type")?.as_str()? {
+        "file" => Some(Link::File(target)),
+        "section" => Some(Link::Section(target)),
+        "issue" => Some(Link::Issue(target)),
+        _ => None,
+    }
 }
 
 fn element(
@@ -135,6 +161,7 @@ fn element(
     Some(Element {
         kind,
         label: label_of(json),
+        link: link_of(json),
         children,
     })
 }
@@ -409,6 +436,34 @@ mod tests {
         assert!(svg.trim_end().ends_with("</svg>"));
         let png = crate::export::svg_to_png(&svg, 1.0).unwrap();
         assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn an_element_can_link_to_a_file_a_section_or_an_issue_and_a_bad_link_is_ignored() {
+        let json = json!({"type": "wireframe", "root": {"kind": "column", "children": [
+            {"kind": "button", "label": "Open", "link": {"type": "file", "target": "src/lib.rs"}},
+            {"kind": "button", "label": "Back", "link": {"type": "section", "target": "Overview"}},
+            {"kind": "button", "label": "Task", "link": {"type": "issue", "target": "Offline queue"}},
+            {"kind": "button", "label": "Nowhere", "link": {"type": "url", "target": "x"}},
+            {"kind": "button", "label": "Empty", "link": {"type": "file", "target": "  "}}
+        ]}});
+        let wireframe = parse_wireframe(&json).unwrap();
+        let links: Vec<Option<Link>> = wireframe
+            .root
+            .children
+            .iter()
+            .map(|child| child.link.clone())
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                Some(Link::File("src/lib.rs".to_string())),
+                Some(Link::Section("Overview".to_string())),
+                Some(Link::Issue("Offline queue".to_string())),
+                None,
+                None,
+            ]
+        );
     }
 
     #[test]

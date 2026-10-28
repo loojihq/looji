@@ -58,7 +58,9 @@ that file.\n\n\
 For a project with screens, give the interfaces document a wireframe of the main screen, in the same list: \
 {\"type\": \"wireframe\", \"title\": \"...\", \"root\": {\"kind\": \"column\", \"children\": [...]}}. Each element \
 has a \"kind\": column, row, or card (they hold \"children\"), or heading, text, button, input, image, divider (they \
-hold a short \"label\"). At most 40 elements, nested at most 5 deep.\n\n\
+hold a short \"label\"). At most 40 elements, nested at most 5 deep. An element may link where a click goes: \"link\": \
+{\"type\": \"file\" | \"section\" | \"issue\", \"target\": \"path, section title, or issue title\"}, and only to a file \
+you have seen.\n\n\
 Reply with only a JSON object: {\"documents\": [{\"kind\": \"...\", \"title\": \"...\", \"body\": \"Markdown\", \
 \"diagrams\": []}]}. No text outside it.";
 
