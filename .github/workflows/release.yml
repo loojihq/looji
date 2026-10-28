@@ -1,7 +1,7 @@
 name: Release
 
-# Builds the Windows program and installer, and the Linux program with its .deb, .rpm, and Arch PKGBUILD. Then writes one
-# checksum list for all of them and publishes a GitHub release.
+# Builds the Windows program and installer, and the Linux AppImage. Then writes one checksum list for all of them and
+# publishes a GitHub release.
 #
 # Push a tag such as v0.0.1 to release. The tag must match the version in Cargo.toml.
 # Run it by hand to rehearse: with "dry run" on, everything is built and verified, and the files are kept as a workflow
@@ -104,8 +104,9 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: Build the Linux packages
-    runs-on: ubuntu-latest
+    name: Build the Linux AppImage
+    # An older Ubuntu links against an older C library, so the AppImage runs on more Linux systems.
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     defaults:
       run:
@@ -123,15 +124,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deb,cargo-generate-rpm
-
       - name: Build the program
         run: cargo build --release --locked --bin looji
 
-      - name: Package for Debian, Fedora, and Arch
-        run: bash scripts/release/linux-packages.sh
+      - name: Build the AppImage
+        run: bash scripts/release/appimage.sh
 
       - uses: actions/upload-artifact@v4
         with:

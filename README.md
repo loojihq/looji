@@ -67,8 +67,10 @@ and run it. It installs for your own account and doesn't need administrator righ
 Releases are not yet code-signed, so Windows may show an "unknown publisher" warning. Choose **More info**, then **Run
 anyway**. Each release includes a `SHA256SUMS.txt` so you can check your download.
 
-The release workflow also builds Linux packages (`.deb`, `.rpm`, and an Arch package). The interface is developed and
-tested on Windows.
+On Linux, download `looji-<version>-linux-x64.AppImage` from the same release, make it executable, and run it. It uses
+the Vulkan, fontconfig, and Wayland or X11 libraries already on your computer. The interface is developed and tested on
+Windows; the AppImage is built but not yet tested on Linux. It doesn't update itself, so download a new one for each
+release.
 
 ## AI providers
 
@@ -126,7 +128,7 @@ from it:
 | File | Used by |
 | --- | --- |
 | `assets/branding/app-icon.ico` | The `looji.exe` icon (embedded by [`crates/ui/build.rs`](crates/ui/build.rs)) and the installer. |
-| `assets/branding/app-icon-512.png` | The Linux packages, as the desktop icon. |
+| `assets/branding/app-icon-512.png` | The Linux AppImage, as the desktop icon. |
 | `crates/ui/assets/app-icon-96.png` | The logo at the start of the title bar. |
 
 ## Releasing
@@ -134,11 +136,11 @@ from it:
 1. Set the version in `Cargo.toml` under `[workspace.package]`.
 2. Tag it and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
-[`release.yml`](.github/workflows/release.yml) builds the program and the installer, signs them if a certificate is
-configured, writes `SHA256SUMS.txt`, and publishes the release. Signing uses two repository secrets:
-`WINDOWS_SIGNING_CERT_BASE64` (a base64-encoded `.pfx`) and `WINDOWS_SIGNING_CERT_PASSWORD`. Without them the release is
-published unsigned, and its run summary says so. To rehearse without publishing, run the workflow by hand with **dry run**
-turned on.
+[`release.yml`](.github/workflows/release.yml) builds the Windows program and installer and the Linux AppImage, signs
+the Windows files if a certificate is configured, writes `SHA256SUMS.txt`, and publishes the release. Signing uses two
+repository secrets: `WINDOWS_SIGNING_CERT_BASE64` (a base64-encoded `.pfx`) and `WINDOWS_SIGNING_CERT_PASSWORD`. Without
+them the release is published unsigned, and its run summary says so. To rehearse without publishing, run the workflow by
+hand with **dry run** turned on.
 
 ## Documentation
 

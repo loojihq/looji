@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 looji-domain.workspace = true
-looji-symbols = { version = "0.0.1", path = "../symbols" }
+looji-symbols = { version = "0.1.0", path = "../symbols" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 ignore = "0.4"
 notify = "8"
