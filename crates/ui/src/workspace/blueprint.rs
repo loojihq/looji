@@ -569,6 +569,7 @@ impl WorkspaceView {
                     let Some(state) = view.blueprint.as_mut() else {
                         return;
                     };
+                    let mut added = false;
                     match imported {
                         Ok(file) => {
                             let media = BlueprintMedia {
@@ -579,7 +580,10 @@ impl WorkspaceView {
                                 created_at: Timestamp::now(),
                             };
                             match store(cx).add_blueprint_media(project, &media) {
-                                Ok(()) => state.media.push(media),
+                                Ok(()) => {
+                                    state.media.push(media);
+                                    added = true;
+                                }
                                 Err(err) => {
                                     let _ = remove_attachment(
                                         &cx.global::<AppDatabase>().attachments_dir,
@@ -590,6 +594,9 @@ impl WorkspaceView {
                             }
                         }
                         Err(err) => state.error = Some(format!("Could not add that file: {err}")),
+                    }
+                    if added {
+                        view.index_attachments(cx);
                     }
                     cx.notify();
                 });
@@ -619,6 +626,7 @@ impl WorkspaceView {
                         !(item.doc_kind == doc_kind && item.stored_name == stored_name)
                     });
                 }
+                self.index_attachments(cx);
             }
             Err(err) => {
                 if let Some(state) = self.blueprint.as_mut() {
@@ -765,6 +773,61 @@ Components: {}.",
                         to_png(&graph, 2.0)?
                     } else {
                         to_svg(&graph).into_bytes()
+                    };
+                    std::fs::write(&path, bytes)
+                        .map(|_| path)
+                        .map_err(|err| format!("The image could not be saved: {err}"))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if let Some(state) = view.blueprint.as_mut() {
+                    match outcome {
+                        Ok(path) => state.notice = Some(format!("Saved to {}.", path.display())),
+                        Err(message) => state.error = Some(message),
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Asks where to save a wireframe, then writes it as an SVG or a PNG image.
+    pub(super) fn save_wireframe(
+        &mut self,
+        doc: usize,
+        index: usize,
+        png: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(wireframe) = self
+            .blueprint
+            .as_ref()
+            .and_then(|state| state.docs.get(doc))
+            .and_then(|view| view.wireframes.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        let name = if wireframe.title.is_empty() {
+            "wireframe".to_string()
+        } else {
+            super::export::file_name_part(&wireframe.title)
+        };
+        let suggested = format!("{name}.{}", if png { "png" } else { "svg" });
+        let picked = cx.prompt_for_new_path(&super::export::documents_folder(), Some(&suggested));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else {
+                return;
+            };
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let svg = wireframe.to_svg();
+                    let bytes = if png {
+                        looji_diagram::svg_to_png(&svg, 2.0)?
+                    } else {
+                        svg.into_bytes()
                     };
                     std::fs::write(&path, bytes)
                         .map(|_| path)
@@ -1272,8 +1335,14 @@ pub(super) fn panel(
                     cx,
                 ));
             }
-            for wireframe in &doc.wireframes {
-                column = column.child(super::wireframe_view::block(wireframe, theme));
+            for (index, wireframe) in doc.wireframes.iter().enumerate() {
+                column = column.child(super::wireframe_view::block(
+                    wireframe,
+                    state.selected,
+                    index,
+                    theme,
+                    cx,
+                ));
             }
             if doc.doc.kind == "architecture"
                 && state.viewing.is_none()

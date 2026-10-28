@@ -4,23 +4,58 @@
 use gpui::{prelude::*, *};
 use looji_diagram::{Element, ElementKind, Wireframe};
 
+use super::{WorkspaceView, task_dialog::button};
 use crate::theme::Theme;
 
-/// The wireframe with its title above a framed sketch.
-pub(super) fn block(wireframe: &Wireframe, theme: &Theme) -> AnyElement {
+/// The wireframe with its title and save buttons above a framed sketch. `doc` and `index` say which one it is.
+pub(super) fn block(
+    wireframe: &Wireframe,
+    doc: usize,
+    index: usize,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let id = doc * 100 + index;
     div()
         .flex()
         .flex_col()
         .gap(theme.spacing.xs)
         .child(
             div()
-                .text_size(theme.typography.caption)
-                .text_color(theme.palette.text_secondary)
-                .child(if wireframe.title.is_empty() {
-                    "Wireframe".to_string()
-                } else {
-                    format!("Wireframe: {}", wireframe.title)
-                }),
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(theme.typography.caption)
+                        .text_color(theme.palette.text_secondary)
+                        .child(if wireframe.title.is_empty() {
+                            "Wireframe".to_string()
+                        } else {
+                            format!("Wireframe: {}", wireframe.title)
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(theme.spacing.xs)
+                        .child(
+                            button(("wireframe-svg", id), "Save SVG", false, theme).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.save_wireframe(doc, index, false, cx)
+                                }),
+                            ),
+                        )
+                        .child(
+                            button(("wireframe-png", id), "Save PNG", false, theme).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.save_wireframe(doc, index, true, cx)
+                                }),
+                            ),
+                        ),
+                ),
         )
         .child(
             div()

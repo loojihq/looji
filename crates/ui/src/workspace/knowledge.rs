@@ -16,8 +16,8 @@ use std::{
 
 use gpui::{prelude::*, *};
 use looji_domain::{
-    AttachmentRepository, CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk, MAX_HUNKS, ProjectId,
-    Task, TaskId, pack_hunks,
+    AttachmentRepository, BlueprintRepository, CodeSourceRepository, DEFAULT_TOKEN_BUDGET, Hunk,
+    MAX_HUNKS, ProjectId, Task, TaskId, pack_hunks,
 };
 use looji_knowledge::{
     Health, IssueDoc, KnowledgeStore, SearchQuery, SourceKind, Syncer, git, sync::AttachedFile,
@@ -382,7 +382,8 @@ impl WorkspaceView {
         }
     }
 
-    /// Puts the text of the project's task attachments (PDFs, text and markdown files) into its knowledge, so
+    /// Puts the text of the project's task attachments and blueprint media (PDFs, text and markdown files, and the
+    /// words in pictures) into its knowledge, so
     /// searches and chat can find it. Reading a PDF takes a moment, so it happens off the interface.
     pub(super) fn index_attachments(&self, cx: &mut Context<Self>) {
         let Some(project) = self.projects.active_id() else {
@@ -396,9 +397,17 @@ impl WorkspaceView {
                     path: dir.join(&attachment.stored_name),
                     stored_name: attachment.stored_name,
                     file_name: attachment.file_name,
-                    task_title: task.title().to_string(),
+                    origin: format!("task: {}", task.title()),
                 });
             }
+        }
+        for media in store(cx).blueprint_media(project).unwrap_or_default() {
+            files.push(AttachedFile {
+                path: dir.join(&media.stored_name),
+                stored_name: media.stored_name,
+                file_name: media.file_name,
+                origin: format!("blueprint: {}", media.doc_kind.replace('_', " ")),
+            });
         }
         let database = cx.global::<AppDatabase>().knowledge_path.clone();
         let key = project.as_uuid().to_string();

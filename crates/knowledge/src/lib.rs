@@ -17,6 +17,7 @@ pub mod facts;
 pub mod git;
 pub mod hints;
 pub mod mcp;
+pub mod ocr;
 pub mod pdf;
 pub mod related;
 pub mod risk;

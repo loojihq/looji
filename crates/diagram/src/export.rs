@@ -102,7 +102,7 @@ pub fn to_mermaid(graph: &Graph) -> String {
     out
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -187,13 +187,17 @@ pub fn to_svg(graph: &Graph) -> String {
 /// The diagram as a PNG image, `scale` times its natural size, on a white page. Text uses the computer's own fonts, so
 /// a machine with none draws boxes and arrows without words.
 pub fn to_png(graph: &Graph, scale: f32) -> Result<Vec<u8>, String> {
+    svg_to_png(&to_svg(graph), scale)
+}
+
+/// Any SVG this crate writes as a PNG image, `scale` times its natural size, on a white page.
+pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
     use resvg::{tiny_skia, usvg};
 
-    let svg = to_svg(graph);
     let mut options = usvg::Options::default();
     options.fontdb_mut().load_system_fonts();
     options.font_family = "Segoe UI".to_string();
-    let tree = usvg::Tree::from_str(&svg, &options)
+    let tree = usvg::Tree::from_str(svg, &options)
         .map_err(|err| format!("the diagram could not be drawn: {err}"))?;
     let size = tree.size();
     let width = (size.width() * scale).ceil().max(1.0) as u32;

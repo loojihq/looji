@@ -63,16 +63,27 @@ pub const BLUEPRINT_PREFIX: &str = "blueprint/";
 /// Files attached to tasks are indexed as documents under this made-up folder, named by their stored name.
 pub const ATTACHMENT_PREFIX: &str = "attachment/";
 
-/// A file attached to a task, as the knowledge base is told about it.
+/// A file attached to a task or a blueprint section, as the knowledge base is told about it.
 #[derive(Debug, Clone)]
 pub struct AttachedFile {
     /// The name the file has in the attachments folder.
     pub stored_name: String,
     /// The name the user knows it by.
     pub file_name: String,
-    pub task_title: String,
+    /// Where it is kept, in words, such as "task: Fix refunds" or "blueprint: architecture".
+    pub origin: String,
     /// Where the file is.
     pub path: std::path::PathBuf,
+}
+
+/// Whether a file name says the file is a picture whose words can be read.
+fn is_picture(file_name: &str) -> bool {
+    file_name.rsplit_once('.').is_some_and(|(_, extension)| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "png" | "jpg" | "jpeg" | "bmp" | "gif"
+        )
+    })
 }
 
 /// Puts `title` in front of each chunk's label, so a passage says which attachment it came from.
@@ -178,6 +189,7 @@ impl Syncer {
     ) -> Result<Outcome> {
         let kind = match safety::classify(path) {
             FileClass::Doc | FileClass::Pdf => SourceKind::Doc,
+            _ if path.starts_with(ATTACHMENT_PREFIX) => SourceKind::Doc,
             _ => SourceKind::Code,
         };
         store.replace_source(
@@ -390,7 +402,8 @@ impl Syncer {
         let mut present: HashSet<String> = HashSet::new();
         for file in files {
             let class = safety::classify(&file.file_name);
-            if !matches!(class, FileClass::Doc | FileClass::Pdf) {
+            let picture = is_picture(&file.file_name);
+            if !picture && !matches!(class, FileClass::Doc | FileClass::Pdf) {
                 continue;
             }
             let reference = format!("{ATTACHMENT_PREFIX}{}", file.stored_name);
@@ -398,8 +411,15 @@ impl Syncer {
                 continue;
             };
             present.insert(reference.clone());
-            let title = format!("{} (task: {})", file.file_name, file.task_title);
-            let outcome = if class == FileClass::Pdf {
+            let title = format!("{} ({})", file.file_name, file.origin);
+            let outcome = if picture {
+                if metadata.len() > crate::ocr::MAX_IMAGE_BYTES {
+                    self.hold_back(store, project, &reference, "held back: larger than 20 MB")?
+                } else {
+                    let bytes = fs::read(&file.path).map_err(|err| Error::Io(err.to_string()))?;
+                    self.index_picture(store, project, &reference, &bytes, &title)?
+                }
+            } else if class == FileClass::Pdf {
                 if metadata.len() > MAX_PDF_BYTES {
                     self.hold_back(store, project, &reference, "held back: larger than 20 MB")?
                 } else {
@@ -422,6 +442,55 @@ impl Syncer {
             }
         }
         Ok(report)
+    }
+
+    /// Reads the words in a picture and indexes them like a document. A picture with no words, or one that can't be
+    /// read, is held back with the reason.
+    fn index_picture(
+        &mut self,
+        store: &mut KnowledgeStore,
+        project: &str,
+        reference: &str,
+        bytes: &[u8],
+        title: &str,
+    ) -> Result<Outcome> {
+        let hash = hash_bytes(bytes);
+        if store
+            .source_hash(project, SourceKind::Doc, reference)?
+            .as_deref()
+            == Some(hash.as_str())
+        {
+            return Ok(Outcome::Unchanged);
+        }
+        let text = match crate::ocr::text(bytes) {
+            Ok(text) => text,
+            Err(reason) => {
+                return self.hold_back(store, project, reference, &format!("held back: {reason}"));
+            }
+        };
+        let Some((text, redacted)) = safety::redact(&text) else {
+            return self.hold_back(
+                store,
+                project,
+                reference,
+                "held back: contains a private key",
+            );
+        };
+        let mut chunks = chunk_plain(reference, SourceKind::Doc, &text);
+        titled(&mut chunks, title);
+        let note = if redacted {
+            "text read from a picture; secret text was taken out before it was indexed"
+        } else {
+            "text read from a picture"
+        };
+        store.replace_source(
+            project,
+            SourceKind::Doc,
+            reference,
+            &SourceMeta::new(&hash, bytes.len() as u64, Some(note)),
+            &chunks,
+        )?;
+        Ok(Outcome::Indexed)
     }
 
     /// Reads an attached text file as a document, with its title in front of each passage's label.
@@ -885,7 +954,7 @@ mod tests {
             AttachedFile {
                 stored_name: stored.to_string(),
                 file_name: name.to_string(),
-                task_title: "Fix refunds".to_string(),
+                origin: "task: Fix refunds".to_string(),
                 path: dir.path().join(stored),
             }
         };
@@ -936,6 +1005,30 @@ mod tests {
         assert_eq!(report.removed, 1);
         assert!(store.search("p", &query("quokkaglow")).unwrap().is_empty());
         assert_eq!(store.search("p", &query("wombatspring")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_picture_that_cannot_be_read_is_held_back_with_a_reason_and_forgotten_when_removed() {
+        let (dir, mut store, mut syncer) = setup();
+        fs::write(dir.path().join("p.png"), b"not really a picture").unwrap();
+        let files = vec![AttachedFile {
+            stored_name: "p.png".to_string(),
+            file_name: "shot.png".to_string(),
+            origin: "blueprint: architecture".to_string(),
+            path: dir.path().join("p.png"),
+        }];
+        let report = syncer.sync_attachments(&mut store, "p", &files).unwrap();
+        assert_eq!(report.held_back, 1);
+        let notes = store.health("p").unwrap().notes;
+        assert!(
+            notes
+                .iter()
+                .any(|(path, note)| path == "attachment/p.png" && note.starts_with("held back")),
+            "{notes:?}"
+        );
+        let report = syncer.sync_attachments(&mut store, "p", &[]).unwrap();
+        assert_eq!(report.removed, 1);
+        assert!(store.health("p").unwrap().notes.is_empty());
     }
 
     #[test]
