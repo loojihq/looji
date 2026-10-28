@@ -8,16 +8,28 @@ const MAX_PAGES: usize = 200;
 /// The most text kept from one file, in characters.
 const MAX_CHARS: usize = 400_000;
 
-/// The text of each page that has any, with its page number, or why the file couldn't be read.
-pub fn pages(bytes: &[u8]) -> Result<Vec<(u32, String)>, String> {
-    let read = std::panic::catch_unwind(|| read(bytes));
-    match read {
-        Ok(result) => result,
-        Err(_) => Err("the file could not be read as a PDF".to_string()),
+/// What reading a PDF's text layer found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reading {
+    /// The text of each page that has any, with its page number.
+    Text(Vec<(u32, String)>),
+    /// A PDF whose pages have no text layer, so they are probably scanned pictures.
+    NoTextLayer,
+    /// The bytes could not be read as a PDF, with the reason.
+    Unreadable(String),
+}
+
+/// Reads the text layer of a PDF. A file that makes the reader panic is treated as unreadable.
+pub fn read(bytes: &[u8]) -> Reading {
+    match std::panic::catch_unwind(|| extract(bytes)) {
+        Ok(Ok(pages)) if pages.is_empty() => Reading::NoTextLayer,
+        Ok(Ok(pages)) => Reading::Text(pages),
+        Ok(Err(reason)) => Reading::Unreadable(reason),
+        Err(_) => Reading::Unreadable("the file could not be read as a PDF".to_string()),
     }
 }
 
-fn read(bytes: &[u8]) -> Result<Vec<(u32, String)>, String> {
+fn extract(bytes: &[u8]) -> Result<Vec<(u32, String)>, String> {
     let texts = pdf_extract::extract_text_from_mem_by_pages(bytes)
         .map_err(|err| format!("not readable as a PDF: {err}"))?;
     let mut found = Vec::new();
@@ -32,9 +44,6 @@ fn read(bytes: &[u8]) -> Result<Vec<(u32, String)>, String> {
         if chars >= MAX_CHARS {
             break;
         }
-    }
-    if found.is_empty() {
-        return Err("the PDF has no text layer, so it is probably scanned pages".to_string());
     }
     Ok(found)
 }
@@ -127,24 +136,27 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::{fixtures::pdf, pages};
+    use super::{Reading, fixtures::pdf, read};
 
     #[test]
     fn the_text_of_each_page_is_read_with_its_number() {
         let bytes = pdf(&["Refund policy for customers", "Shipping times by region"]);
-        let read = pages(&bytes).unwrap();
-        assert_eq!(read.len(), 2);
-        assert_eq!(read[0].0, 1);
-        assert!(read[0].1.contains("Refund policy"), "{:?}", read[0].1);
-        assert_eq!(read[1].0, 2);
-        assert!(read[1].1.contains("Shipping times"));
+        let Reading::Text(pages) = read(&bytes) else {
+            panic!("expected text");
+        };
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].0, 1);
+        assert!(pages[0].1.contains("Refund policy"), "{:?}", pages[0].1);
+        assert_eq!(pages[1].0, 2);
+        assert!(pages[1].1.contains("Shipping times"));
     }
 
     #[test]
-    fn a_pdf_with_no_text_says_so_and_garbage_is_not_a_pdf() {
-        let empty = pdf(&[""]);
-        assert!(pages(&empty).unwrap_err().contains("no text layer"));
-        assert!(pages(b"not a pdf at all").unwrap_err().contains("PDF"));
+    fn a_pdf_with_no_text_is_told_apart_from_garbage() {
+        assert_eq!(read(&pdf(&[""])), Reading::NoTextLayer);
+        assert!(
+            matches!(read(b"not a pdf at all"), Reading::Unreadable(reason) if reason.contains("PDF"))
+        );
     }
 }
 
@@ -157,13 +169,13 @@ mod real_file {
     fn real_pdf() {
         let path = std::env::var("LOOJI_PDF").expect("set LOOJI_PDF to a PDF file");
         let bytes = std::fs::read(path).unwrap();
-        match super::pages(&bytes) {
-            Ok(pages) => {
+        match super::read(&bytes) {
+            super::Reading::Text(pages) => {
                 for (number, text) in pages {
                     println!("--- page {number} ({} chars)\n{text}", text.chars().count());
                 }
             }
-            Err(reason) => println!("not indexed: {reason}"),
+            other => println!("no text layer, so the OCR path is used: {other:?}"),
         }
     }
 }

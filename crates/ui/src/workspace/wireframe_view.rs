@@ -65,12 +65,42 @@ pub(super) fn block(
                 .border_1()
                 .border_color(theme.palette.border)
                 .bg(theme.palette.surface)
-                .child(draw(&wireframe.root, theme)),
+                .child(draw(&wireframe.root, theme, cx, &mut (id * 1000))),
         )
         .into_any_element()
 }
 
-fn draw(element: &Element, theme: &Theme) -> AnyElement {
+/// One element and, when it has a link, a clickable wrapper that goes where the link points. `next` numbers the
+/// wrappers so each has its own id within the wireframe.
+fn draw(
+    element: &Element,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+    next: &mut usize,
+) -> AnyElement {
+    let number = *next;
+    *next += 1;
+    let drawn = draw_element(element, theme, cx, next);
+    match element.link.clone() {
+        Some(link) => div()
+            .id(("wireframe-link", number))
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.palette.surface_hover))
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.follow_link(link.clone(), cx)),
+            )
+            .child(drawn)
+            .into_any_element(),
+        None => drawn,
+    }
+}
+
+fn draw_element(
+    element: &Element,
+    theme: &Theme,
+    cx: &mut Context<WorkspaceView>,
+    next: &mut usize,
+) -> AnyElement {
     let label = element.label.clone();
     match element.kind {
         ElementKind::Column | ElementKind::Row | ElementKind::Card => {
@@ -90,7 +120,7 @@ fn draw(element: &Element, theme: &Theme) -> AnyElement {
             }
             let in_row = element.kind == ElementKind::Row;
             for child in &element.children {
-                let drawn = draw(child, theme);
+                let drawn = draw(child, theme, cx, next);
                 // Side by side, each child takes an equal share of the row.
                 container = container.child(if in_row {
                     div().flex_1().min_w_0().child(drawn).into_any_element()

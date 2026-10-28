@@ -22,4 +22,4 @@ lopdf = "0.31"
 
 # Text from pictures comes from the OCR that Windows ships, so no model is downloaded.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Foundation", "Graphics_Imaging", "Media_Ocr", "Storage_Streams", "Win32_System_WinRT"] }
+windows = { version = "0.62", features = ["Foundation", "Graphics_Imaging", "Media_Ocr", "Storage_Streams", "Data_Pdf", "Win32_System_WinRT"] }
