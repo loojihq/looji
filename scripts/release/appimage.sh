@@ -56,4 +56,7 @@ if ldd "$check/squashfs-root/usr/bin/looji" | grep -q "not found"; then
     exit 1
 fi
 
+# Say which C library version the program needs, so the release notes can name the oldest system it runs on.
+echo "The program needs glibc $(objdump -T "$check/squashfs-root/usr/bin/looji" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | sed 's/GLIBC_//') or newer."
+
 ls -l dist
